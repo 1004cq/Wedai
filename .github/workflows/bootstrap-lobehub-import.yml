@@ -1,0 +1,65 @@
+name: Bootstrap LobeHub import
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/bootstrap-lobehub-import.yml
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out current Wedai
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Preserve Wedai commercial files
+        run: |
+          mkdir -p /tmp/wedai-overlay
+          rsync -aR \
+            README.md \
+            docs/IMPORT_LOBEHUB.md \
+            docs/CODEX_TASK.md \
+            docs/apisix \
+            apisix/config.yaml \
+            docker-compose.apisix.yml \
+            packages/billing \
+            packages/database/README_WEDAI.md \
+            src/features/billing \
+            src/features/admin \
+            src/features/user-center \
+            /tmp/wedai-overlay/
+
+      - name: Verify backup and merge official canary
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin backup/pre-lobehub-import-20260802
+          test "$(git rev-parse FETCH_HEAD)" = "810544dade57c52ca9bfc3b1e9302e6a6e33f15b"
+
+          git remote add upstream https://github.com/lobehub/lobehub.git
+          git fetch --depth=1 upstream canary
+          test "$(git rev-parse upstream/canary)" = "5287fe849f7273ee57f9aa01d8fa3c17281c511e"
+
+          git merge --allow-unrelated-histories --no-commit -s ours upstream/canary
+          git checkout upstream/canary -- .
+          rsync -a /tmp/wedai-overlay/ ./
+          rm -f .github/workflows/bootstrap-lobehub-import.yml
+          git add -A
+
+          test -f LICENSE
+          test -d packages/agent-runtime
+          test -d packages/model-runtime
+          test -f docs/apisix/JWT_RS256.md
+          test -f docs/apisix/PROGRESSIVE_SETUP.md
+          test -f packages/database/README_WEDAI.md
+
+          git commit -m "✨ feat: import LobeHub canary and preserve Wedai"
+          git push origin HEAD:main
