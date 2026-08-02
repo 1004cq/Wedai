@@ -37,3 +37,12 @@ git fetch upstream
 ## License 提醒
 
 二次开发并商业化需关注 LobeHub Community License，正式对外售卖前联系：hello@lobehub.com
+
+## 本次实际导入结果（2026-08-02）
+
+- 官方基线：`lobehub/lobehub@5287fe849f7273ee57f9aa01d8fa3c17281c511e`（`canary`）。
+- Wedai 工作分支：`main`。
+- 已配置 `upstream=https://github.com/lobehub/lobehub.git`。
+- 官方源码采用浅抓取完成工作树导入；如需完整历史，可执行 `git fetch --unshallow upstream`。
+- 商业化文件通过独立提交叠加，未修改 `packages/agent-runtime`、`packages/model-runtime` 或 `LICENSE`。
+- 后续同步建议在独立分支合并 `upstream/canary`，验证后再进入 `main`。
