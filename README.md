@@ -317,15 +317,20 @@ LobeHub 使用 Apache 2.0 + 商业附加条款。
 
 ---
 
-## 九、快速开始（待完善）
+## 九、自托管 / 一键部署
 
-后续将补充以下内容：
+Wedai 提供正式的 Docker Compose 自托管入口，包含 Web 应用、PostgreSQL、Redis、RustFS 与 SearXNG，并支持源码构建和预构建镜像两种模式。
 
-1. 如何基于官方 LobeHub 仓库初始化本项目
-2. 本地开发环境搭建步骤
-3. 数据库迁移命令
-4. 支付渠道测试配置说明
-5. 管理后台访问方式
+```bash
+./deploy/one-click-up.sh
+```
+
+首次运行会生成 `deploy/.env.commercial` 并提示填写密钥；完成配置后再次执行同一命令即可启动。完整的环境要求、域名配置、更新、回滚和排障说明见：
+
+- [Wedai Docker 一键部署](./deploy/ONE_CLICK.md)
+- [部署目录说明](./deploy/README.md)
+
+> 当前商业付费、订单和计费模块仍是开发骨架；部署成功不代表这些尚未实现的能力已通过生产验收。
 
 ---
 

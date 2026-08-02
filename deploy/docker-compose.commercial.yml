@@ -1,0 +1,136 @@
+name: ${COMPOSE_PROJECT_NAME:-wedai-commercial}
+
+services:
+  app:
+    image: ${WEDAI_IMAGE:-wedai:local}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        USE_CN_MIRROR: ${USE_CN_MIRROR:-false}
+    ports:
+      - '${WEDAI_BIND_ADDRESS:-0.0.0.0}:${LOBE_PORT:-3210}:3210'
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+      rustfs-init:
+        condition: service_completed_successfully
+    env_file:
+      - .env.commercial
+    environment:
+      DATABASE_DRIVER: node
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgresql:5432/${LOBE_DB_NAME}
+      INTERNAL_APP_URL: ${INTERNAL_APP_URL:-http://localhost:3210}
+      LLM_VISION_IMAGE_USE_BASE64: '1'
+      REDIS_PREFIX: wedai
+      REDIS_TLS: '0'
+      REDIS_URL: redis://redis:6379
+      S3_ACCESS_KEY: ${RUSTFS_ACCESS_KEY}
+      S3_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY}
+      S3_BUCKET: ${RUSTFS_LOBE_BUCKET}
+      S3_ENABLE_PATH_STYLE: '1'
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY}
+      S3_SET_ACL: '0'
+      SEARXNG_URL: http://searxng:8080
+    restart: unless-stopped
+    networks:
+      - wedai
+
+  postgresql:
+    image: paradedb/paradedb:latest-pg17
+    command: ['postgres', '-c', 'shared_preload_libraries=pg_search']
+    environment:
+      POSTGRES_DB: ${LOBE_DB_NAME}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    networks:
+      - wedai
+
+  redis:
+    image: redis:7-alpine
+    command: ['redis-server', '--save', '60', '1000', '--appendonly', 'yes']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    networks:
+      - wedai
+
+  rustfs:
+    image: rustfs/rustfs:latest
+    command: ['--access-key', '${RUSTFS_ACCESS_KEY}', '--secret-key', '${RUSTFS_SECRET_KEY}', '/data']
+    ports:
+      - '${RUSTFS_BIND_ADDRESS:-0.0.0.0}:${RUSTFS_PORT:-9000}:9000'
+      - '${RUSTFS_ADMIN_BIND_ADDRESS:-127.0.0.1}:${RUSTFS_ADMIN_PORT:-9001}:9001'
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY}
+      RUSTFS_CONSOLE_ENABLE: 'true'
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY}
+    volumes:
+      - rustfs-data:/data
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:9000/health >/dev/null 2>&1 || exit 1']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+    networks:
+      - wedai
+
+  rustfs-init:
+    image: minio/mc:latest
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY}
+      RUSTFS_LOBE_BUCKET: ${RUSTFS_LOBE_BUCKET}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY}
+    volumes:
+      - ../docker-compose/deploy/bucket.config.json:/bucket.config.json:ro
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        set -eu
+        mc alias set rustfs http://rustfs:9000 "$$RUSTFS_ACCESS_KEY" "$$RUSTFS_SECRET_KEY" >/dev/null
+        mc mb "rustfs/$$RUSTFS_LOBE_BUCKET" --ignore-existing >/dev/null
+        mc anonymous set-json /bucket.config.json "rustfs/$$RUSTFS_LOBE_BUCKET" >/dev/null
+    restart: 'no'
+    networks:
+      - wedai
+
+  searxng:
+    image: searxng/searxng:latest
+    environment:
+      SEARXNG_SETTINGS_FILE: /etc/searxng/settings.yml
+    volumes:
+      - ../docker-compose/deploy/searxng-settings.yml:/etc/searxng/settings.yml:ro
+    restart: unless-stopped
+    networks:
+      - wedai
+
+networks:
+  wedai:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  rustfs-data:

@@ -46,6 +46,7 @@ tmp/
 .env.local
 .env*.local
 .env.development
+deploy/.env.commercial
 venv/
 .venv/
 
