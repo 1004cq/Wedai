@@ -1,9 +1,9 @@
-import { APPLE_APP_STORE_ID, BRANDING_NAME, ORG_NAME } from '@lobechat/business-const';
+import { APPLE_APP_STORE_ID, BRANDING_LOGO_URL, BRANDING_NAME } from '@lobechat/business-const';
 import { OG_URL } from '@lobechat/const';
 
 import { getServerFeatureFlagsValue } from '@/config/featureFlags';
 import { OFFICIAL_URL } from '@/const/url';
-import { isCustomORG, isDesktop } from '@/const/version';
+import { isDesktop } from '@/const/version';
 import { appEnv } from '@/envs/app';
 import { fileEnv } from '@/envs/file';
 import { pythonEnv } from '@/envs/python';
@@ -54,6 +54,7 @@ async function buildSeoMeta(locale: string, isMobile: boolean): Promise<string> 
   const { t } = await translation('metadata', locale);
   const title = t('chat.title', { appName: BRANDING_NAME });
   const description = t('chat.description', { appName: BRANDING_NAME });
+  const socialImage = BRANDING_LOGO_URL ? '/brand/cq-og.png' : OG_URL;
 
   const metas = [
     `<title>${title}</title>`,
@@ -62,14 +63,13 @@ async function buildSeoMeta(locale: string, isMobile: boolean): Promise<string> 
     `<meta property="og:description" content="${description}" />`,
     `<meta property="og:type" content="website" />`,
     `<meta property="og:url" content="${OFFICIAL_URL}" />`,
-    `<meta property="og:image" content="${OG_URL}" />`,
+    `<meta property="og:image" content="${socialImage}" />`,
     `<meta property="og:site_name" content="${BRANDING_NAME}" />`,
     `<meta property="og:locale" content="${locale}" />`,
     `<meta name="twitter:card" content="summary_large_image" />`,
     `<meta name="twitter:title" content="${title}" />`,
     `<meta name="twitter:description" content="${description}" />`,
-    `<meta name="twitter:image" content="${OG_URL}" />`,
-    `<meta name="twitter:site" content="${isCustomORG ? `@${ORG_NAME}` : '@lobehub'}" />`,
+    `<meta name="twitter:image" content="${socialImage}" />`,
   ];
 
   if (isMobile && APPLE_APP_STORE_ID) {

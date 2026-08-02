@@ -37,12 +37,13 @@ const CustomTextLogo = memo<FlexboxProps & { size: number }>(({ size, style, ...
 });
 
 const CustomImageLogo = memo<Omit<ImageProps, 'alt' | 'src'> & { size: number }>(
-  ({ size, ...rest }) => {
+  ({ size, style, ...rest }) => {
     return (
       <Image
         alt={BRANDING_NAME}
         height={size}
         src={BRANDING_LOGO_URL}
+        style={{ borderRadius: Math.max(4, Math.round(size / 5)), objectFit: 'cover', ...style }}
         unoptimized={true}
         width={size}
         {...rest}

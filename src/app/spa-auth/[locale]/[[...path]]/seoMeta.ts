@@ -1,9 +1,8 @@
-import { APPLE_APP_STORE_ID, BRANDING_NAME, ORG_NAME } from '@lobechat/business-const';
+import { APPLE_APP_STORE_ID, BRANDING_LOGO_URL, BRANDING_NAME } from '@lobechat/business-const';
 import { OG_URL } from '@lobechat/const';
 import urlJoin from 'url-join';
 
 import { OFFICIAL_URL } from '@/const/url';
-import { isCustomORG } from '@/const/version';
 import { translation } from '@/libs/i18n/serverTranslation';
 import { normalizeLocale } from '@/locales/resources';
 
@@ -46,6 +45,7 @@ export async function buildSeoMeta(locale: string, pathname: string): Promise<st
   const lng = normalizeLocale(locale);
   const { title, description, canonicalPath } = await buildAuthSeoEntry(lng, pathname);
   const ogUrl = canonicalPath ? urlJoin(OFFICIAL_URL, canonicalPath) : OFFICIAL_URL;
+  const socialImage = BRANDING_LOGO_URL ? '/brand/cq-og.png' : OG_URL;
 
   const metas = [
     `<title>${title}</title>`,
@@ -54,14 +54,13 @@ export async function buildSeoMeta(locale: string, pathname: string): Promise<st
     `<meta property="og:description" content="${description}" />`,
     `<meta property="og:type" content="website" />`,
     `<meta property="og:url" content="${ogUrl}" />`,
-    `<meta property="og:image" content="${OG_URL}" />`,
+    `<meta property="og:image" content="${socialImage}" />`,
     `<meta property="og:site_name" content="${BRANDING_NAME}" />`,
     `<meta property="og:locale" content="${lng}" />`,
     `<meta name="twitter:card" content="summary_large_image" />`,
     `<meta name="twitter:title" content="${title}" />`,
     `<meta name="twitter:description" content="${description}" />`,
-    `<meta name="twitter:image" content="${OG_URL}" />`,
-    `<meta name="twitter:site" content="${isCustomORG ? `@${ORG_NAME}` : '@lobehub'}" />`,
+    `<meta name="twitter:image" content="${socialImage}" />`,
   ];
 
   if (APPLE_APP_STORE_ID) {

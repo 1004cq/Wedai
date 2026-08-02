@@ -22,8 +22,8 @@ export default {
   'email.footer.joinDiscord': 'Join Discord',
   'email.footer.manage': 'Manage notifications',
   'email.footer.preference':
-    'You received this email because of your notification settings on LobeHub.',
-  'email.footer.system': 'This is an important account notification from LobeHub.',
+    'You received this email because of your notification settings on Wedai.',
+  'email.footer.system': 'This is an important account notification from Wedai.',
   'email.viewDetails': 'View Details',
   'image_generation_completed': 'Your image "{{prompt}}" is ready.',
   'image_generation_completed_title': 'Image generation completed',
@@ -98,6 +98,6 @@ export default {
     'The subscription for workspace "{{workspaceName}}" has ended. Renew within {{days}} days to restore full access before the workspace is downgraded.',
   'workspace_subscription_expired_title': 'Subscription ended for {{workspaceName}}',
   'workspace_waitlist_approved':
-    'Your Workspace beta access is ready. Head to LobeHub to create your first workspace and invite your team.',
+    'Your Workspace beta access is ready. Head to Wedai to create your first workspace and invite your team.',
   'workspace_waitlist_approved_title': 'Workspace beta access approved',
 };

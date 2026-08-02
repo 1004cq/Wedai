@@ -1,4 +1,9 @@
-import { BRANDING_EMAIL, BRANDING_NAME, SOCIAL_URL } from '@lobechat/business-const';
+import {
+  BRANDING_EMAIL,
+  BRANDING_LOGO_URL,
+  BRANDING_NAME,
+  SOCIAL_URL,
+} from '@lobechat/business-const';
 import { isString } from 'es-toolkit/compat';
 import qs from 'query-string';
 import urlJoin from 'url-join';
@@ -34,7 +39,7 @@ export const AUTHOR_LIST = {
 
 export class Ld {
   generate({
-    image = '/og/og.webp',
+    image = BRANDING_LOGO_URL ? '/brand/cq-og.png' : '/og/og.webp',
     article,
     url,
     title,
@@ -84,29 +89,33 @@ export class Ld {
   }
 
   genOrganization() {
+    const logoUrl = urlJoin(OFFICIAL_SITE, BRANDING_LOGO_URL || '/icons/icon-512x512.png');
+
     return {
       '@id': this.getId(OFFICIAL_URL, '#organization'),
       '@type': 'Organization',
-      'alternateName': 'LobeHub',
+      'alternateName': BRANDING_NAME,
       'contactPoint': {
         '@type': 'ContactPoint',
         'contactType': 'customer support',
         'email': BRANDING_EMAIL.support,
       },
-      'description':
-        'Agent teammates that grow with you\n' +
-        'LobeHub is a work-and-lifestyle space to find, build, and collaborate with agent teams that grow with you.',
+      'description': `${BRANDING_NAME} is a work-and-lifestyle space to find, build, and collaborate with agent teams that grow with you.`,
       'email': BRANDING_EMAIL.business,
-      'founders': [this.getAuthors(['arvinxx']), this.getAuthors(['canisminor'])],
-      'image': urlJoin(OFFICIAL_SITE, '/icon-512x512.png'),
+      'founders': BRANDING_LOGO_URL
+        ? undefined
+        : [this.getAuthors(['arvinxx']), this.getAuthors(['canisminor'])],
+      'image': logoUrl,
       'logo': {
         '@type': 'ImageObject',
         'height': 512,
-        'url': urlJoin(OFFICIAL_SITE, '/icon-512x512.png'),
+        'url': logoUrl,
         'width': 512,
       },
-      'name': 'LobeHub',
-      'sameAs': [SOCIAL_URL.x, SOCIAL_URL.github, SOCIAL_URL.medium, SOCIAL_URL.youtube],
+      'name': BRANDING_NAME,
+      'sameAs': BRANDING_LOGO_URL
+        ? undefined
+        : [SOCIAL_URL.x, SOCIAL_URL.github, SOCIAL_URL.medium, SOCIAL_URL.youtube],
       'url': OFFICIAL_SITE,
     };
   }
@@ -256,7 +265,7 @@ export class Ld {
         '@id': this.getId(fixedUrl, '#primaryimage'),
       },
       'inLanguage': locale,
-      'keywords': tags?.join(' ') || 'LobeHub',
+      'keywords': tags?.join(' ') || BRANDING_NAME,
       'mainEntityOfPage': fixedUrl,
       'name': title,
       'publisher': {
