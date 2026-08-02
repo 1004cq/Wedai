@@ -16,3 +16,11 @@
 - docs/apisix/JWT_RS256.md
 - apisix/config.yaml
 - docker-compose.apisix.yml
+
+## 2026-08-02 完成项
+
+- 已导入官方 `canary` 完整工作树。
+- 已保留本文件列出的 README、APISIX 文档和配置。
+- 已新增 `packages/billing`、`src/features/billing`、`src/features/admin`、
+  `src/features/user-center` 占位说明，以及 `packages/database/README_WEDAI.md`。
+- 计费边界保持为 Model Runtime / tRPC 外围中间件，用户系统复用 Better Auth。
