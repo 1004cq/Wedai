@@ -1,0 +1,54 @@
+apisix:
+  node_listen: 9080
+  enable_ipv6: false
+  enable_control: true
+  control:
+    ip: "0.0.0.0"
+    port: 9092
+
+  enable_admin: true
+  port_admin: 9180
+
+  # 生产环境务必收紧
+  allow_admin:
+    - 0.0.0.0/0
+
+  admin_key:
+    - name: "admin"
+      key: wedai-apisix-admin-key-change-me
+      role: admin
+
+  ssl:
+    enable: true
+    listen:
+      - port: 9443
+
+nginx_config:
+  error_log: "/dev/stderr"
+  error_log_level: "warn"
+  worker_processes: auto
+  worker_rlimit_nofile: 20480
+  event:
+    worker_connections: 10620
+  http:
+    access_log: "/dev/stdout"
+    keepalive_timeout: 60s
+    client_max_body_size: 100m
+    real_ip_header: "X-Forwarded-For"
+    real_ip_from:
+      - 127.0.0.1
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      - 10.0.0.0/8
+
+etcd:
+  host:
+    - "http://etcd:2379"
+  prefix: "/apisix"
+  timeout: 30
+
+plugin_attr:
+  prometheus:
+    export_addr:
+      ip: "0.0.0.0"
+      port: 9091
