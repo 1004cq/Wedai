@@ -81,7 +81,145 @@
 
 ---
 
-## 四、开发计划（详细）
+## 四、系统架构
+
+### 4.1 整体架构图
+
+```mermaid
+graph TB
+    subgraph Client["客户端层"]
+        A1[用户前端<br/>对话 / 用户中心 / 定价页]
+        A2[管理后台<br/>Admin Dashboard]
+    end
+
+    subgraph Gateway["接入与认证层"]
+        B1[Next.js App Router]
+        B2[Better Auth<br/>登录 / SSO / Session]
+        B3[tRPC API]
+    end
+
+    subgraph Business["业务核心层"]
+        C1[Agent Runtime<br/>官方核心]
+        C2[Model Runtime<br/>多模型适配]
+        C3[Billing Engine<br/>计费引擎 ★新增]
+        C4[Payment Service<br/>支付服务 ★新增]
+        C5[Admin Service<br/>管理服务 ★新增]
+    end
+
+    subgraph Data["数据层"]
+        D1[(PostgreSQL<br/>用户 / 订单 / 流水 / 套餐)]
+        D2[(Redis<br/>缓存 / 会话 / 限流)]
+        D3[S3 / MinIO<br/>文件与知识库]
+    end
+
+    subgraph External["外部服务"]
+        E1[LLM Providers<br/>OpenAI / Claude / DeepSeek...]
+        E2[Stripe]
+        E3[易支付 / 虎皮椒]
+    end
+
+    A1 --> B1
+    A2 --> B1
+    B1 --> B2
+    B1 --> B3
+    B3 --> C1
+    B3 --> C2
+    B3 --> C3
+    B3 --> C4
+    B3 --> C5
+
+    C2 --> C3
+    C3 --> D1
+    C4 --> D1
+    C4 --> E2
+    C4 --> E3
+    C1 --> C2
+    C2 --> E1
+    C5 --> D1
+
+    B2 --> D1
+    B2 --> D2
+    C1 --> D1
+    C1 --> D3
+```
+
+### 4.2 架构分层说明
+
+| 层级 | 职责 | 关键组件 |
+|------|------|----------|
+| **客户端层** | 用户交互与管理操作 | 用户前端（对话、充值、用户中心）、管理后台 |
+| **接入与认证层** | 路由、身份认证、API 入口 | Next.js、Better Auth、tRPC |
+| **业务核心层** | 核心业务逻辑 | Agent Runtime（官方）、Model Runtime（官方）、**Billing Engine（新增）**、**Payment Service（新增）**、**Admin Service（新增）** |
+| **数据层** | 持久化与缓存 | PostgreSQL（主库）、Redis（缓存/限流）、S3（文件存储） |
+| **外部服务** | 第三方能力 | 各大 LLM 服务商、Stripe、易支付/虎皮椒 |
+
+### 4.3 核心调用链路（计费重点）
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant FE as 前端
+    participant API as tRPC
+    participant BE as Billing Engine
+    participant MR as Model Runtime
+    participant LLM as 大模型服务商
+    participant DB as PostgreSQL
+
+    U->>FE: 发送消息
+    FE->>API: 调用对话接口
+    API->>BE: 1. 预估费用 & 检查余额
+    BE->>DB: 查询余额 + 模型价格
+    alt 余额不足
+        BE-->>API: 返回余额不足错误
+        API-->>FE: 引导充值
+    else 余额充足
+        BE->>DB: 预扣费（事务）
+        API->>MR: 调用模型
+        MR->>LLM: 请求推理
+        LLM-->>MR: 返回结果 + usage
+        MR-->>API: 返回结果
+        API->>BE: 2. 根据实际 usage 校正扣费
+        BE->>DB: 更新流水 / 回滚差额
+        API-->>FE: 返回对话结果
+    end
+```
+
+### 4.4 支付到账流程
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant FE as 前端
+    participant API as 支付接口
+    participant Pay as 支付渠道<br/>Stripe / 易支付
+    participant WH as Webhook / 异步通知
+    participant BE as Billing Engine
+    participant DB as PostgreSQL
+
+    U->>FE: 选择套餐 / 积分包
+    FE->>API: 创建订单
+    API->>DB: 写入 pending 订单
+    API->>Pay: 发起支付
+    Pay-->>U: 跳转支付页面
+    U->>Pay: 完成支付
+    Pay->>WH: 支付成功回调
+    WH->>API: 验签 + 处理通知
+    API->>BE: 确认到账
+    BE->>DB: 更新订单状态 + 增加余额 / 升级套餐 + 写流水
+    API-->>FE: 支付成功
+```
+
+### 4.5 设计原则
+
+1. **官方核心尽量不改**：Agent Runtime 与 Model Runtime 保持原样，计费逻辑通过中间件切入。
+2. **计费与业务解耦**：Billing Engine 作为独立 package，方便测试与后续替换。
+3. **支付渠道可插拔**：Payment Service 采用适配器模式，方便同时支持 Stripe 和国内支付。
+4. **数据一致性优先**：所有涉及余额变动的操作必须走数据库事务，并记录不可篡改的流水。
+5. **前后端类型安全**：全程使用 tRPC + TypeScript，减少接口错误。
+
+---
+
+## 五、开发计划（详细）
 
 | 阶段 | 时间预估 | 主要内容 | 状态 |
 |------|----------|----------|------|
@@ -96,7 +234,7 @@
 
 ---
 
-## 五、推荐目录结构
+## 六、推荐目录结构
 
 为了尽量减少与官方代码的冲突，商业化相关代码建议独立隔离：
 
@@ -136,7 +274,7 @@ Wedai/
 
 ---
 
-## 六、数据库核心表设计（概览）
+## 七、数据库核心表设计（概览）
 
 | 表名 | 说明 |
 |------|------|
@@ -152,7 +290,7 @@ Wedai/
 
 ---
 
-## 七、重要注意事项
+## 八、重要注意事项
 
 ### 1. License 合规
 LobeHub 使用 Apache 2.0 + 商业附加条款。  
@@ -179,7 +317,7 @@ LobeHub 使用 Apache 2.0 + 商业附加条款。
 
 ---
 
-## 八、快速开始（待完善）
+## 九、快速开始（待完善）
 
 后续将补充以下内容：
 
@@ -191,7 +329,7 @@ LobeHub 使用 Apache 2.0 + 商业附加条款。
 
 ---
 
-## 九、维护者
+## 十、维护者
 
 - GitHub：[@1004cq](https://github.com/1004cq)
 
