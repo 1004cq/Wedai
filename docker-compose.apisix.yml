@@ -1,0 +1,47 @@
+version: "3.8"
+
+# 用法：
+# docker compose -f docker-compose.yml -f docker-compose.apisix.yml up -d
+# 请确保主服务网络名称与下方一致（默认 wedai-net）
+
+services:
+  etcd:
+    image: bitnami/etcd:3.5.11
+    restart: always
+    environment:
+      ALLOW_NONE_AUTHENTICATION: "yes"
+      ETCD_ADVERTISE_CLIENT_URLS: "http://etcd:2379"
+      ETCD_LISTEN_CLIENT_URLS: "http://0.0.0.0:2379"
+    volumes:
+      - etcd_data:/bitnami/etcd
+    networks:
+      - wedai-net
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  apisix:
+    image: apache/apisix:3.17.0-debian
+    restart: always
+    depends_on:
+      etcd:
+        condition: service_healthy
+    volumes:
+      - ./apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+    ports:
+      - "9080:9080"
+      - "9443:9443"
+      - "9180:9180"
+    networks:
+      - wedai-net
+    environment:
+      - TZ=Asia/Shanghai
+
+volumes:
+  etcd_data:
+
+networks:
+  wedai-net:
+    external: true
