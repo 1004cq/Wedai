@@ -4,7 +4,7 @@
 
 ## 1. 目标与范围
 
-本验收覆盖用户身份、套餐与余额、订单与支付、模型调用计费、管理后台、安全边界和可审计性。详细可执行步骤见 [`TEST_CASES.csv`](./TEST_CASES.csv)，支付回调的实现与验收契约见 [`WEBHOOK_IDEMPOTENCY.md`](./WEBHOOK_IDEMPOTENCY.md)。
+本验收覆盖用户身份、套餐与余额、订单与支付、模型调用计费、管理后台、安全边界和可审计性。30 分钟 P0 冒烟以 [`ACCEPTANCE_30MIN.md`](./ACCEPTANCE_30MIN.md) 为准；详细用例见 [`TEST_CASES.csv`](./TEST_CASES.csv)，支付回调的实现与验收契约见 [`WEBHOOK_IDEMPOTENCY.md`](./WEBHOOK_IDEMPOTENCY.md)。
 
 验收状态定义：
 
@@ -186,16 +186,7 @@
 
 ### 12.1 30 分钟冒烟版
 
-> 适用于 Phase 1 功能完成后的每次候选发布。当前代码只能执行其中认证相关部分，商业步骤会按用例状态标记为未实现。
-
-1. **0–5 分钟**：确认 commit/迁移/Stripe Test Mode，登录 A、B、M。
-2. **5–10 分钟**：A 注册/登录/登出；未登录调用受保护 API；A 访问 admin 被拒绝。
-3. **10–17 分钟**：A 创建订单并完成一次 Test Mode 支付；核对订单、余额、入账流水。
-4. **17–21 分钟**：重放同一 event，再发一条错误签名 event；确认前者不重复到账、后者零到账。
-5. **21–27 分钟**：依次执行余额不足、成功调用、provider 失败；核对 provider 是否被调用及净扣费。
-6. **27–30 分钟**：M 手工加余额并核对 ledger/audit；A 尝试读取 B 订单；抽查前端和日志无 Secret。
-
-建议冒烟用例集：`USR-003/005/010/011`、`PAY-002/004/005/006`、`BIL-001/002/003`、`ADM-005`、`SEC-002/003`。
+执行入口见 [`ACCEPTANCE_30MIN.md`](./ACCEPTANCE_30MIN.md)。该清单只保留四项 P0：注册/登录/登出、Stripe Test 成功到账、Webhook 重放不双倍入账、余额不足拦截，并以真实路由和实现就绪度作为开始计时前的闸门。当前代码只能执行认证部分，其他三项必须记录为“阻断/未实现”。
 
 ### 12.2 2 小时完整版
 
@@ -242,13 +233,7 @@ pnpm test:e2e:smoke
 
 ### 13.3 商业功能实现后的 Stripe 点测
 
-以下路径是本验收建议的契约，若实现选择其他路径需同步更新文档和测试：
-
-```bash
-stripe listen --forward-to http://localhost:3010/api/webhooks/stripe
-```
-
-从 Stripe CLI 输出中把**测试环境** endpoint secret 写入本地环境变量，不提交文件。完成支付后，用订单号、event ID、request ID 查询事件、订单、流水和 wallet；再用同一 event 重放，确认记录数和余额变化仍为一次。
+当前仓库没有 Stripe 支付 Webhook 路由，因此不存在可执行的 `stripe listen --forward-to` 命令。不得把曾经建议的 `/api/webhooks/stripe` 当作真实接口，也不得借用 Casdoor、Logto、messenger 或视频 Webhook。商业实现落地后，先把真实 handler 路径和真实只读核账入口写入 [`ACCEPTANCE_30MIN.md`](./ACCEPTANCE_30MIN.md)，再开始 Stripe Test Mode 点测。
 
 ### 13.4 每次提交前
 
