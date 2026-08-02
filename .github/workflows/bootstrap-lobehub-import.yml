@@ -1,6 +1,7 @@
 name: Bootstrap LobeHub import
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
