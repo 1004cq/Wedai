@@ -19,10 +19,12 @@ Every mutation requires:
 
 Secrets (payment keys, SMTP password, SMS AccessKey) must never be echoed in API responses or logs after save — only a configured boolean.
 
-## Planned routes
+## Routes and implementation
 
-See [docs/commercial/ADMIN_UI.md](../../../docs/commercial/ADMIN_UI.md).
+See [docs/commercial/ADMIN_UI.md](../../../docs/commercial/ADMIN_UI.md) for the product rules and route plan.
+
+The Web SPA UI and its API-shaped mock are implemented in [`admin-ui`](./admin-ui/README.md) and mounted at `/admin/*`.
 
 ## Status
 
-Main branch currently holds this placeholder. Full UI may live on a feature branch or local mock until tRPC billing routers and RBAC middleware are ready.
+The mock-first Admin UI is implemented on the Web SPA. Server-side Better Auth permission enforcement, persistent billing data, and tRPC integration remain required before production use.

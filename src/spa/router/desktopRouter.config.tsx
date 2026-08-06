@@ -25,6 +25,13 @@ export const mainAreaMetaRoutes: RouteObject[] = [
 ];
 
 const webOnlyRoutes: RouteObject[] = [
+  // Wedai commercial operations console. Web-only by design; Electron/iOS remain unchanged.
+  {
+    element: dynamicElement(() => import('@/routes/admin'), 'Web > Wedai Admin'),
+    errorElement: <ErrorBoundary />,
+    path: '/admin/*',
+  },
+
   // Share topic route (outside main layout)
   {
     children: [

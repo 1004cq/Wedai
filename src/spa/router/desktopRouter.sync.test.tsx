@@ -57,6 +57,16 @@ async function readRouterSources() {
 }
 
 describe('desktop router shared definition', () => {
+  it('mounts the Wedai admin wildcard on Web without exposing it to Electron', () => {
+    for (const pathname of ['/admin', '/admin/users', '/admin/payment']) {
+      const matches = matchRoutes(webDesktopRoutes, pathname);
+
+      expect(matches?.at(-1)?.route.path).toBe('/admin/*');
+    }
+
+    expect(electronDesktopRoutes.some((route) => route.path === '/admin/*')).toBe(false);
+  });
+
   it('matches the nested acceptance check route on Web only', () => {
     const matches = matchRoutes(webDesktopRoutes, '/acceptance/acceptance-1/check/check-1');
 
@@ -162,6 +172,7 @@ describe('desktop router shared definition', () => {
       { element: null, path: '*' },
     ]);
     expect(webPaths).toContain('/verify-im');
+    expect(webPaths).toContain('/admin/*');
     expect(webPaths).toContain('/share/t');
     expect(webPaths).toContain('/share/page');
     expect(webPaths).toContain('/verify');
@@ -169,6 +180,7 @@ describe('desktop router shared definition', () => {
     expect(webPaths).toContain('/onboarding');
     expect(webPaths).not.toContain('/desktop-onboarding');
     expect(electronPaths).not.toContain('/verify-im');
+    expect(electronPaths).not.toContain('/admin/*');
     expect(electronPaths).not.toContain('/share/t');
     expect(electronPaths).not.toContain('/share/page');
     expect(electronPaths).not.toContain('/verify');
