@@ -6,6 +6,9 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
+      # Reuse the published main image as a layer cache when it exists; local BuildKit cache still works offline.
+      cache_from:
+        - ${WEDAI_BUILD_CACHE_FROM:-ghcr.io/1004cq/wedai:main}
       args:
         USE_CN_MIRROR: ${USE_CN_MIRROR:-false}
     ports:
@@ -36,13 +39,13 @@ services:
       S3_ENDPOINT: ${S3_ENDPOINT}
       S3_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY}
       S3_SET_ACL: '0'
-      SEARXNG_URL: http://searxng:8080
+      SEARXNG_URL: ${SEARXNG_URL:-}
     restart: unless-stopped
     networks:
       - wedai
 
   postgresql:
-    image: paradedb/paradedb:latest-pg17
+    image: ${WEDAI_POSTGRES_IMAGE:-paradedb/paradedb:0.24.3-pg17}
     command: ['postgres', '-c', 'shared_preload_libraries=pg_search']
     environment:
       POSTGRES_DB: ${LOBE_DB_NAME}
@@ -59,7 +62,7 @@ services:
       - wedai
 
   redis:
-    image: redis:7-alpine
+    image: ${WEDAI_REDIS_IMAGE:-redis:7.4.10-alpine3.21}
     command: ['redis-server', '--save', '60', '1000', '--appendonly', 'yes']
     volumes:
       - redis-data:/data
@@ -73,7 +76,7 @@ services:
       - wedai
 
   rustfs:
-    image: rustfs/rustfs:latest
+    image: ${WEDAI_RUSTFS_IMAGE:-rustfs/rustfs:1.0.0-beta.10}
     command: ['--access-key', '${RUSTFS_ACCESS_KEY}', '--secret-key', '${RUSTFS_SECRET_KEY}', '/data']
     ports:
       - '${RUSTFS_BIND_ADDRESS:-0.0.0.0}:${RUSTFS_PORT:-9000}:9000'
@@ -94,7 +97,7 @@ services:
       - wedai
 
   rustfs-init:
-    image: minio/mc:latest
+    image: ${WEDAI_RUSTFS_MC_IMAGE:-minio/mc:RELEASE.2025-08-13T08-35-41Z}
     depends_on:
       rustfs:
         condition: service_healthy
@@ -117,7 +120,9 @@ services:
       - wedai
 
   searxng:
-    image: searxng/searxng:latest
+    # Optional in the fast core profile; full preserves the original search stack.
+    profiles: ['full']
+    image: ${WEDAI_SEARXNG_IMAGE:-searxng/searxng:2026.7.28-c01178d03}
     environment:
       SEARXNG_SETTINGS_FILE: /etc/searxng/settings.yml
     volumes:
@@ -131,6 +136,6 @@ networks:
     driver: bridge
 
 volumes:
-  postgres-data:
-  redis-data:
-  rustfs-data:
+  postgres-data: {}
+  redis-data: {}
+  rustfs-data: {}

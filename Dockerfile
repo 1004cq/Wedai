@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 ## Set global build ENV
 ARG NODEJS_VERSION="24"
 
@@ -68,7 +70,10 @@ COPY patches ./patches
 # bring in desktop workspace manifest so pnpm can resolve it
 COPY apps/desktop/src/main/package.json ./apps/desktop/src/main/package.json
 
-RUN set -e && \
+# BuildKit cache mounts keep pnpm/npm downloads across rebuilds without copying credentials into layers.
+RUN --mount=type=cache,id=wedai-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    --mount=type=cache,id=wedai-npm-cache,target=/root/.npm,sharing=locked \
+    set -e && \
     if [ "${USE_CN_MIRROR:-false}" = "true" ]; then \
         export SENTRYCLI_CDNURL="https://npmmirror.com/mirrors/sentry-cli"; \
         npm config set registry "https://registry.npmmirror.com/"; \
@@ -90,11 +95,14 @@ COPY . .
 RUN pnpm exec tsx scripts/dockerPrebuild.mts
 RUN rm -rf src/app/desktop "src/app/(backend)/trpc/desktop"
 
-# run build standalone for docker version
-RUN npm run build:docker
+# Keep framework caches outside the image layer so source-only rebuilds can reuse expensive transforms.
+# Generated standalone/static output remains in /app and is copied into the scratch image below.
+RUN --mount=type=cache,id=wedai-next-cache,target=/app/.next/cache,sharing=locked \
+    --mount=type=cache,id=wedai-turbo-cache,target=/app/.turbo,sharing=locked \
+    npm run build:docker
 
 ## Application image, copy all the files for production
-FROM busybox:latest AS app
+FROM busybox:1.38.0-glibc AS app
 
 COPY --from=base /distroless/ /
 

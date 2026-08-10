@@ -1,9 +1,72 @@
-Dockerfile
-.dockerignore
-node_modules
-npm-debug.log
-.next
+# Keep the build context small and deterministic. Package Markdown is intentionally
+# retained because some builtin skills/templates import .md files at build time.
+
+# VCS, editor and agent metadata
 .git
 .github
-*.md
-.env.example
+.agents
+.claude
+.codex
+.conductor
+.cursor
+.devcontainer
+.vscode
+
+# Local secrets and overrides must never enter a Docker build context
+.env
+.env.*
+!.env.example
+deploy/.env.commercial
+vertex-ai-key.json
+
+# Dependencies and build/test output
+node_modules
+**/node_modules
+.pnpm-store
+.next
+**/.next
+.turbo
+dist
+**/dist
+coverage
+**/coverage
+test-output
+e2e/reports
+.vitest-reports
+*.tsbuildinfo
+*.log
+npm-debug.log
+
+# Tests, fixtures and development-only assets
+e2e
+tests
+__mocks__
+**/__tests__
+**/*.test.*
+**/*.spec.*
+docker-compose/dev/data
+
+# Repository documentation and local artifacts not required by the application build
+docs
+changelog
+AGENTS.md
+CHANGELOG.md
+CLAUDE.md
+CODE_OF_CONDUCT.md
+CONTRIBUTING.md
+DESIGN.md
+DESIGN.dark.md
+GEMINI.md
+README.md
+README.zh-CN.md
+SECURITY.md
+*.pdf
+*.ppt*
+*.doc*
+*.xls*
+
+# Deployment/CI metadata is not used by build:docker
+deploy
+docker-compose
+docker-compose*.yml
+Dockerfile

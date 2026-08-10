@@ -43,7 +43,8 @@ if [[ ! -f "${ENV_FILE}" ]]; then
 fi
 
 compose() {
-  docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
+  # Always include the optional full profile so switching to core cannot leave SearXNG running.
+  docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile full "$@"
 }
 
 if ((REMOVE_VOLUMES == 1)); then
