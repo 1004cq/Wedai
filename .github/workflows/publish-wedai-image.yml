@@ -29,6 +29,7 @@ jobs:
           - os: ubuntu-24.04-arm
             platform: linux/arm64
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     steps:
       - name: Prepare platform name
         run: |
@@ -37,6 +38,20 @@ jobs:
 
       - name: Checkout source
         uses: actions/checkout@v6
+
+      - name: Free disk space for the amd64 Docker build
+        if: matrix.platform == 'linux/amd64'
+        run: |
+          # GitHub's amd64 image preinstalls large SDKs that Wedai does not use.
+          # Removing them on this disposable runner prevents BuildKit from exhausting the disk.
+          sudo rm -rf -- \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/.ghcup \
+            /usr/local/lib/android \
+            /usr/local/share/boost \
+            /usr/share/dotnet
+          df -h /
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
