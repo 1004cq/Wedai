@@ -43,7 +43,7 @@ openssl rand -hex 32    # RUSTFS_SECRET_KEY
 
 ### 3.1 预构建镜像（生产推荐）
 
-仓库的 `.github/workflows/publish-wedai-image.yml` 会在 `main`、`v*` tag 或手动触发时构建 `linux/amd64` 与 `linux/arm64` 镜像，并推送：
+仓库的 `.github/workflows/publish-wedai-image.yml` 会在 `main`、`v*` tag 或手动触发时，使用原生 amd64/arm64 runner 分别构建、按 digest 推送，再合并多架构 manifest：
 
 - `ghcr.io/1004cq/wedai:<完整-git-sha>`：不可变生产 / 回滚标签；
 - `ghcr.io/1004cq/wedai:main`：便捷标签，指向最新 main；
