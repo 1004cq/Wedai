@@ -26,6 +26,28 @@ vi.mock('@/auth', () => ({
   },
 }));
 
+vi.mock('@/database/core/db-adaptor', () => ({
+  getServerDB: vi.fn().mockResolvedValue({
+    select: vi.fn().mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          limit: vi.fn().mockResolvedValue([{ banned: false }]),
+        }),
+      }),
+    }),
+  }),
+}));
+
+vi.mock('@/business/server/chat-billing', () => {
+  class InsufficientBalanceError extends Error {}
+
+  return {
+    InsufficientBalanceError,
+    chargeBeforeChat: vi.fn().mockResolvedValue({ holdResult: null, heldCredits: 0n }),
+    chargeAfterChat: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
 // 模拟请求和响应
 let request: Request;
 beforeEach(() => {
@@ -90,7 +112,12 @@ describe('POST handler', () => {
         body: JSON.stringify(mockChatPayload),
       });
 
-      const mockChatResponse: any = { success: true, message: 'Reply from agent' };
+      const mockChatResponse = new Response(
+        JSON.stringify({ success: true, message: 'Reply from agent' }),
+        {
+          headers: { 'x-usage-total-tokens': '123' },
+        },
+      );
       const mockRuntime: LobeRuntimeAI = {
         baseURL: 'abc',
         chat: vi.fn().mockResolvedValue(mockChatResponse),
@@ -103,6 +130,7 @@ describe('POST handler', () => {
       expect(response).toEqual(mockChatResponse);
       expect(mockRuntime.chat).toHaveBeenCalledWith(mockChatPayload, {
         user: 'test-user-id',
+        callback: { onUsage: expect.any(Function) },
         signal: expect.anything(),
       });
     });

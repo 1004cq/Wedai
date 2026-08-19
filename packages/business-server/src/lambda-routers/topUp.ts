@@ -9,18 +9,12 @@
  */
 import crypto from 'node:crypto';
 
+import { PriceSnapshotService } from '@lobechat/billing';
+import { BillingAccountModel, OrderModel } from '@lobechat/database';
 import { TRPCError } from '@trpc/server';
-import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 
-import { PriceSnapshotService } from '@lobechat/billing';
-import {
-  BillingAccountModel,
-  OrderModel,
-  billingAccounts,
-  orders,
-} from '@lobechat/database';
-
+import { checkFixedWindowRateLimit } from '@/libs/rateLimit';
 import { authedProcedure, router } from '@/libs/trpc/lambda';
 import { bannedCheck, serverDatabase } from '@/libs/trpc/lambda/middleware';
 
@@ -33,10 +27,19 @@ import { bannedCheck, serverDatabase } from '@/libs/trpc/lambda/middleware';
  * Unique enough for display; the DB `id` is the authoritative primary key.
  */
 function generateOrderNo(): string {
-  const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const date = new Date().toISOString().slice(0, 10).replaceAll('-', '');
   const suffix = crypto.randomBytes(3).toString('hex').toUpperCase();
   return `ORD-${date}-${suffix}`;
 }
+
+const ORDER_CREATE_RL_WINDOW_SECONDS = Number.parseInt(
+  process.env.RATE_LIMIT_ORDER_CREATE_WINDOW_SECONDS ?? '60',
+  10,
+);
+const ORDER_CREATE_RL_PER_MINUTE = Number.parseInt(
+  process.env.RATE_LIMIT_ORDER_CREATE_PER_MINUTE ?? '5',
+  10,
+);
 
 /**
  * Returns the billing account for the current user, creating one if it does
@@ -81,6 +84,22 @@ export const topUpRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { userId, serverDB: db } = ctx;
 
+      // ============  B3: rate limit order creation  ============ //
+      const decision = await checkFixedWindowRateLimit({
+        namespace: 'order:create',
+        identifier: userId,
+        limit: ORDER_CREATE_RL_PER_MINUTE,
+        windowSeconds: ORDER_CREATE_RL_WINDOW_SECONDS,
+      });
+
+      if (!decision.allowed) {
+        throw new TRPCError({
+          code: 'TOO_MANY_REQUESTS',
+          message: 'Too many requests. Please try again later.',
+          cause: { retryAfterSeconds: decision.retryAfterSeconds },
+        });
+      }
+
       // 1. Freeze price snapshot server-side.
       const pss = new PriceSnapshotService(db);
       const snapshot = await pss.freezeSnapshot(input.planPriceId);
@@ -95,9 +114,8 @@ export const topUpRouter = router({
       const existing = await om.findByIdempotencyKey(ikey);
       if (existing && existing.status === 'pending') {
         // Re-create a Stripe session if the original session expired.
-        const { StripePaymentService } = await import(
-          '@/server/services/payment/StripePaymentService'
-        );
+        const { StripePaymentService } =
+          await import('@/server/services/payment/StripePaymentService');
         const appUrl = process.env.APP_URL ?? 'http://localhost:3010';
         const { url } = await StripePaymentService.createCheckoutSession({
           orderId: existing.id,
@@ -132,9 +150,8 @@ export const topUpRouter = router({
       });
 
       // 5. Create Stripe Checkout Session.
-      const { StripePaymentService } = await import(
-        '@/server/services/payment/StripePaymentService'
-      );
+      const { StripePaymentService } =
+        await import('@/server/services/payment/StripePaymentService');
       const appUrl = process.env.APP_URL ?? 'http://localhost:3010';
 
       const { url } = await StripePaymentService.createCheckoutSession({

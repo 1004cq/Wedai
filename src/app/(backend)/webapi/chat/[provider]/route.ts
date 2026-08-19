@@ -1,11 +1,15 @@
 import { AGENT_RUNTIME_ERROR_SET, type ChatCompletionErrorPayload } from '@lobechat/model-runtime';
 import { ChatErrorType, type ModelTokensUsage } from '@lobechat/types';
-
 import { eq } from 'drizzle-orm';
 
 import { checkAuth } from '@/app/(backend)/middleware/auth';
-import { InsufficientBalanceError, chargeAfterChat, chargeBeforeChat } from '@/business/server/chat-billing';
+import {
+  chargeAfterChat,
+  chargeBeforeChat,
+  InsufficientBalanceError,
+} from '@/business/server/chat-billing';
 import { users } from '@/database/schemas';
+import { checkFixedWindowRateLimit } from '@/libs/rateLimit';
 import { createTraceOptions, initModelRuntimeFromDB } from '@/server/modules/ModelRuntime';
 import { type ChatStreamPayload } from '@/types/openai/chat';
 import { createErrorResponse } from '@/utils/errorResponse';
@@ -15,12 +19,33 @@ import { resolveValidWorkspaceIdFromRequest } from '../../_utils/workspace';
 
 export const maxDuration = 300;
 
+const CHAT_RL_WINDOW_SECONDS = Number.parseInt(
+  process.env.RATE_LIMIT_CHAT_WINDOW_SECONDS ?? '60',
+  10,
+);
+const CHAT_RL_PER_MINUTE = Number.parseInt(process.env.RATE_LIMIT_CHAT_PER_MINUTE ?? '30', 10);
+
 export const POST = checkAuth(async (req: Request, { params, userId, serverDB }) => {
   const provider = (await params)!.provider!;
   const requestId = req.headers.get('x-request-id') ?? crypto.randomUUID();
 
   try {
     const workspaceId = await resolveValidWorkspaceIdFromRequest({ req, serverDB, userId });
+
+    // ============  B3: rate limit chat  ============ //
+    const decision = await checkFixedWindowRateLimit({
+      namespace: 'chat',
+      identifier: userId,
+      limit: CHAT_RL_PER_MINUTE,
+      windowSeconds: CHAT_RL_WINDOW_SECONDS,
+    });
+
+    if (!decision.allowed) {
+      return createErrorResponse(ChatErrorType.TooManyRequests, {
+        error: { message: 'Too many requests', retryAfterSeconds: decision.retryAfterSeconds },
+        provider,
+      });
+    }
 
     // ============  0. banned check  ============ //
     const [userRow] = await serverDB
