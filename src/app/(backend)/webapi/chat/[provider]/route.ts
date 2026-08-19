@@ -90,7 +90,16 @@ export const POST = checkAuth(async (req: Request, { params, userId, serverDB })
     return response;
   } catch (e) {
     if (e instanceof InsufficientBalanceError) {
-      return createErrorResponse(ChatErrorType.InsufficientBalance as any, {
+      // Use InsufficientBudgetForModel — the existing error type the frontend
+      // PlanLimitCard component recognises. Attach a budget context snapshot
+      // so the card can display the shortfall amount.
+      return createErrorResponse(ChatErrorType.InsufficientBudgetForModel, {
+        budget: {
+          // No plan metadata here — just credits context.
+          pricingBasis: 'estimated',
+          // requiredCredits / shortfallCredits would need to be carried out of
+          // chargeBeforeChat; omitted for now to keep the error path minimal.
+        },
         error: { message: e.message },
         provider,
       });

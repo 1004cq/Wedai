@@ -3,7 +3,8 @@ import { ChatErrorType, Plans } from '@lobechat/types';
 import { Flexbox } from '@lobehub/ui';
 import { Button } from '@lobehub/ui/base-ui';
 import { createStaticStyles } from 'antd-style';
-import { memo } from 'react';
+import { memo, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { formatIntergerNumber, formatNumber } from '@/utils/format';
@@ -92,6 +93,7 @@ interface PlanLimitCardProps {
  */
 const PlanLimitCard = memo<PlanLimitCardProps>(({ errorBody, errorType, onRetry }) => {
   const { t } = useTranslation('subscription');
+  const navigate = useNavigate();
 
   const context = getBudgetContextFromErrorBody(errorBody);
   const isInsufficientBudget = errorType === ChatErrorType.InsufficientBudgetForModel;
@@ -150,16 +152,22 @@ const PlanLimitCard = memo<PlanLimitCardProps>(({ errorBody, errorType, onRetry 
 
         <Flexbox gap={8} width={'100%'}>
           {BRANDING_URL.subscription && (
-            <a
-              href={BRANDING_URL.subscription}
-              rel={'noopener noreferrer'}
-              style={{ width: '100%' }}
-              target={'_blank'}
+            <Button
+              block
+              size={'large'}
+              type={'primary'}
+              onClick={() => {
+                // Internal path → navigate in-app; external URL → open in new tab.
+                const url = BRANDING_URL.subscription!;
+                if (url.startsWith('/')) {
+                  navigate(url);
+                } else {
+                  window.open(url, '_blank', 'noopener,noreferrer');
+                }
+              }}
             >
-              <Button block size={'large'} type={'primary'}>
-                {upgradeLabel}
-              </Button>
-            </a>
+              {upgradeLabel}
+            </Button>
           )}
           <Button block size={'large'} onClick={onRetry}>
             {t('limitation.insufficientBudget.retry')}
