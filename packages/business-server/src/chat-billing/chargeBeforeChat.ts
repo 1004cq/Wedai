@@ -101,12 +101,14 @@ export async function chargeBeforeChat(params: ChargeBeforeChatParams): Promise<
   validateRequestId(params.requestId);
 
   // 1. Resolve charge mode.
+  // byokAllowed and gatewayFeeEnabled are read from env so they can be changed
+  // without a code deploy. Defaults: BYOK=allowed, gateway_fee=disabled.
   const billingCtx: BillingContext = {
+    byokAllowed: process.env.BYOK_ALLOWED !== 'false',
+    gatewayFeeEnabled: process.env.BYOK_GATEWAY_FEE_ENABLED === 'true',
+    isPlatformManagedProvider: false, // Phase 3: read per-provider from admin config table
     provider: params.provider,
     userHasProviderKey: params.userHasProviderKey,
-    isPlatformManagedProvider: false, // TODO: read from admin config
-    byokAllowed: true,               // TODO: read from admin config
-    gatewayFeeEnabled: false,        // TODO: read from admin config
   };
 
   const { chargeMode } = resolveChargeMode(billingCtx);

@@ -43,8 +43,24 @@ export const getPaymentConfig = () => {
        * Example: 100000  → 100 000 credits on signup
        */
       SIGNUP_CREDIT_GRANT: z.coerce.number().int().nonnegative().default(0),
+
+      /**
+       * When true, requests using user-supplied API keys (BYOK) are charged a
+       * small platform gateway surcharge in addition to the provider fee.
+       * Default: false — BYOK requests cost the user nothing on the platform.
+       */
+      BYOK_GATEWAY_FEE_ENABLED: z.coerce.boolean().default(false),
+
+      /**
+       * When false, users may supply their own API keys to bypass platform billing.
+       * Set to true to force all requests through platform billing (e.g. enterprise).
+       * Default: true — BYOK is allowed.
+       */
+      BYOK_ALLOWED: z.coerce.boolean().default(true),
     },
     runtimeEnv: {
+      BYOK_ALLOWED: process.env.BYOK_ALLOWED,
+      BYOK_GATEWAY_FEE_ENABLED: process.env.BYOK_GATEWAY_FEE_ENABLED,
       NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
       SIGNUP_CREDIT_GRANT: process.env.SIGNUP_CREDIT_GRANT,
       STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
