@@ -5,10 +5,10 @@ import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 
 import { authedProcedure, router } from '@/libs/trpc/lambda';
-import { serverDatabase } from '@/libs/trpc/lambda/middleware';
+import { bannedCheck, serverDatabase } from '@/libs/trpc/lambda/middleware';
 import { billingAccounts, ledgerEntries, usageRecords, wallets } from '@/database/schemas';
 
-const spendProcedure = authedProcedure.use(serverDatabase);
+const spendProcedure = authedProcedure.use(serverDatabase).use(bannedCheck);
 
 export const spendRouter = router({
   /** Current wallet balances for the calling user. */

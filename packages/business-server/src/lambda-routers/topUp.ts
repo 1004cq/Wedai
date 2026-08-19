@@ -22,7 +22,7 @@ import {
 } from '@lobechat/database';
 
 import { authedProcedure, router } from '@/libs/trpc/lambda';
-import { serverDatabase } from '@/libs/trpc/lambda/middleware';
+import { bannedCheck, serverDatabase } from '@/libs/trpc/lambda/middleware';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -53,7 +53,7 @@ async function getOrCreateBillingAccount(db: any, userId: string) {
 // Router
 // ─────────────────────────────────────────────────────────────────────────────
 
-const topUpProcedure = authedProcedure.use(serverDatabase);
+const topUpProcedure = authedProcedure.use(serverDatabase).use(bannedCheck);
 
 export const topUpRouter = router({
   /**

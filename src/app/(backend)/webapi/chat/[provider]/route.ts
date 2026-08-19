@@ -1,8 +1,11 @@
 import { AGENT_RUNTIME_ERROR_SET, type ChatCompletionErrorPayload } from '@lobechat/model-runtime';
 import { ChatErrorType, type ModelTokensUsage } from '@lobechat/types';
 
+import { eq } from 'drizzle-orm';
+
 import { checkAuth } from '@/app/(backend)/middleware/auth';
 import { InsufficientBalanceError, chargeAfterChat, chargeBeforeChat } from '@/business/server/chat-billing';
+import { users } from '@/database/schemas';
 import { createTraceOptions, initModelRuntimeFromDB } from '@/server/modules/ModelRuntime';
 import { type ChatStreamPayload } from '@/types/openai/chat';
 import { createErrorResponse } from '@/utils/errorResponse';
@@ -18,6 +21,19 @@ export const POST = checkAuth(async (req: Request, { params, userId, serverDB })
 
   try {
     const workspaceId = await resolveValidWorkspaceIdFromRequest({ req, serverDB, userId });
+
+    // ============  0. banned check  ============ //
+    const [userRow] = await serverDB
+      .select({ banned: users.banned })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    if (userRow?.banned) {
+      return createErrorResponse(ChatErrorType.Forbidden, {
+        error: { message: 'Account suspended' },
+        provider,
+      });
+    }
 
     // ============  1. init chat model  ============ //
     const modelRuntime = await initModelRuntimeFromDB(serverDB, userId, provider, workspaceId);
