@@ -16,7 +16,7 @@
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import Stripe from 'stripe';
+import type Stripe from 'stripe';
 
 import { getServerDB } from '@/database/core/db-adaptor';
 import { StripePaymentService } from '@/server/services/payment/StripePaymentService';
