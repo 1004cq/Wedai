@@ -53,7 +53,7 @@ NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_xxx
 # 启动 PostgreSQL / Redis（Docker）
 pnpm dev:docker
 
-# 运行所有迁移（含商业表 0132–0134）
+# 运行所有迁移（含商业表 0132–0136）
 pnpm db:migrate
 
 # 验证商业表已创建
@@ -75,7 +75,7 @@ pnpm db:seed:dev
 Seeding dev billing data…
   ✓ plans: free, pro_monthly
   ✓ plan_prices: free (¥0), pro_monthly (¥39.00)
-  ✓ model_prices: 6 models seeded
+  ✓ model_prices: 6 text + 2 image models seeded
 Dev billing seed complete.
 ```
 
@@ -83,7 +83,7 @@ Dev billing seed complete.
 
 ```bash
 psql $DATABASE_URL -c "SELECT slug, name, status FROM plans;"
-psql $DATABASE_URL -c "SELECT model_id, provider, is_active FROM model_prices;"
+psql $DATABASE_URL -c "SELECT model_id, provider, is_active, request_credits_flat FROM model_prices;"
 ```
 
 ---

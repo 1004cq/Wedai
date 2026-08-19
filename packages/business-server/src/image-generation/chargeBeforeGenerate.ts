@@ -1,16 +1,20 @@
 /**
  * chargeBeforeGenerate (image) — pre-flight credit hold for image generation.
  *
- * Called before the image provider API is invoked.
- * Returns prechargeItems (one per image) that the router threads through to
- * chargeAfterGenerate via asyncTask.metadata.precharge.
+ * ## Fail-closed behaviour
  *
- * Pricing: reads `model_prices.request_credits_flat` for the model.
- * If no price row exists, defaults to 0 (free — matches original no-op behaviour).
- * Admins configure per-model prices via admin.pricing.upsert.
+ * By default (production): billing errors BLOCK image generation.
+ *   - InsufficientBalance → `{ insufficientBalance: true }` (router shows top-up UI)
+ *   - DB/billing error → throw (router returns 500; provider never called)
  *
- * BYOK: image generation does not yet have a BYOK path check — all image
- * requests use platform keys. Phase 3 can add the check if BYOK image is needed.
+ * To allow billing errors to pass through (e.g. dev without DB):
+ *   Set env IMAGE_BILLING_FAIL_OPEN=true
+ *
+ * ## request_credits_flat = 0 semantics
+ *
+ * 0 means the model is intentionally free (e.g. open-source or promotional).
+ * Paid models MUST have a non-zero price configured via admin.pricing.upsert
+ * or pnpm db:seed:dev.  Without a price row the model is treated as free.
  */
 import { and, eq, isNull } from 'drizzle-orm';
 
@@ -35,23 +39,17 @@ interface ChargeParams {
 
 type ChargeResult =
   | undefined
-  | {
-      data: {
-        batch: NewGenerationBatch;
-        generations: NewGeneration[];
-      };
-      success: true;
-    }
-  | {
-      prechargeItems?: unknown[];
-    };
+  | { data: { batch: NewGenerationBatch; generations: NewGeneration[] }; success: true }
+  | { prechargeItems?: unknown[] }
+  | { insufficientBalance: true };
 
-/** Opaque handle stored in asyncTask.metadata.precharge per image. */
 interface ImagePrechargeItem {
   billingAccountId: string;
-  creditsHeld: string; // bigint as string
-  requestId: string;   // per-image unique, used to derive ledger ikey
+  creditsHeld: string;
+  requestId: string;
 }
+
+const isFailOpen = () => process.env.IMAGE_BILLING_FAIL_OPEN === 'true';
 
 export async function chargeBeforeGenerate(params: ChargeParams): Promise<ChargeResult> {
   const { userId, model, provider, imageNum } = params;
@@ -60,7 +58,6 @@ export async function chargeBeforeGenerate(params: ChargeParams): Promise<Charge
   try {
     const db = await getServerDB();
 
-    // Look up flat credit price for this model.
     const [priceRow] = await db
       .select({ requestCreditsFlat: modelPrices.requestCreditsFlat })
       .from(modelPrices)
@@ -76,11 +73,10 @@ export async function chargeBeforeGenerate(params: ChargeParams): Promise<Charge
 
     const creditsPerImage = priceRow?.requestCreditsFlat ?? BigInt(0);
     if (creditsPerImage <= 0n) {
-      // No price configured → free (matches original no-op behaviour).
+      // Explicitly free model (requestCreditsFlat=0 or no price row).
       return undefined;
     }
 
-    // Get or create billing account.
     const bam = new BillingAccountModel(db, userId);
     let account = await bam.findByUserId();
     if (!account) account = await bam.createForUser({ currency: 'CNY' });
@@ -109,27 +105,33 @@ export async function chargeBeforeGenerate(params: ChargeParams): Promise<Charge
           requestId,
         });
       } catch (err: any) {
-        // Insufficient balance — release already-held images and surface error.
+        // Release already-held items for this generation batch.
         for (const held of prechargeItems) {
           await billingService.release({
             billingAccountId: held.billingAccountId,
             heldCredits: BigInt(held.creditsHeld),
-            holdLedgerEntryId: '', // release uses requestId-derived ikey
+            holdLedgerEntryId: '',
             reason: 'image_precharge_rollback',
             requestId: held.requestId,
           }).catch(() => {});
         }
         if (err?.code === 'PRECONDITION_FAILED') {
-          // Return undefined — the router will surface the insufficiency to the user.
-          return undefined;
+          // Insufficient balance — return structured error for router to handle.
+          return { insufficientBalance: true };
         }
+        // Other billing error — fail-closed by default.
+        if (isFailOpen()) return undefined;
         throw err;
       }
     }
 
     return { prechargeItems };
-  } catch {
-    // Billing failure must not block image generation — degrade gracefully.
-    return undefined;
+  } catch (err) {
+    // Outer catch: DB connection failure or other infrastructure error.
+    if (isFailOpen()) {
+      console.error('[image-billing] fail-open: billing error suppressed', err);
+      return undefined;
+    }
+    throw err;
   }
 }

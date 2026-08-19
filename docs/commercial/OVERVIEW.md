@@ -41,17 +41,28 @@
 - 更新时仅当提交非空字符串才覆盖密钥
 - 所有写操作写审计日志 + 幂等键
 
-## 4. 计费与支付（实现状态）
+## 4. 计费与支付（实现状态，commit `15eb1f3`）
 
-| 能力 | 状态 | 文档 |
-|------|------|------|
-| 商业表 / 迁移 | 未实现 / 骨架 | `packages/database/README_WEDAI.md` |
-| Stripe / 国内支付 Webhook | 未实现 | `docs/qa/WEBHOOK_IDEMPOTENCY.md` |
-| 模型调用扣费中间件 | 未实现 | `docs/qa/ACCEPTANCE_USER_BILLING.md` |
-| 用户中心 / 定价页 | 占位 | `src/features/billing`、`user-center` |
-| 管理后台 UI | 占位（本地可有 mock 稿） | `src/features/admin/README.md` |
+| 能力 | 状态 | 关键路径 |
+|------|------|----------|
+| 商业 DB 表（10 张）+ migrations 0132–0136 | ✅ 已实现 | `packages/database/src/schemas/billing.ts` |
+| packages/billing 领域包 | ✅ 已实现 | `packages/billing/src/` |
+| Stripe Checkout + Webhook（幂等验签入账） | ✅ 已实现 | `apps/server/src/services/payment/`，`src/app/(backend)/api/webhooks/stripe/route.ts` |
+| topUp / spend / subscription tRPC | ✅ 已实现 | `packages/business-server/src/lambda-routers/` |
+| 文本对话扣费（chargeBeforeChat/After，流式 onUsage，BYOK 跳过） | ✅ 已实现 | `packages/business-server/src/chat-billing/` |
+| 图片 / 视频扣费（chargeBeforeGenerate/After，requestCreditsFlat，fail-closed） | ✅ 已实现 | `packages/business-server/src/{image,video}-generation/` |
+| Hold 超时自动 release（StaleHoldReaper，30 分钟，幂等） | ✅ 已实现 | `packages/database/src/models/staleHoldReaper.ts` |
+| model_prices（per-token + per-request flat 费率，Admin 可配） | ✅ 已实现 | migrations 0134–0135 |
+| Admin RBAC + tRPC（users/orders/ledger/pricing/adjustments/webhooks/config） | ✅ 已实现 | `apps/server/src/routers/lambda/admin/` |
+| 用户定价页 / 积分页 / 账单页（接真实 tRPC，Checkout 轮询） | ✅ 已实现 | `src/business/client/BusinessSettingPages/` |
+| 余额不足 UX（402 + PlanLimitCard） | ✅ 已实现 | `src/features/Conversation/Error/PlanLimitCard/` |
+| 封禁用户全路径拒绝 | ✅ 已实现 | `packages/trpc/src/lambda/middleware/bannedCheck.ts` |
+| 注册赠送积分（SIGNUP_CREDIT_GRANT） | ✅ 已实现 | `packages/business-server/src/user.ts` |
+| Agent 多步 LLM 计费（`withAgentBilling` via `ServerLLMTransport`） | ✅ 已实现 | `apps/server/src/modules/AgentRuntime/adapters/agentBilling.ts` |
+| 国内支付 / Referral / 手机短信 | ❌ 未实现 | Phase 5 |
+| Admin 仪表盘聚合 | ❌ 占位 | Phase 3 |
 
-**一键部署成功 ≠ 付费能力可用。** 见 `deploy/ONE_CLICK.md`。
+**文本/生图/视频计费已可用（需配置 Stripe 密钥和 model_prices）。本地验收见 `docs/qa/LOCAL_P0_RUNBOOK.md`。**
 
 ## 5. 相关文档索引
 
