@@ -25,6 +25,7 @@
 失败/中断处理：
 - `providerError` 抛出 → `chargeAfterChat({ success: false })` → `release` hold
 - 客户端断开（`req.signal.aborted`）→ fire-and-forget settle（**见风险 §4.1**）
+- 若 `model_prices` 未配置该 `(modelId, provider)` 的 active 行 → `chargeBeforeChat` 视为 unpriced（估算 credits=0），不写 hold/usage，避免隐式默认扣费
 
 ---
 

@@ -51,7 +51,7 @@
 | topUp / spend / subscription tRPC | ✅ 已实现 | `packages/business-server/src/lambda-routers/` |
 | 文本对话扣费（chargeBeforeChat/After，流式 onUsage，BYOK 跳过） | ✅ 已实现 | `packages/business-server/src/chat-billing/` |
 | 图片 / 视频扣费（chargeBeforeGenerate/After，requestCreditsFlat，fail-closed） | ✅ 已实现 | `packages/business-server/src/{image,video}-generation/` |
-| Hold 超时自动 release（StaleHoldReaper，30 分钟，幂等） | ✅ 已实现 | `packages/database/src/models/staleHoldReaper.ts` |
+| Hold 超时自动 release（StaleHoldReaper，30 分钟，幂等；定时调度 + `/health/billing/reaper` 可观测） | ✅ 已实现 | `packages/database/src/models/staleHoldReaper.ts` + `apps/server/src/services/billing/staleHoldReaperCron.ts` |
 | model_prices（per-token + per-request flat 费率，Admin 可配） | ✅ 已实现 | migrations 0134–0135 |
 | Admin RBAC + tRPC（users/orders/ledger/pricing/adjustments/webhooks/config） | ✅ 已实现 | `apps/server/src/routers/lambda/admin/` |
 | 用户定价页 / 积分页 / 账单页（接真实 tRPC，Checkout 轮询） | ✅ 已实现 | `src/business/client/BusinessSettingPages/` |
