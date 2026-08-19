@@ -39,5 +39,6 @@ export * from './topicComment';
 export * from './user';
 export * from './userMemories';
 export * from './verify';
+export * from './billing';
 export * from './work';
 export * from './workspace';

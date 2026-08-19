@@ -1,0 +1,33 @@
+export default {
+  // Credits page
+  'credits.available': 'Available Credits',
+  'credits.balance': 'Balance After',
+  'credits.date': 'Date',
+  'credits.delta': 'Amount',
+  'credits.kind': 'Type',
+  'credits.noActivity': 'No activity yet. Top up to get started.',
+  'credits.recentActivity': 'Recent Activity',
+  'credits.reason': 'Reason',
+  'credits.reserved': 'Reserved (In-flight)',
+  'credits.title': 'Credits & Balance',
+
+  // Plans page
+  'plans.current': 'Current',
+  'plans.currentPlan': 'Current plan',
+  'plans.noPlans': 'No plans available yet.',
+  'plans.renewsOn': 'renews',
+  'plans.subscribe': 'Subscribe',
+  'plans.title': 'Choose a Plan',
+  'plans.tokensPerMonth': 'tokens / mo',
+
+  // Billing page
+  'billing.auditNote': 'All amounts are authoritative server values. Contact support for disputes.',
+  'billing.credits': 'Credits',
+  'billing.date': 'Date',
+  'billing.model': 'Model',
+  'billing.noUsage': 'No usage recorded yet. Start a conversation to see charges here.',
+  'billing.recentUsage': 'Recent Model Usage',
+  'billing.status': 'Status',
+  'billing.title': 'Billing & Usage',
+  'billing.tokens': 'Tokens',
+};
