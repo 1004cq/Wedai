@@ -1,6 +1,6 @@
 # Wedai 商业化能力总览
 
-> 状态基准：2026-08-04。本文描述产品能力边界与实现阶段，与代码是否已落地无关的条目会明确标注。
+> 状态基准：2026-08-19，commit `589f93d`（Phase 1 合入 main）。已实现的能力有真实代码路径标注；未实现的条目明确标记。
 
 ## 1. 产品双模式
 
@@ -41,17 +41,29 @@
 - 更新时仅当提交非空字符串才覆盖密钥
 - 所有写操作写审计日志 + 幂等键
 
-## 4. 计费与支付（实现状态）
+## 4. 计费与支付（实现状态，Phase 1）
 
-| 能力 | 状态 | 文档 |
-|------|------|------|
-| 商业表 / 迁移 | 未实现 / 骨架 | `packages/database/README_WEDAI.md` |
-| Stripe / 国内支付 Webhook | 未实现 | `docs/qa/WEBHOOK_IDEMPOTENCY.md` |
-| 模型调用扣费中间件 | 未实现 | `docs/qa/ACCEPTANCE_USER_BILLING.md` |
-| 用户中心 / 定价页 | 占位 | `src/features/billing`、`user-center` |
-| 管理后台 UI | 占位（本地可有 mock 稿） | `src/features/admin/README.md` |
+| 能力 | 状态 | 关键路径 |
+|------|------|----------|
+| 商业 DB 表（9 张）+ migrations 0132–0134 | ✅ 已实现 | `packages/database/src/schemas/billing.ts` |
+| packages/billing 领域包（hold/settle/release/credit/BYOK/幂等键） | ✅ 已实现 | `packages/billing/src/` |
+| Stripe Checkout Session 创建（服务端价格快照） | ✅ 已实现 | `apps/server/src/services/payment/StripePaymentService.ts` |
+| Stripe Webhook（原始 body 验签、幂等入账、状态机） | ✅ 已实现 | `src/app/(backend)/api/webhooks/stripe/route.ts` |
+| topUp tRPC（createOrder / getOrder / cancelOrder） | ✅ 已实现 | `packages/business-server/src/lambda-routers/topUp.ts` |
+| spend tRPC（balance / ledgerHistory / usageHistory） | ✅ 已实现 | `packages/business-server/src/lambda-routers/spend.ts` |
+| subscription tRPC（getActive / listPlans） | ✅ 已实现 | `packages/business-server/src/lambda-routers/subscription.ts` |
+| 文本对话扣费中间件（BYOK 跳过 / 预占 / 结算 / 释放） | ✅ 已实现 | `packages/business-server/src/chat-billing/` |
+| model_prices 表（Admin 可配 per-model 积分费率） | ✅ 已实现 | `packages/database/src/schemas/billing.ts`，migration 0134 |
+| Admin RBAC（默认拒绝，DB 角色校验） | ✅ 已实现 | `apps/server/src/routers/lambda/admin/middleware.ts` |
+| Admin tRPC（users / orders / ledger / pricing / adjustments） | ✅ 已实现 | `apps/server/src/routers/lambda/admin/` |
+| 用户定价页 / 积分页 / 账单页 | ✅ 已实现（接真实 tRPC） | `src/business/client/BusinessSettingPages/` |
+| 图片 / 视频扣费（chargeBeforeGenerate） | ❌ no-op | Phase 2 |
+| 国内支付（支付宝 / 微信支付）Webhook | ❌ 未实现 | Phase 2 |
+| Referral / 邀请码系统 | ❌ 空路由 | Phase 2 |
+| 手机号短信注册完整链路 | ❌ 未实现 | Phase 2 |
+| 对账任务（Stripe diff 检测） | ❌ 未实现 | Phase 2 |
 
-**一键部署成功 ≠ 付费能力可用。** 见 `deploy/ONE_CLICK.md`。
+**一键部署成功后文本对话计费即可使用（需配置 Stripe 密钥）。图片/视频扣费等见 Phase 2。** 见 `deploy/ONE_CLICK.md`。
 
 ## 5. 相关文档索引
 

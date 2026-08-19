@@ -1,6 +1,6 @@
 # Wedai 用户与付费功能验收总清单
 
-> 审计基线：2026-08-02，Git `a551d9f9`（`main`）。本清单面向 Wedai Web/服务端；LobeHub 上游通用能力与 Wedai 商业化能力分开判定。
+> 审计基线：2026-08-19，Git `589f93d`（Phase 1 合入 `main`）。本清单面向 Wedai Web/服务端；LobeHub 上游通用能力与 Wedai 商业化能力分开判定。
 
 ## 1. 目标与范围
 
@@ -13,31 +13,48 @@
 - **未实现**：只有空页面、空路由、no-op 插槽或设计文档；必须先完成前置开发。
 - **有风险**：存在可复用基础，但当前实现不能作为商业安全或资金一致性保证。
 
-## 2. 当前代码审计
+## 2. 当前代码审计（Phase 1，commit 589f93d）
 
 | 能力 | 状态 | 代码证据 | 验收判断 |
 | --- | --- | --- | --- |
-| 邮箱注册、登录、登出、找回密码 | 已可测 | `src/features/Auth/**`、`src/store/user/slices/auth/action.ts`、`src/app/(backend)/api/auth/[...all]/route.ts` | Better Auth 主流程和前端单测已存在，仍需真实数据库端到端验证 |
-| 邮箱验证、Magic Link、SSO/OIDC | 条件可测 | `src/libs/better-auth/define-config.ts`、`src/libs/better-auth/sso/**`、`packages/env/src/auth.ts` | 按环境变量开启；未配置时不得把用例失败算产品缺陷 |
-| 资料与账号安全 | 已可测 | `src/routes/(main)/settings/profile/**`、`src/routes/(main)/settings/security/index.tsx` | 姓名、头像、邮箱、密码/安全页可测 |
-| 登录态 API 防护 | 已可测 | `packages/trpc/src/middleware/userAuth.ts`、`packages/trpc/src/lambda/index.ts` | `authedProcedure` 无用户时返回 `UNAUTHORIZED` |
-| 通用业务数据隔离 | 已可测但需回归 | `apps/server/src/routers/lambda/user.ts`、大量 `packages/database/src/models/__tests__/**` 用户隔离用例 | 上游模型普遍以 `ctx.userId` 构造；商业表仍需独立隔离测试 |
-| Better Auth 管理角色底座 | 有风险 | `src/libs/better-auth/define-config.ts` 的 `admin()`、`packages/database/src/schemas/user.ts` 的 `role/banned` | 仅是身份底座，不等于 Wedai 商业后台已完成 |
-| 套餐、余额、定价、充值 UI | 未实现 | `src/business/client/BusinessSettingPages/{Plans,Credits,Billing}.tsx` 返回 `null`；`src/features/billing/README.md` 为占位 | 页面不可验收 |
-| 订单、支付、Stripe Webhook | 未实现 | `subscription/topUp/spend/workspaceCredits` 路由均为 `router({})`；仓库无 Stripe SDK 调用 | `package.json` 声明 Stripe 依赖不代表支付已接入 |
-| 对话/生成计费 | 未实现 | `packages/business-server/src/image-generation/chargeBeforeGenerate.ts` 返回 `undefined`；`chargeAfterGenerate.ts` 为空 | 官方核心已有插槽，但社区实现不扣费；文本模型也未发现 Wedai 计费中间件 |
-| 商业数据库表 | 未实现 | `packages/database/README_WEDAI.md` 仅列候选模型；当前 schema 无订单、钱包、商业流水或支付回调表 | 早期 `user_subscriptions` 已在迁移 `0009` 删除，不能复用 |
-| 推荐邀请码 | 未实现 | `packages/business-server/src/lambda-routers/referral.ts` 为空，Referral 页面返回 `null` | Workspace 邮件邀请已存在，但不是商业邀请码/返利系统 |
-| 商业管理后台 | 未实现/高风险 | `src/features/admin/README.md` 为占位；商业路由无用户/订单/流水管理 API | `packages/business-server` 的 OSS RBAC middleware 是放行 stub，禁止直接作为商业后台安全边界 |
+| 邮箱注册、登录、登出、找回密码 | **已可测** | `src/features/Auth/**`、`src/app/(backend)/api/auth/[...all]/route.ts` | Better Auth 主流程和前端单测已存在，仍需真实数据库端到端验证 |
+| 邮箱验证、Magic Link、SSO/OIDC | **条件可测** | `src/libs/better-auth/define-config.ts`、`packages/env/src/auth.ts` | 按环境变量开启；未配置时不得把用例失败算产品缺陷 |
+| 资料与账号安全 | **已可测** | `src/routes/(main)/settings/profile/**`、`src/routes/(main)/settings/security/index.tsx` | 姓名、头像、邮箱、密码/安全页可测 |
+| 登录态 API 防护 | **已可测** | `packages/trpc/src/middleware/userAuth.ts` | `authedProcedure` 无用户时返回 `UNAUTHORIZED` |
+| 通用业务数据隔离 | **已可测** | `packages/database/src/models/__tests__/**`、新增 `billing.test.ts` 含 A/B 隔离用例 | 商业表 A/B 隔离测试已实现：`packages/database/src/models/__tests__/billing.test.ts` |
+| Better Auth 管理角色底座 | **已可测** | `users.role`、`users.banned` in `packages/database/src/schemas/user.ts` | Phase 1 Admin RBAC 已使用此字段做服务端校验 |
+| 套餐、余额、定价、充值 UI | **已可测** | `src/business/client/BusinessSettingPages/{Plans,Credits,Billing}.tsx` 已接真实 tRPC | Plans 接 `subscription.listPlans` + `topUp.createOrder`；Credits 接 `spend.balance` + `spend.ledgerHistory`；Billing 接 `spend.usageHistory` |
+| 订单创建（服务端价格快照） | **已可测** | `packages/business-server/src/lambda-routers/topUp.ts`：`createOrder/getOrder/cancelOrder` | 客户端只传 `planPriceId`，服务端重读价格、冻结快照、写 `orders` 表 |
+| Stripe Checkout + Webhook 幂等入账 | **条件可测** | `apps/server/src/services/payment/StripePaymentService.ts`、`StripeWebhookService.ts`；`src/app/(backend)/api/webhooks/stripe/route.ts` | 需配置 `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET`；Stripe Test Mode 下可测 |
+| spend / subscription tRPC | **已可测** | `packages/business-server/src/lambda-routers/spend.ts`、`subscription.ts` | `spend.balance`、`spend.ledgerHistory`、`spend.usageHistory`、`subscription.getActive`、`subscription.listPlans` |
+| 文本对话扣费（chargeBeforeChat / chargeAfterChat） | **已可测** | `packages/business-server/src/chat-billing/chargeBeforeChat.ts`、`chargeAfterChat.ts`；`src/app/(backend)/webapi/chat/[provider]/route.ts` | BYOK 跳过扣费；平台模式预占 → 成功结算 → 失败释放；余额不足返回 402 |
+| 商业数据库表（9 张）+ migrations | **已可测** | `packages/database/src/schemas/billing.ts`；migrations `0132`–`0134` | `billing_accounts`、`plans`、`plan_prices`、`subscriptions`、`orders`、`payment_attempts`、`wallets`、`ledger_entries`、`usage_records`、`webhook_events`、`model_prices` |
+| packages/billing 领域包 | **已可测** | `packages/billing/src/`：`BillingCommandService`、`UsageNormalizer`、`PriceSnapshotService`、`resolveChargeMode` | 单测覆盖余额不足、边界、重复 requestId、并发预占 |
+| Admin RBAC（默认拒绝） | **已可测** | `apps/server/src/routers/lambda/admin/middleware.ts` | 每次请求从 DB 重读 `users.role`；独立于 OSS workspace RBAC stub |
+| Admin tRPC（users/orders/ledger/pricing/adjustments） | **已可测** | `apps/server/src/routers/lambda/admin/routers/` | 用户搜索/ban；订单 + 事件查询；只读账本；model_prices CRUD；幂等手工调账 |
+| 图片/视频扣费 | **未实现** | `packages/business-server/src/image-generation/chargeBeforeGenerate.ts` 返回 `undefined` | Phase 2；文本对话扣费已实现，图片/视频插槽仍为 no-op |
+| 推荐邀请码 | **未实现** | `packages/business-server/src/lambda-routers/referral.ts` = `router({})` | Phase 2 |
+| 国内支付（支付宝/微信）Webhook | **未实现** | 无相关 handler | Phase 2 |
+| 手机号短信注册完整链路 | **未实现** | Better Auth phone 插件已配置字段，但无短信 provider 接入 | Phase 2 |
+| 对账任务（Stripe diff） | **未实现** | 无定时任务 | Phase 2 |
 
-### 2.1 上线阻断差距
+### 2.1 上线阻断差距（Phase 1 后更新）
 
-1. 缺少 Phase 1 商业表、迁移、Repository/Model 与并发测试。
-2. 缺少服务端定价快照、余额预占/结算/释放和不可变流水。
-3. 缺少订单状态机、Stripe Test Mode 下单、验签 Webhook、幂等与对账。
-4. 缺少套餐/余额/订单用户页，以及用户、订单、流水、调账、审计管理页。
-5. 缺少独立、默认拒绝的商业管理员中间件；不能使用 OSS 的 no-op workspace RBAC stub。
-6. 缺少支付与计费可观测性：请求 ID、订单号、provider event ID、处理状态和失败重试指标。
+Phase 1 已解决原 §2.1 全部 6 项阻断：
+
+1. ✅ 商业表、迁移、Repository/Model 与并发测试 — `packages/database/src/schemas/billing.ts`，migrations 0132–0134
+2. ✅ 服务端定价快照、余额预占/结算/释放和不可变流水 — `packages/billing/src/`，`chat-billing/`
+3. ✅ 订单状态机、Stripe Test Mode 下单、验签 Webhook、幂等 — `topUp.ts`，`StripeWebhookService.ts`
+4. ✅ 套餐/余额/订单用户页；用户/订单/流水/调账管理 tRPC — `BusinessSettingPages/`，`admin/routers/`
+5. ✅ 独立默认拒绝商业管理员中间件 — `admin/middleware.ts`（DB 角色校验，不用 OSS stub）
+6. ✅ 支付与计费可观测性：`requestId`、`orderNo`、`eventId`、`idempotencyKey`、`attemptCount` 均落库
+
+**Phase 2 剩余阻断（真实资金上线前还需完成）：**
+
+1. 图片/视频生成扣费（chargeBeforeGenerate no-op → 真实扣费）。
+2. 国内支付宝/微信支付 Webhook 与对账。
+3. 手机号短信注册完整链路。
+4. 定时对账任务（检测 Stripe 已付款但本地未入账的差异）。
 
 ## 3. 验收环境准备
 
@@ -66,12 +83,12 @@
 | SSO | `AUTH_SSO_PROVIDERS` 与对应 `AUTH_*_ID/SECRET/ISSUER` | 已存在；仅在执行 SSO 用例时配置 |
 | 邮件 | `SMTP_HOST/PORT/SECURE/USER/PASS/FROM` 或 `RESEND_API_KEY/RESEND_FROM` | 已存在；使用测试邮箱通道 |
 | Redis | `REDIS_URL` | 已存在；隔离测试实例 |
-| Stripe | `STRIPE_SECRET_KEY`、`STRIPE_WEBHOOK_SECRET` | **待实现变量契约**；仅服务端，使用 Test Mode |
-| Stripe | `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | **待实现变量契约**；只允许 publishable key 进入前端 |
-| Stripe | `STRIPE_PRICE_*` 或服务端价格表配置 | **待实现变量契约**；不得相信前端传入金额 |
-| 可选支付 | `EASYPAY_*`、`HUPIJIAO_*` | **待实现变量契约**；MVP 可不配置 |
+| Stripe | `STRIPE_SECRET_KEY`、`STRIPE_WEBHOOK_SECRET` | ✅ **已实现**（`packages/env/src/payment.ts`）；仅服务端，使用 Test Mode |
+| Stripe | `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | ✅ **已实现**（`packages/env/src/payment.ts`）；只允许 publishable key 进入前端 |
+| Stripe | 价格由 `model_prices` 表配置 | ✅ **已实现**（`admin.pricing.upsert`）；不信任前端传入金额 |
+| 可选支付 | `EASYPAY_*`、`HUPIJIAO_*` | ❌ 未实现；Phase 2 |
 
-商业变量加入代码时必须同步加入 `packages/env` 的服务端校验；Secret 类变量不得使用 `NEXT_PUBLIC_` 前缀。
+商业变量已在 `packages/env/src/payment.ts` 通过 `@t3-oss/env-core` 做服务端 schema 校验；Secret 类变量均无 `NEXT_PUBLIC_` 前缀。
 
 ## 4. 用户功能验收
 
