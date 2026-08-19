@@ -8,7 +8,8 @@
  *  - Wallet rows cache the ledger view; the ledger is always the audit source.
  *  - Every external-facing operation carries an idempotency key.
  */
-import { bigint, boolean, index, integer, jsonb, pgTable, sql, text, uniqueIndex, varchar } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import { bigint, boolean, index, integer, jsonb, pgTable, text, uniqueIndex, varchar } from 'drizzle-orm/pg-core';
 
 import { idGenerator } from '../utils/idGenerator';
 import { createdAt, timestamptz, updatedAt } from './_helpers';
