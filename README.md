@@ -57,7 +57,7 @@ bun run dev       # 或 pnpm 文档中的 dev 命令
 | 余额不足 UX（402 + PlanLimitCard + 跳转 /settings/plans） | ✅ 已实现 | `src/features/Conversation/Error/PlanLimitCard/` |
 | 注册赠送积分（SIGNUP_CREDIT_GRANT，幂等） | ✅ 已实现 | `packages/business-server/src/user.ts` |
 | Docker 一键栈（app + PG + Redis + 对象存储） | ✅ 可用 | `deploy/` |
-| Agent 多步 LLM 计费（ServerLLMTransport） | ❌ 未接线 | Phase 3 |
+| Agent 多步 LLM 计费（`withAgentBilling` via `ServerLLMTransport`） | ✅ 已实现 | `apps/server/src/modules/AgentRuntime/adapters/agentBilling.ts` |
 | 国内支付 / 手机短信注册 / Referral | ❌ 未实现 | Phase 5 |
 | Admin 仪表盘聚合指标 | ❌ 占位（info banner） | `pages/DashboardPage.tsx` |
 
