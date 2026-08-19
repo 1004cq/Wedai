@@ -5,17 +5,17 @@ import debug from 'debug';
 import { getRedisConfig } from '@/envs/redis';
 import { initializeRedis } from '@/libs/redis';
 
+import { getRateLimitConfig, policyForNamespace, type RateLimitNamespace } from './config';
+import { checkMemoryFixedWindow } from './memoryStore';
+
 const log = debug('lobe-server:rate-limit');
 
 export interface CheckFixedWindowRateLimitInput {
-  /**
-   * Stable key material (userId / ip / etc). This value will be hashed to avoid
-   * leaking raw identifiers into Redis key space.
-   */
   identifier: string;
-  limit: number;
-  namespace: string;
-  windowSeconds: number;
+  /** Test / emergency override — omit in production call sites. */
+  limit?: number;
+  namespace: RateLimitNamespace;
+  windowSeconds?: number;
 }
 
 export interface RateLimitDecision {
@@ -33,40 +33,36 @@ export interface RateLimitDecision {
   retryAfterSeconds: number;
 }
 
-const shouldEnableRateLimit = () => {
-  // Fail-open in case of misconfiguration: disable only when explicitly asked.
-  const v = (process.env.ENABLE_RATE_LIMIT ?? 'true').trim().toLowerCase();
-  return v !== 'false' && v !== '0' && v !== 'off' && v !== 'no';
-};
-
 const hashIdentifier = (identifier: string) =>
-  crypto.createHash('sha256').update(identifier).digest('hex');
+  crypto.createHash('sha256').update(identifier).digest('hex').slice(0, 16);
+
+const allowDecision = (limit: number, windowSeconds: number): RateLimitDecision => ({
+  allowed: true,
+  remaining: limit,
+  resetAt: new Date(Date.now() + windowSeconds * 1000),
+  retryAfterSeconds: 0,
+  count: 0,
+});
 
 export const checkFixedWindowRateLimit = async (
   input: CheckFixedWindowRateLimitInput,
 ): Promise<RateLimitDecision> => {
-  if (!shouldEnableRateLimit()) {
-    return {
-      allowed: true,
-      remaining: input.limit,
-      resetAt: new Date(Date.now() + input.windowSeconds * 1000),
-      retryAfterSeconds: 0,
-      count: 0,
-    };
+  const cfg = getRateLimitConfig();
+  if (!cfg.enabled) {
+    return allowDecision(input.limit ?? 9999, input.windowSeconds ?? cfg.windowSeconds);
   }
 
-  const limit = Number.isFinite(input.limit) ? input.limit : 0;
-  const windowSeconds = Number.isFinite(input.windowSeconds) ? input.windowSeconds : 0;
+  const policy = policyForNamespace(input.namespace, cfg);
+  if (!policy && input.limit === undefined) {
+    // Namespace disabled (e.g. image:create when RATE_LIMIT_IMAGE_PER_MIN=0).
+    return allowDecision(9999, cfg.windowSeconds);
+  }
+
+  const limit = input.limit ?? policy?.limit ?? 0;
+  const windowSeconds = input.windowSeconds ?? policy?.windowSeconds ?? cfg.windowSeconds;
 
   if (limit <= 0 || windowSeconds <= 0) {
-    // Misconfiguration: fail-open.
-    return {
-      allowed: true,
-      remaining: input.limit,
-      resetAt: new Date(Date.now() + windowSeconds * 1000),
-      retryAfterSeconds: 0,
-      count: 0,
-    };
+    return allowDecision(limit || 9999, windowSeconds || 60);
   }
 
   const identifier = input.identifier?.trim() ? input.identifier.trim() : 'unknown';
@@ -74,41 +70,39 @@ export const checkFixedWindowRateLimit = async (
   const redisKey = `rate-limit:${input.namespace}:${keySuffix}`;
 
   try {
-    const config = getRedisConfig();
-    if (!config.enabled) {
-      return {
-        allowed: true,
-        remaining: input.limit,
-        resetAt: new Date(Date.now() + input.windowSeconds * 1000),
-        retryAfterSeconds: 0,
-        count: 0,
-      };
+    const redisConfig = getRedisConfig();
+
+    if (!redisConfig.enabled) {
+      if (cfg.devMemoryFallback) {
+        return checkMemoryFixedWindow(redisKey, limit, windowSeconds);
+      }
+      // Production without Redis: fail open (documented in config.ts header).
+      return allowDecision(limit, windowSeconds);
     }
 
-    const redis = await initializeRedis(config);
+    const redis = await initializeRedis(redisConfig);
     if (!redis) {
-      return {
-        allowed: true,
-        remaining: input.limit,
-        resetAt: new Date(Date.now() + input.windowSeconds * 1000),
-        retryAfterSeconds: 0,
-        count: 0,
-      };
+      if (cfg.devMemoryFallback) {
+        return checkMemoryFixedWindow(redisKey, limit, windowSeconds);
+      }
+      return allowDecision(limit, windowSeconds);
     }
 
     const count = await redis.incr(redisKey);
     if (count === 1) {
-      await redis.expire(redisKey, input.windowSeconds);
+      await redis.expire(redisKey, windowSeconds);
     }
 
-    if (count > input.limit) {
-      let retryAfterSeconds = input.windowSeconds;
+    if (count > limit) {
+      let retryAfterSeconds = windowSeconds;
       try {
         const ttl = await redis.ttl(redisKey);
         if (Number.isFinite(ttl) && ttl > 0) retryAfterSeconds = ttl;
       } catch (ttlError) {
-        log('Failed to read Redis TTL for %s: %O', redisKey, ttlError);
+        log('TTL read failed namespace=%s err=%O', input.namespace, ttlError);
       }
+
+      log('blocked namespace=%s count=%d limit=%d', input.namespace, count, limit);
 
       return {
         allowed: false,
@@ -121,20 +115,15 @@ export const checkFixedWindowRateLimit = async (
 
     return {
       allowed: true,
-      remaining: Math.max(0, input.limit - count),
+      remaining: Math.max(0, limit - count),
       retryAfterSeconds: 0,
-      resetAt: new Date(Date.now() + input.windowSeconds * 1000),
+      resetAt: new Date(Date.now() + windowSeconds * 1000),
       count,
     };
   } catch (error) {
-    // Rate limiting should fail open to avoid blocking legitimate traffic.
-    log('Rate limit check failed open (%s): %O', input.namespace, error);
-    return {
-      allowed: true,
-      remaining: input.limit,
-      resetAt: new Date(Date.now() + input.windowSeconds * 1000),
-      retryAfterSeconds: 0,
-      count: 0,
-    };
+    log('check failed open namespace=%s err=%O', input.namespace, error);
+    return allowDecision(limit, windowSeconds);
   }
 };
+
+export type { RateLimitNamespace };

@@ -17,7 +17,7 @@ import { UserModel } from '@/database/models/user';
 import { type NewGeneration, type NewGenerationBatch } from '@/database/schemas';
 import { asyncTasks, generationBatches, generations } from '@/database/schemas';
 import { router } from '@/libs/trpc/lambda';
-import { serverDatabase } from '@/libs/trpc/lambda/middleware';
+import { imageCreateRateLimit, serverDatabase } from '@/libs/trpc/lambda/middleware';
 import { createAsyncCaller } from '@/server/routers/async/caller';
 import { FileService } from '@/server/services/file';
 import {
@@ -45,7 +45,9 @@ const imageProcedure = wsCompatProcedure.use(serverDatabase).use(async (opts) =>
   });
 });
 
-const imageCreateProcedure = imageProcedure.use(withScopedPermission('file:upload'));
+const imageCreateProcedure = imageProcedure
+  .use(withScopedPermission('file:upload'))
+  .use(imageCreateRateLimit);
 
 const createImageInputSchema = z.object({
   generationTopicId: z.string(),
@@ -202,7 +204,11 @@ export const imageRouter = router({
         workspaceId: wsId,
       });
       // Insufficient balance — surface to user before calling the provider.
-      if (chargeResult && 'insufficientBalance' in chargeResult && chargeResult.insufficientBalance) {
+      if (
+        chargeResult &&
+        'insufficientBalance' in chargeResult &&
+        chargeResult.insufficientBalance
+      ) {
         throw new TRPCError({
           code: 'FORBIDDEN',
           message: 'Insufficient credits. Please top up your balance to generate images.',

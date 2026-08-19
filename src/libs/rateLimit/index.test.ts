@@ -1,7 +1,9 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { resetRateLimitConfigCache } from './config';
 import { checkFixedWindowRateLimit } from './index';
+import { clearMemoryRateLimitStore } from './memoryStore';
 
 const initializeRedisMock = vi.fn();
 const getRedisConfigMock = vi.fn();
@@ -17,9 +19,18 @@ vi.mock('@/envs/redis', () => ({
 describe('checkFixedWindowRateLimit', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetRateLimitConfigCache();
+    clearMemoryRateLimitStore();
+    delete process.env.RATE_LIMIT_DEV_MEMORY;
   });
 
-  it('fails open when Redis is disabled', async () => {
+  afterEach(() => {
+    resetRateLimitConfigCache();
+    clearMemoryRateLimitStore();
+  });
+
+  it('fails open in production when Redis is disabled', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
     getRedisConfigMock.mockReturnValue({
       enabled: false,
       prefix: 'test',
@@ -38,7 +49,40 @@ describe('checkFixedWindowRateLimit', () => {
     expect(res.count).toBe(0);
   });
 
-  it('blocks when the fixed window count exceeds the limit', async () => {
+  it('uses in-memory store in development when Redis is disabled', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    getRedisConfigMock.mockReturnValue({
+      enabled: false,
+      prefix: 'test',
+      tls: false,
+      url: '',
+    });
+
+    await checkFixedWindowRateLimit({
+      namespace: 'chat',
+      identifier: 'user-1',
+      limit: 2,
+      windowSeconds: 60,
+    });
+    await checkFixedWindowRateLimit({
+      namespace: 'chat',
+      identifier: 'user-1',
+      limit: 2,
+      windowSeconds: 60,
+    });
+
+    const blocked = await checkFixedWindowRateLimit({
+      namespace: 'chat',
+      identifier: 'user-1',
+      limit: 2,
+      windowSeconds: 60,
+    });
+
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.count).toBe(3);
+  });
+
+  it('blocks when the Redis fixed window count exceeds the limit', async () => {
     getRedisConfigMock.mockReturnValue({
       enabled: true,
       prefix: 'test',

@@ -14,9 +14,8 @@ import { BillingAccountModel, OrderModel } from '@lobechat/database';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
-import { checkFixedWindowRateLimit } from '@/libs/rateLimit';
 import { authedProcedure, router } from '@/libs/trpc/lambda';
-import { bannedCheck, serverDatabase } from '@/libs/trpc/lambda/middleware';
+import { bannedCheck, orderCreateRateLimit, serverDatabase } from '@/libs/trpc/lambda/middleware';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -32,15 +31,6 @@ function generateOrderNo(): string {
   return `ORD-${date}-${suffix}`;
 }
 
-const ORDER_CREATE_RL_WINDOW_SECONDS = Number.parseInt(
-  process.env.RATE_LIMIT_ORDER_CREATE_WINDOW_SECONDS ?? '60',
-  10,
-);
-const ORDER_CREATE_RL_PER_MINUTE = Number.parseInt(
-  process.env.RATE_LIMIT_ORDER_CREATE_PER_MINUTE ?? '5',
-  10,
-);
-
 /**
  * Returns the billing account for the current user, creating one if it does
  * not exist yet (lazy creation on first purchase).
@@ -53,10 +43,11 @@ async function getOrCreateBillingAccount(db: any, userId: string) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Router
+// Router — auth → serverDB → bannedCheck; createOrder adds rateLimit
 // ─────────────────────────────────────────────────────────────────────────────
 
 const topUpProcedure = authedProcedure.use(serverDatabase).use(bannedCheck);
+const topUpCreateProcedure = topUpProcedure.use(orderCreateRateLimit);
 
 export const topUpRouter = router({
   /**
@@ -69,7 +60,7 @@ export const topUpRouter = router({
    * up the price, recomputes the amount, and stores an immutable price snapshot
    * in the order row.  The client is redirected to `checkoutUrl`.
    */
-  createOrder: topUpProcedure
+  createOrder: topUpCreateProcedure
     .input(
       z.object({
         planPriceId: z.string().min(1),
@@ -83,22 +74,6 @@ export const topUpRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { userId, serverDB: db } = ctx;
-
-      // ============  B3: rate limit order creation  ============ //
-      const decision = await checkFixedWindowRateLimit({
-        namespace: 'order:create',
-        identifier: userId,
-        limit: ORDER_CREATE_RL_PER_MINUTE,
-        windowSeconds: ORDER_CREATE_RL_WINDOW_SECONDS,
-      });
-
-      if (!decision.allowed) {
-        throw new TRPCError({
-          code: 'TOO_MANY_REQUESTS',
-          message: 'Too many requests. Please try again later.',
-          cause: { retryAfterSeconds: decision.retryAfterSeconds },
-        });
-      }
 
       // 1. Freeze price snapshot server-side.
       const pss = new PriceSnapshotService(db);

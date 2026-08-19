@@ -3,6 +3,7 @@ import type { NextRequest } from 'next/server';
 
 import { auth } from '@/auth';
 import { checkFixedWindowRateLimit } from '@/libs/rateLimit';
+import { getRateLimitConfig } from '@/libs/rateLimit/config';
 
 const jsonContentTypeRegex = /^application\/(?:[a-z0-9.+-]*\+)?json/i;
 
@@ -28,7 +29,6 @@ const validateJsonBody = async (request: Request) => {
 };
 
 const getClientIp = (request: NextRequest): string | undefined => {
-  // NextRequest.ip is only available in some runtimes/configs; fall back to headers.
   const nextIp = request.ip;
   if (nextIp) return nextIp;
 
@@ -42,52 +42,79 @@ const getClientIp = (request: NextRequest): string | undefined => {
   return undefined;
 };
 
-const AUTH_RL_WINDOW_SECONDS = Number.parseInt(
-  process.env.RATE_LIMIT_AUTH_WINDOW_SECONDS ?? '60',
-  10,
-);
-const AUTH_RL_LOGIN_PER_MINUTE = Number.parseInt(
-  process.env.RATE_LIMIT_LOGIN_PER_MINUTE ?? '10',
-  10,
-);
-const AUTH_RL_REGISTER_PER_MINUTE = Number.parseInt(
-  process.env.RATE_LIMIT_REGISTER_PER_MINUTE ?? '5',
-  10,
-);
+const parseAuthEmailFromBody = async (request: NextRequest): Promise<string | undefined> => {
+  try {
+    const body = (await request.clone().json()) as Record<string, unknown>;
+    const email = body.email ?? body.identifier;
+    return typeof email === 'string' && email.trim() ? email.trim().toLowerCase() : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
+/**
+ * Rate-limit only sign-in / sign-up mutations — skip get-session and other auth routes.
+ * Webhooks are not routed here.
+ */
 const rateLimitAuthRequest = async (request: NextRequest): Promise<Response | null> => {
-  const ip = getClientIp(request) ?? 'unknown';
+  const cfg = getRateLimitConfig();
+  if (!cfg.enabled) return null;
 
   const pathname = request.nextUrl?.pathname ?? new URL(request.url).pathname;
   const isLogin = pathname.includes('sign-in') || pathname.includes('login');
   const isRegister = pathname.includes('sign-up') || pathname.includes('register');
 
-  const limit = isLogin
-    ? AUTH_RL_LOGIN_PER_MINUTE
-    : isRegister
-      ? AUTH_RL_REGISTER_PER_MINUTE
-      : AUTH_RL_LOGIN_PER_MINUTE;
-  const namespace = isRegister ? 'auth:register' : isLogin ? 'auth:login' : 'auth';
+  if (!isLogin && !isRegister) return null;
 
-  const decision = await checkFixedWindowRateLimit({
+  const ip = getClientIp(request) ?? 'unknown';
+  const email = request.method === 'POST' ? await parseAuthEmailFromBody(request) : undefined;
+
+  const policy = isRegister ? cfg.authRegister : cfg.authLogin;
+  const namespace = isRegister ? 'auth:register' : 'auth:login';
+
+  const ipDecision = await checkFixedWindowRateLimit({
     namespace,
-    identifier: ip,
-    limit,
-    windowSeconds: AUTH_RL_WINDOW_SECONDS,
+    identifier: `ip:${ip}`,
+    limit: policy.limit,
+    windowSeconds: policy.windowSeconds,
   });
 
-  if (decision.allowed) return null;
+  if (!ipDecision.allowed) {
+    return Response.json(
+      { code: 'TOO_MANY_REQUESTS', message: 'Too many requests. Please try again later.' },
+      {
+        status: 429,
+        headers:
+          ipDecision.retryAfterSeconds > 0
+            ? { 'Retry-After': String(ipDecision.retryAfterSeconds) }
+            : undefined,
+      },
+    );
+  }
 
-  return Response.json(
-    { code: 'TOO_MANY_REQUESTS', message: 'Too many requests. Please try again later.' },
-    {
-      status: 429,
-      headers:
-        decision.retryAfterSeconds > 0
-          ? { 'Retry-After': String(decision.retryAfterSeconds) }
-          : undefined,
-    },
-  );
+  if (email) {
+    const emailDecision = await checkFixedWindowRateLimit({
+      namespace,
+      identifier: `email:${email}`,
+      limit: policy.limit,
+      windowSeconds: policy.windowSeconds,
+    });
+
+    if (!emailDecision.allowed) {
+      return Response.json(
+        { code: 'TOO_MANY_REQUESTS', message: 'Too many requests. Please try again later.' },
+        {
+          status: 429,
+          headers:
+            emailDecision.retryAfterSeconds > 0
+              ? { 'Retry-After': String(emailDecision.retryAfterSeconds) }
+              : undefined,
+        },
+      );
+    }
+  }
+
+  return null;
 };
 
 export const GET = async (request: NextRequest) => {
