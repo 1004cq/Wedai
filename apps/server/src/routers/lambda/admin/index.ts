@@ -15,6 +15,7 @@ import { adminLedgerRouter } from './routers/ledger';
 import { adminOrdersRouter } from './routers/orders';
 import { adminPricingRouter } from './routers/pricing';
 import { adminUsersRouter } from './routers/users';
+import { adminWebhooksRouter } from './routers/webhooks';
 
 export const adminRouter = router({
   adjustments: adminAdjustmentsRouter,
@@ -22,4 +23,5 @@ export const adminRouter = router({
   orders: adminOrdersRouter,
   pricing: adminPricingRouter,
   users: adminUsersRouter,
+  webhooks: adminWebhooksRouter,
 });
