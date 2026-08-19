@@ -19,6 +19,7 @@ import { workspaceMemberRouter } from '@/business/server/lambda-routers/workspac
 import { workspaceUsageRouter } from '@/business/server/lambda-routers/workspaceUsage';
 import { publicProcedure, router } from '@/libs/trpc/lambda';
 
+import { adminRouter } from './admin';
 import { acceptanceRouter } from './acceptance';
 import { agentRouter } from './agent';
 import { agentBotProviderRouter } from './agentBotProvider';
@@ -170,6 +171,7 @@ export const lambdaRouter = router({
   workspaceMember: workspaceMemberRouter,
   workspaceUsage: workspaceUsageRouter,
   workspaceUserSettings: workspaceUserSettingsRouter,
+  admin: adminRouter,
   accountDeletion: accountDeletionRouter,
   pageShare: pageShareRouter,
   referral: referralRouter,

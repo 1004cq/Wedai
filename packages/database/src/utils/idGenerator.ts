@@ -7,6 +7,7 @@ export const createNanoId = (size = 8) =>
 
 const prefixes = {
   // --- Wedai commercial billing ---
+  modelPrices: 'mp',
   billingAccounts: 'bac',
   plans: 'pln',
   planPrices: 'pp',

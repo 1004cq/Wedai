@@ -8,7 +8,7 @@
  *  - Wallet rows cache the ledger view; the ledger is always the audit source.
  *  - Every external-facing operation carries an idempotency key.
  */
-import { bigint, boolean, index, integer, jsonb, pgTable, text, uniqueIndex, varchar } from 'drizzle-orm/pg-core';
+import { bigint, boolean, index, integer, jsonb, pgTable, sql, text, uniqueIndex, varchar } from 'drizzle-orm/pg-core';
 
 import { idGenerator } from '../utils/idGenerator';
 import { createdAt, timestamptz, updatedAt } from './_helpers';
@@ -48,6 +48,59 @@ export type PaymentAttemptStatus = 'pending' | 'succeeded' | 'failed' | 'cancele
 export type LedgerEntryKind = 'credit' | 'debit' | 'grant' | 'hold' | 'release' | 'refund' | 'expiry';
 
 export type WebhookEventStatus = 'pending' | 'processed' | 'failed' | 'ignored';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// model_prices  (per-model per-token credit rates; admin-configurable)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Per-model billing rates, admin-configurable.
+ *
+ * `creditsPerThousandTokens` is an integer — avoids all floating-point issues.
+ * Price changes only affect requests started AFTER the new row is active;
+ * each usage_record stores a snapshot at hold time.
+ *
+ * Only rows with `isActive = true` and `archivedAt IS NULL` are offered to
+ * the charge middleware.  Archived rows are kept for audit.
+ */
+export const modelPrices = pgTable(
+  'model_prices',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => idGenerator('modelPrices'))
+      .notNull(),
+    /** e.g. "gpt-4o", "claude-3-5-sonnet-20241022" */
+    modelId: varchar('model_id', { length: 128 }).notNull(),
+    /** Provider slug matching the route parameter, e.g. "openai", "anthropic" */
+    provider: varchar('provider', { length: 64 }).notNull(),
+    /** Credits charged per 1 000 prompt tokens (integer). */
+    promptCreditsPerKToken: bigint('prompt_credits_per_k_token', { mode: 'bigint' })
+      .notNull()
+      .default(BigInt(1)),
+    /** Credits charged per 1 000 completion tokens (integer). */
+    completionCreditsPerKToken: bigint('completion_credits_per_k_token', { mode: 'bigint' })
+      .notNull()
+      .default(BigInt(2)),
+    /** When false this row is a draft; when true it is actively used for billing. */
+    isActive: boolean('is_active').notNull().default(false),
+    archivedAt: timestamptz('archived_at'),
+    /** Admin note on this price entry. */
+    note: text('note'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex('model_prices_model_id_provider_active_unique')
+      .on(t.modelId, t.provider)
+      .where(sql`${t.isActive} = true AND ${t.archivedAt} IS NULL`),
+    index('model_prices_model_id_idx').on(t.modelId),
+    index('model_prices_provider_idx').on(t.provider),
+  ],
+);
+
+export type ModelPrice = typeof modelPrices.$inferSelect;
+export type NewModelPrice = typeof modelPrices.$inferInsert;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // billing_accounts  (one per user initially; workspace-scoped later)

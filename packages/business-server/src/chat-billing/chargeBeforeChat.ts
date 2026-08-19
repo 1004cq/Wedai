@@ -12,8 +12,9 @@ import {
   validateRequestId,
 } from '@lobechat/billing';
 import type { BillingContext, HoldResult, UsagePriceSnapshot } from '@lobechat/billing';
-import { BillingAccountModel } from '@lobechat/database';
+import { BillingAccountModel, modelPrices } from '@lobechat/database';
 import type { LobeChatDatabase } from '@lobechat/database';
+import { and, eq, isNull } from 'drizzle-orm';
 
 // ─── Error types ──────────────────────────────────────────────────────────────
 
@@ -60,10 +61,39 @@ export interface ChargeBeforeChatParams {
   maxCompletionTokens: number;
 }
 
-// ─── Config (will be admin-configurable later; hardcoded MVP defaults) ────────
+// ─── Config defaults (used when no model_prices row exists) ──────────────────
 
-const DEFAULT_CREDITS_PER_THOUSAND_TOKENS = 1n;
+const DEFAULT_PROMPT_CREDITS_PER_K = 1n;
+const DEFAULT_COMPLETION_CREDITS_PER_K = 2n;
 const DEFAULT_CURRENCY = 'CNY';
+
+/** Look up active model price from DB; fall back to defaults if not configured. */
+async function resolveModelPrice(
+  db: LobeChatDatabase,
+  modelId: string,
+  provider: string,
+): Promise<{ promptPerK: bigint; completionPerK: bigint }> {
+  const [row] = await db
+    .select({
+      promptCreditsPerKToken: modelPrices.promptCreditsPerKToken,
+      completionCreditsPerKToken: modelPrices.completionCreditsPerKToken,
+    })
+    .from(modelPrices)
+    .where(
+      and(
+        eq(modelPrices.modelId, modelId),
+        eq(modelPrices.provider, provider),
+        eq(modelPrices.isActive, true),
+        isNull(modelPrices.archivedAt),
+      ),
+    )
+    .limit(1);
+
+  return {
+    promptPerK: row?.promptCreditsPerKToken ?? DEFAULT_PROMPT_CREDITS_PER_K,
+    completionPerK: row?.completionCreditsPerKToken ?? DEFAULT_COMPLETION_CREDITS_PER_K,
+  };
+}
 
 // ─── Implementation ───────────────────────────────────────────────────────────
 
@@ -99,10 +129,19 @@ export async function chargeBeforeChat(params: ChargeBeforeChatParams): Promise<
     account = await bam.createForUser({ currency: DEFAULT_CURRENCY });
   }
 
-  // 3. Build price snapshot for token-based billing.
+  // 3. Read model price from DB (or fallback defaults).
+  const { promptPerK, completionPerK } = await resolveModelPrice(
+    params.db,
+    params.modelId,
+    params.provider,
+  );
+
+  // Use the higher of prompt/completion rate for the conservative upper-bound.
+  const maxRatePerK = completionPerK > promptPerK ? completionPerK : promptPerK;
+
   const priceSnapshot = PriceSnapshotService.buildUsagePriceSnapshot({
     unitType: 'total_token',
-    creditsPerThousandTokens: DEFAULT_CREDITS_PER_THOUSAND_TOKENS,
+    creditsPerThousandTokens: maxRatePerK,
     currency: DEFAULT_CURRENCY,
   });
 
