@@ -16,6 +16,7 @@
  * than a silent empty list.
  */
 import type {
+  AdminDashboardMetrics,
   AdminModelPrice,
   AdminOrderRow,
   AdminUserRow,
@@ -154,14 +155,32 @@ async function debitBalance(input: {
   return lambdaClient.admin.adjustments.debit.mutate(input);
 }
 
+// ─── Dashboard ─────────────────────────────────────────────────────────────
+
+async function dashboardSummary(): Promise<AdminDashboardMetrics> {
+  return lambdaClient.admin.dashboard.summary.query();
+}
+
+// ─── Export ─────────────────────────────────────────────────────────────────
+
+async function exportLedgerCsv(input: {
+  billingAccountId: string;
+  kind?: string;
+  limit?: number;
+}): Promise<{ csv: string }> {
+  return lambdaClient.admin.ledger.exportCsv.query(input);
+}
+
 // ─── Exported client ─────────────────────────────────────────────────────────
 
 export const adminApi = {
   archivePrice,
+  dashboardSummary,
   creditBalance,
   debitBalance,
   getOrder,
   getUser,
+  exportLedgerCsv,
   listLedger,
   listOrders,
   listPrices,

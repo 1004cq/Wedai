@@ -12,6 +12,7 @@ import { router } from '@/libs/trpc/lambda';
 
 import { adminAdjustmentsRouter } from './routers/adjustments';
 import { adminConfigRouter } from './routers/config';
+import { adminDashboardRouter } from './routers/dashboard';
 import { adminLedgerRouter } from './routers/ledger';
 import { adminOrdersRouter } from './routers/orders';
 import { adminPricingRouter } from './routers/pricing';
@@ -21,6 +22,7 @@ import { adminWebhooksRouter } from './routers/webhooks';
 export const adminRouter = router({
   adjustments: adminAdjustmentsRouter,
   config: adminConfigRouter,
+  dashboard: adminDashboardRouter,
   ledger: adminLedgerRouter,
   orders: adminOrdersRouter,
   pricing: adminPricingRouter,

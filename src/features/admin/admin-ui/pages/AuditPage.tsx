@@ -1,7 +1,7 @@
 'use client';
 
 import type { TableColumnsType } from 'antd';
-import { Empty, Grid, Input, Table, Tag, Typography } from 'antd';
+import { App, Button, Empty, Grid, Input, Table, Tag, Typography } from 'antd';
 import { useCallback, useState } from 'react';
 
 import { adminApi } from '../api';
@@ -43,9 +43,37 @@ const useAuditPage = (billingAccountId: string) => {
 export const AuditPage = () => {
   const { state } = useAdminAccess();
   const screens = Grid.useBreakpoint();
+  const { message } = App.useApp();
   const [billingAccountId, setBillingAccountId] = useState('');
   const { data, error, isLoading, page, pageSize, reload, setPage, setPageSize } =
     useAuditPage(billingAccountId);
+
+  const handleExportCsv = async () => {
+    const target = billingAccountId.trim();
+    if (!target) {
+      message.error('请输入 Billing Account ID');
+      return;
+    }
+
+    try {
+      const res = await adminApi.exportLedgerCsv({ billingAccountId: target, limit: 5000 });
+      const blob = new Blob([res.csv], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      const fileName = `ledger_${target}_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+      message.success('CSV 已导出');
+    } catch (cause) {
+      message.error(cause instanceof Error ? cause.message : '导出失败');
+    }
+  };
 
   if (state.status === 'forbidden') return <AdminForbiddenBanner />;
 
@@ -97,18 +125,23 @@ export const AuditPage = () => {
       description={'不可变账本流水。按 Billing Account ID 查询；所有余额变化均有对应条目。'}
       title={'账本流水（Audit）'}
     >
-      <Input.Search
-        allowClear
-        enterButton={'查询'}
-        placeholder={'输入 Billing Account ID（bac_xxx）'}
-        style={{ maxWidth: 480, width: '100%' }}
-        value={billingAccountId}
-        onChange={(e) => setBillingAccountId(e.target.value)}
-        onSearch={(value) => {
-          setBillingAccountId(value.trim());
-          setPage(1);
-        }}
-      />
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <Input.Search
+          allowClear
+          enterButton={'查询'}
+          placeholder={'输入 Billing Account ID（bac_xxx）'}
+          style={{ maxWidth: 480, flex: 1, minWidth: 260 }}
+          value={billingAccountId}
+          onChange={(e) => setBillingAccountId(e.target.value)}
+          onSearch={(value) => {
+            setBillingAccountId(value.trim());
+            setPage(1);
+          }}
+        />
+        <Button disabled={!billingAccountId.trim()} onClick={handleExportCsv}>
+          导出 CSV
+        </Button>
+      </div>
       {!billingAccountId.trim() && (
         <Empty description={'请输入 Billing Account ID 查询流水'} />
       )}
