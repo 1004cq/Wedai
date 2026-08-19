@@ -4,7 +4,14 @@ export * from './branding';
 export * from './llm';
 export * from './url';
 
-export const ENABLE_BUSINESS_FEATURES = false;
+/**
+ * Enable Wedai commercial billing features (Plans / Credits / Billing sidebar,
+ * Admin RBAC, chargeBeforeChat, etc.).
+ *
+ * Set to `true` for the Wedai commercial build.
+ * Upstream LobeHub forks should keep this `false`.
+ */
+export const ENABLE_BUSINESS_FEATURES = true;
 
 /**
  * Master switch for the (now removed) conversational agent-onboarding flow.
