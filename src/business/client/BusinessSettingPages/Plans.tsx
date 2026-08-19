@@ -4,8 +4,8 @@ import { Button } from '@lobehub/ui/base-ui';
 import { App } from 'antd';
 import { createStaticStyles } from 'antd-style';
 import { useEffect, useRef, useState, type FC } from 'react';
-import { useSearchParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
+import { useSearchParams } from 'react-router';
 import { mutate } from 'swr';
 
 import { useClientDataSWR } from '@/libs/swr';

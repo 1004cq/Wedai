@@ -3,9 +3,9 @@ import { ChatErrorType, Plans } from '@lobechat/types';
 import { Flexbox } from '@lobehub/ui';
 import { Button } from '@lobehub/ui/base-ui';
 import { createStaticStyles } from 'antd-style';
-import { memo, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 
 import { formatIntergerNumber, formatNumber } from '@/utils/format';
 
