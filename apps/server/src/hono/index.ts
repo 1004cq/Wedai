@@ -1,6 +1,8 @@
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 
+import { getBillingReaperCronStatus } from '@/services/billing/staleHoldReaperCron';
+
 const app = new Hono();
 
 const fetchWith = async (
@@ -16,6 +18,8 @@ app.get('/health', (c) =>
     service: '@lobechat/server',
   }),
 );
+
+app.get('/health/billing/reaper', (c) => c.json(getBillingReaperCronStatus()));
 
 app.all('/api/agent', (c) => fetchWith(c, () => import('../agent-hono')));
 app.all('/api/agent/*', (c) => fetchWith(c, () => import('../agent-hono')));

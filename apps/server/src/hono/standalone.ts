@@ -2,6 +2,8 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
 
+import { startStaleHoldReaperCron } from '@/services/billing/staleHoldReaperCron';
+
 import honoApp from './index';
 
 type HonoStandaloneGlobal = typeof globalThis & {
@@ -102,6 +104,10 @@ const startServer = async () => {
   process.title = `lobe-dev-hono-${port}`;
   server.listen(port, host, () => {
     console.info(`Hono runtime ready at http://${host}:${port}`);
+
+    // Billing background maintenance (runs in-process, guarded by idempotency
+    // at the ledger layer; see StaleHoldReaper for safety guarantees).
+    startStaleHoldReaperCron();
   });
 };
 

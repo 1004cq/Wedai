@@ -72,13 +72,19 @@ export interface ChargeBeforeChatParams {
   maxCompletionTokens: number;
 }
 
-// ─── Config defaults (used when no model_prices row exists) ──────────────────
+// ─── Config defaults ─────────────────────────────────────────────────────────
 
-const DEFAULT_PROMPT_CREDITS_PER_K = 1n;
-const DEFAULT_COMPLETION_CREDITS_PER_K = 2n;
 const DEFAULT_CURRENCY = 'CNY';
 
-/** Look up active model price from DB; fall back to defaults if not configured. */
+/**
+ * Look up active model price from DB.
+ *
+ * Governance:
+ * - If no active model_prices row exists for (modelId, provider), treat it as
+ *   "unpriced" → platform charge is effectively 0 (no hold/settle).
+ * - This prevents silent/implicit billing when admin forgot to configure
+ *   pricing for a newly added model.
+ */
 async function resolveModelPrice(
   db: LobeChatDatabase,
   modelId: string,
@@ -100,9 +106,21 @@ async function resolveModelPrice(
     )
     .limit(1);
 
+  if (!row) {
+    // Intentionally do NOT block the request here: for "unpriced" models we
+    // degrade to free behavior. Admin should backfill model_prices via
+    // admin.pricing.upsert.
+    log('model_price_missing %O', {
+      modelId,
+      provider,
+      outcome: 'free_degraded',
+    });
+    return { promptPerK: 0n, completionPerK: 0n };
+  }
+
   return {
-    promptPerK: row?.promptCreditsPerKToken ?? DEFAULT_PROMPT_CREDITS_PER_K,
-    completionPerK: row?.completionCreditsPerKToken ?? DEFAULT_COMPLETION_CREDITS_PER_K,
+    promptPerK: row.promptCreditsPerKToken,
+    completionPerK: row.completionCreditsPerKToken,
   };
 }
 

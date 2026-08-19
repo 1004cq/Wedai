@@ -41,15 +41,22 @@ vi.mock('@lobechat/billing', async () => {
   };
 });
 
-vi.mock('@lobechat/database', () => ({
-  BillingAccountModel: vi.fn().mockImplementation(() => ({
-    findByUserId: mockFindByUserId,
-    createForUser: mockCreateForUser,
-  })),
-  UsageRecordModel: vi.fn().mockImplementation(() => ({
-    create: mockUsageCreate,
-  })),
-}));
+vi.mock('@lobechat/database', async () => {
+  // Spread the actual module so drizzle column metadata (modelPrices) stays
+  // usable for chargeBeforeChat's query builder.
+  const actual = await vi.importActual<typeof import('@lobechat/database')>('@lobechat/database');
+
+  return {
+    ...actual,
+    BillingAccountModel: vi.fn().mockImplementation(() => ({
+      findByUserId: mockFindByUserId,
+      createForUser: mockCreateForUser,
+    })),
+    UsageRecordModel: vi.fn().mockImplementation(() => ({
+      create: mockUsageCreate,
+    })),
+  };
+});
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -68,6 +75,21 @@ const fakeAccount = { id: 'bac_1', userId: 'user-a', currency: 'CNY', status: 'a
 
 beforeEach(() => {
   vi.clearAllMocks();
+
+  // Default: priced model (prompt=1 credit/k, completion=2 credits/k)
+  // Mock the drizzle chain:
+  // db.select(...).from(...).where(...).limit(1) -> Promise<[row]>
+  baseParams.db = {
+    select: vi.fn().mockReturnValue({
+      from: () => ({
+        where: () => ({
+          limit: () =>
+            Promise.resolve([{ promptCreditsPerKToken: 1n, completionCreditsPerKToken: 2n }]),
+        }),
+      }),
+    }),
+  } as any;
+
   mockFindByUserId.mockResolvedValue(fakeAccount);
   mockCreateForUser.mockResolvedValue(fakeAccount);
   mockHold.mockResolvedValue({
@@ -95,6 +117,23 @@ describe('chargeBeforeChat', () => {
     expect(ctx.holdResult).toEqual(expect.objectContaining({ ledgerEntryId: 'led_hold_1' }));
     expect(mockHold).toHaveBeenCalledOnce();
     expect(mockHold.mock.calls[0][0].requestId).toBe('req-001');
+  });
+
+  it('Unpriced model: no model_prices row → treated as free (no hold)', async () => {
+    baseParams.db = {
+      select: vi.fn().mockReturnValue({
+        from: () => ({
+          where: () => ({
+            limit: () => Promise.resolve([]),
+          }),
+        }),
+      }),
+    } as any;
+
+    const ctx = await chargeBeforeChat(baseParams);
+    expect(ctx.holdResult).toBeNull();
+    expect(ctx.heldCredits).toBe(0n);
+    expect(mockHold).not.toHaveBeenCalled();
   });
 
   it('Insufficient balance: throws InsufficientBalanceError', async () => {
