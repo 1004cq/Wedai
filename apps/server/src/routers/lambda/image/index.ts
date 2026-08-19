@@ -201,8 +201,14 @@ export const imageRouter = router({
         userId,
         workspaceId: wsId,
       });
-      // An error batch (insufficient budget / cooldown / frozen workspace) is
-      // returned to the client as-is.
+      // Insufficient balance — surface to user before calling the provider.
+      if (chargeResult && 'insufficientBalance' in chargeResult && chargeResult.insufficientBalance) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Insufficient credits. Please top up your balance to generate images.',
+        });
+      }
+      // An error batch (frozen workspace / cooldown) is returned to the client as-is.
       if (isErrorBatchResult(chargeResult)) {
         return chargeResult;
       }
