@@ -1,4 +1,10 @@
 {
+  "checkout.cancelled": "支付已取消，可重新选择套餐。",
+  "checkout.createFailed": "创建订单失败，请重试。",
+  "checkout.failed": "订单失败，请联系客服或重新下单。",
+  "checkout.paid": "积分已到账！余额已更新。",
+  "checkout.processing": "支付处理中，正在等待确认…",
+  "checkout.timeout": "暂未收到确认，可能仍在处理中。积分到账后余额会自动更新，无需重复支付。",
   "billing.auditNote": "所有金额均为服务端权威值，如有异议请联系客服。",
   "billing.credits": "消耗积分",
   "billing.date": "日期",

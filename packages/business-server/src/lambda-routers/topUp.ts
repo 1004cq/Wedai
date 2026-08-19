@@ -103,8 +103,8 @@ export const topUpRouter = router({
           orderId: existing.id,
           orderNo: existing.orderNo,
           priceSnapshot: snapshot,
-          successUrl: `${appUrl}/payment/result?orderId=${existing.id}&status=pending`,
-          cancelUrl: `${appUrl}/payment/cancel?orderId=${existing.id}`,
+          successUrl: `${appUrl}/settings/plans?orderId=${existing.id}&fromCheckout=1`,
+          cancelUrl: `${appUrl}/settings/plans?orderId=${existing.id}&cancelled=1`,
         });
         return { orderId: existing.id, orderNo: existing.orderNo, checkoutUrl: url };
       }
@@ -141,8 +141,8 @@ export const topUpRouter = router({
         orderId: order.id,
         orderNo,
         priceSnapshot: snapshot,
-        successUrl: `${appUrl}/payment/result?orderId=${order.id}&status=pending`,
-        cancelUrl: `${appUrl}/payment/cancel?orderId=${order.id}`,
+        successUrl: `${appUrl}/settings/plans?orderId=${order.id}&fromCheckout=1`,
+        cancelUrl: `${appUrl}/settings/plans?orderId=${order.id}&cancelled=1`,
       });
 
       return { orderId: order.id, orderNo, checkoutUrl: url };
