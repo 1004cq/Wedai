@@ -23,10 +23,10 @@
 | 登录态 API 防护 | 已可测 | `packages/trpc/src/middleware/userAuth.ts`、`packages/trpc/src/lambda/index.ts` | `authedProcedure` 无用户时返回 `UNAUTHORIZED` |
 | 通用业务数据隔离 | 已可测但需回归 | `apps/server/src/routers/lambda/user.ts`、大量 `packages/database/src/models/__tests__/**` 用户隔离用例 | 上游模型普遍以 `ctx.userId` 构造；商业表仍需独立隔离测试 |
 | Better Auth 管理角色底座 | 有风险 | `src/libs/better-auth/define-config.ts` 的 `admin()`、`packages/database/src/schemas/user.ts` 的 `role/banned` | 仅是身份底座，不等于 Wedai 商业后台已完成 |
-| 套餐、余额、定价、充值 UI | 未实现 | `src/business/client/BusinessSettingPages/{Plans,Credits,Billing}.tsx` 返回 `null`；`src/features/billing/README.md` 为占位 | 页面不可验收 |
-| 订单、支付、Stripe Webhook | 未实现 | `subscription/topUp/spend/workspaceCredits` 路由均为 `router({})`；仓库无 Stripe SDK 调用 | `package.json` 声明 Stripe 依赖不代表支付已接入 |
-| 对话/生成计费 | 未实现 | `packages/business-server/src/image-generation/chargeBeforeGenerate.ts` 返回 `undefined`；`chargeAfterGenerate.ts` 为空 | 官方核心已有插槽，但社区实现不扣费；文本模型也未发现 Wedai 计费中间件 |
-| 商业数据库表 | 未实现 | `packages/database/README_WEDAI.md` 仅列候选模型；当前 schema 无订单、钱包、商业流水或支付回调表 | 早期 `user_subscriptions` 已在迁移 `0009` 删除，不能复用 |
+| 套餐、余额、定价、充值 UI | **已实现** | `src/business/client/BusinessSettingPages/{Plans,Credits,Billing}.tsx` 接真实 tRPC；Checkout 轮询 | 需 `ENABLE_BUSINESS_FEATURES=true`（已默认开启）|
+| 订单、支付、Stripe Webhook | **已实现** | topUp/spend/subscription tRPC；`POST /api/webhooks/stripe`；idempotent | 需配置 `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET` |
+| 对话/生成计费 | **已实现** | `packages/business-server/src/chat-billing/`（文本）；`{image,video}-generation/charge*`（生图/视频）| Agent 多步仍未计费 |
+| 商业数据库表 | **已实现** | `packages/database/src/schemas/billing.ts`，migrations 0132–0136 | `pnpm db:migrate` 后创建 |
 | 推荐邀请码 | 未实现 | `packages/business-server/src/lambda-routers/referral.ts` 为空，Referral 页面返回 `null` | Workspace 邮件邀请已存在，但不是商业邀请码/返利系统 |
 | 商业管理后台 | 未实现/高风险 | `src/features/admin/README.md` 为占位；商业路由无用户/订单/流水管理 API | `packages/business-server` 的 OSS RBAC middleware 是放行 stub，禁止直接作为商业后台安全边界 |
 

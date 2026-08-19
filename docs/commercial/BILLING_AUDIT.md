@@ -1,6 +1,6 @@
 # Wedai 模型调用计费路径审计
 
-> 审计基准：`main` + Phase 1（commit `589f93d`），2026-08-19。
+> 审计基准：`main`（commit `15eb1f3`，Phase 1+2 合入），2026-08-19。
 > 审计范围：所有服务端会触发模型/生成成本的入口。
 
 ---
@@ -28,12 +28,12 @@
 
 ---
 
-### 1.2 Agent / 多步 / Task（❌ 未接线）
+### 1.2 Agent / 多步 / Task（✅ 已接线，P3）
 
 | 入口路径 | 计费函数 | 状态 | 说明 |
 |----------|----------|------|------|
-| `apps/server/src/modules/AgentRuntime/adapters/ServerLLMTransport.ts` | — | ❌ 无计费 | agent 每一步 LLM call 的实际执行层；直接调 `initModelRuntimeFromDB` + `modelRuntime.chat()`，完全绕过 webapi/chat 路由 |
-| `apps/server/src/modules/AgentRuntime/adapters/serverCallLlmAttempt.ts` | — | ❌ 无计费 | `ServerLLMTransport` 的单次重试封装；`modelRuntime.chat()` 在此调用，无任何 charge 挂钩 |
+| `apps/server/src/modules/AgentRuntime/adapters/ServerLLMTransport.ts` | `withAgentBilling` | ✅ 已接线 | `stream()` 和 `runAttemptWithRuntime()` 均通过 `withAgentBilling` 包装；BYOK 跳过；platform hold → settle/release |
+| `apps/server/src/modules/AgentRuntime/adapters/serverCallLlmAttempt.ts` | via `runAttemptWithRuntime` | ✅ 已接线 | 由 `runAttemptWithRuntime` 的 `withAgentBilling` 包装覆盖 |
 | `apps/server/src/routers/lambda/aiAgent.ts`（`execAgent`） | — | ❌ 无计费 | aiAgent tRPC 路由，创建 `AgentRuntimeService` 并触发执行；没有 BYOK 检查或预占 |
 | `apps/server/src/services/aiAgent/index.ts` | — | ❌ 无计费 | aiAgent 服务层 |
 | `apps/server/src/services/agentRuntime/AgentRuntimeService.ts` | — | ❌ 无计费 | 多步执行协调器；每步触发 `ServerLLMTransport.execute()` |
@@ -48,7 +48,7 @@ aiAgent.execAgent (tRPC)
   → modelRuntime.chat()  ← 无 charge 挂钩
 ```
 
-**影响**：所有 agent/task/group 模式的 LLM 调用（无论平台模式还是 BYOK）均不扣费、不预占、不释放。
+**P3 已修复**：`withAgentBilling` 适配器覆盖 `stream()` 和 `runAttemptWithRuntime()`。BYOK 跳过，platform 模式 hold → settle / release。余额不足在 provider 调用前失败。
 
 ---
 
@@ -68,20 +68,22 @@ aiAgent.execAgent (tRPC)
 
 ---
 
-### 1.4 图片 / 视频生成（插槽已接线，函数 no-op ❌）
+### 1.4 图片 / 视频生成（P2-1 已实现 ✅）
 
 | 入口路径 | 计费函数 | 状态 | 说明 |
 |----------|----------|------|------|
-| `apps/server/src/routers/lambda/image/index.ts` | `chargeBeforeGenerate` + `chargeAfterGenerate` | ⚠️ 插槽已接，函数 no-op | `chargeBeforeGenerate` 返回 `undefined`；错误路径有回调但 noop |
-| `apps/server/src/routers/async/image.ts` | `chargeAfterGenerate` | ⚠️ 插槽已接，函数 no-op | 成功/失败均调用 `chargeAfterGenerate`，但函数体为空 |
-| `apps/server/src/routers/lambda/video/index.ts` | `chargeBeforeGenerate` + `chargeAfterGenerate` | ⚠️ 插槽已接，函数 no-op | `chargeBeforeGenerate` 返回 `{}`（空结果），相当于无预占 |
-| `apps/server/src/routers/async/video.ts` | `chargeAfterGenerate` | ⚠️ 插槽已接，函数 no-op | |
+| `apps/server/src/routers/lambda/image/index.ts` | `chargeBeforeGenerate` + `chargeAfterGenerate` | ✅ 已接线 | 读 `model_prices.request_credits_flat`；0 = 免费；>0 = per-image hold/settle/release |
+| `apps/server/src/routers/async/image.ts` | `chargeAfterGenerate` | ✅ 已接线 | `isError=true` → release；成功 → settle |
+| `apps/server/src/routers/lambda/video/index.ts` | `chargeBeforeGenerate` + `chargeAfterGenerate` | ✅ 已接线 | 同上，per-generation flat |
+| `apps/server/src/routers/async/video.ts` | `chargeAfterGenerate` | ✅ 已接线 | |
 
-具体 no-op 位置：
-- `packages/business-server/src/image-generation/chargeBeforeGenerate.ts` → `return undefined`
-- `packages/business-server/src/image-generation/chargeAfterGenerate.ts` → `async function() {}`
-- `packages/business-server/src/video-generation/chargeBeforeGenerate.ts` → `return {}`
-- `packages/business-server/src/video-generation/chargeAfterGenerate.ts` → `async function() {}`
+实现位置：
+- `packages/business-server/src/image-generation/chargeBeforeGenerate.ts` — per-image hold，fail-closed（billing 异常用显式开关控制是否放行）
+- `packages/business-server/src/image-generation/chargeAfterGenerate.ts` — settle / release
+- `packages/business-server/src/video-generation/chargeBeforeGenerate.ts` — per-generation hold
+- `packages/business-server/src/video-generation/chargeAfterGenerate.ts` — settle / release
+
+**注意**：`request_credits_flat = 0` 表示免费模型（如开源模型）。付费模型需 Admin 通过 `admin.pricing.upsert` 配置非零费率，或运行 `pnpm db:seed:dev`（包含示例价格）。
 
 ---
 

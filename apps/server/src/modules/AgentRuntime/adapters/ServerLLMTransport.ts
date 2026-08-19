@@ -35,6 +35,7 @@ import {
 import { initModelRuntimeFromDB } from '@/server/modules/ModelRuntime';
 
 import type { RuntimeExecutorContext } from '../context';
+import { agentRequestId, withAgentBilling } from './agentBilling';
 import { log, sleep } from '../executorHelpers';
 import { classifyLLMError } from '../llmErrorClassification';
 import { createServerCallLlmAttempt } from './serverCallLlmAttempt';
@@ -196,36 +197,58 @@ export class ServerLLMTransport implements LLMTransport {
   ): Promise<LLMStreamResult> {
     const runtime = await this.createModelRuntime(payload.provider);
     const { provider: _provider, ...runtimePayload } = payload;
-    let content = '';
-    let usage: LLMStreamResult['usage'];
-    let streamError: unknown;
 
-    const response = await runtime.chat(runtimePayload as any, {
-      callback: {
-        onCompletion: async (data: any) => {
-          if (data.usage) usage = data.usage;
-        },
-        onError: async (errorData: unknown) => {
-          streamError = errorData;
-          handlers?.onError?.(errorData);
-        },
-        onText: async (text: string) => {
-          content += text;
-          handlers?.onText?.(text);
-        },
+    // Estimate prompt tokens from message content length (~4 chars/token).
+    const promptEstimate = Math.max(
+      1,
+      Math.ceil(
+        ((runtimePayload as any).messages ?? []).reduce(
+          (sum: number, m: any) => sum + (typeof m.content === 'string' ? m.content.length : 0),
+          0,
+        ) / 4,
+      ),
+    );
+
+    return withAgentBilling(
+      this.ctx,
+      payload.provider,
+      (runtimePayload as any).model ?? '',
+      /* attempt */ 0,
+      promptEstimate,
+      (runtimePayload as any).max_tokens ?? 4096,
+      async () => {
+        let content = '';
+        let usage: LLMStreamResult['usage'];
+        let streamError: unknown;
+
+        const response = await runtime.chat(runtimePayload as any, {
+          callback: {
+            onCompletion: async (data: any) => {
+              if (data.usage) usage = data.usage;
+            },
+            onError: async (errorData: unknown) => {
+              streamError = errorData;
+              handlers?.onError?.(errorData);
+            },
+            onText: async (text: string) => {
+              content += text;
+              handlers?.onText?.(text);
+            },
+          },
+          user: this.ctx.userId,
+        });
+
+        await consumeStreamUntilDone(response);
+
+        if (streamError) {
+          throw new Error(getErrorMessage(streamError));
+        }
+
+        const result = { content, usage };
+        handlers?.onFinish?.(result);
+        return result;
       },
-      user: this.ctx.userId,
-    });
-
-    await consumeStreamUntilDone(response);
-
-    if (streamError) {
-      throw new Error(getErrorMessage(streamError));
-    }
-
-    const result = { content, usage };
-    handlers?.onFinish?.(result);
-    return result;
+    );
   }
 
   private createModelRuntime(provider: string) {
@@ -288,8 +311,34 @@ export class ServerLLMTransport implements LLMTransport {
       userAgent: input.state.metadata?.userAgent,
     });
 
+    const promptEstimate = Math.max(
+      1,
+      Math.ceil(
+        chatPayload.messages.reduce(
+          (sum, m) => sum + (typeof m.content === 'string' ? m.content.length : 0),
+          0,
+        ) / 4,
+      ),
+    );
+
+    // Billing wrapper: hold before attempt, settle/release after.
+    const requestId = agentRequestId(this.ctx, input.attempt);
+    void requestId; // used inside withAgentBilling via ctx
+
     try {
-      await attempt.execute();
+      await withAgentBilling(
+        this.ctx,
+        input.provider,
+        input.model,
+        input.attempt,
+        promptEstimate,
+        (chatPayload as any).max_tokens ?? 4096,
+        async () => {
+          await attempt.execute();
+          const output = attempt.snapshot();
+          return { usage: (output as any).usage };
+        },
+      );
       return { ok: true, output: attempt.snapshot() };
     } catch (error) {
       attempt.clearBuffers();

@@ -25,7 +25,7 @@
 首次会生成 `deploy/.env.commercial`，填完密钥后再执行一次。默认 <http://localhost:3210>。  
 详情见 [deploy/ONE_CLICK.md](./deploy/ONE_CLICK.md)。
 
-> 部署成功 ≠ 付费/计费已可用。当前商业模块多为骨架，验收见 [docs/qa/](./docs/qa/)。
+> Phase 1+2 已实现文本/生图/视频扣费、Stripe 支付闭环、Admin RBAC 与用户计费页。部署后运行 `pnpm db:migrate && pnpm db:seed:dev` 即可开始本地验收，完整步骤见 [docs/qa/LOCAL_P0_RUNBOOK.md](./docs/qa/LOCAL_P0_RUNBOOK.md)。
 
 ### 本地开发（上游标准）
 
@@ -39,16 +39,27 @@ bun run dev       # 或 pnpm 文档中的 dev 命令
 
 ---
 
-## 能力与状态（摘要）
+## 能力与状态（Phase 1+2，commit `15eb1f3`）
 
-| 能力 | 状态 |
-|------|------|
-| LobeHub Agent / 对话 / 设置 / BYOK | 上游已有，可运行 |
-| Better Auth 登录注册 | 已可测 |
-| 商业表 / 订单 / Webhook / 扣费中间件 | **未实现 / 骨架** |
-| 管理后台完整 UI + tRPC | **占位** |
-| 用户中心 / 定价页 | **占位** |
-| Docker 一键栈（app + PG + Redis + 对象存储） | 可用 |
+| 能力 | 状态 | 关键路径 |
+|------|------|----------|
+| LobeHub Agent / 对话 / 设置 / BYOK | ✅ 上游已有，可运行 | `packages/agent-runtime` |
+| Better Auth 邮箱登录注册 | ✅ 已可测 | `src/features/Auth/` |
+| 商业 DB 表（10 张）+ migrations 0132–0136 | ✅ 已实现 | `packages/database/src/schemas/billing.ts` |
+| packages/billing 领域包（hold/settle/release/credit/BYOK/幂等） | ✅ 已实现 | `packages/billing/src/` |
+| Stripe Checkout + Webhook（幂等验签入账） | ✅ 已实现 | `apps/server/src/services/payment/`，`src/app/(backend)/api/webhooks/stripe/route.ts` |
+| topUp / spend / subscription tRPC | ✅ 已实现 | `packages/business-server/src/lambda-routers/` |
+| 文本对话扣费（chargeBeforeChat/After，流式 onUsage 真实 token） | ✅ 已实现 | `packages/business-server/src/chat-billing/` |
+| 图片 / 视频扣费（requestCreditsFlat，fail-closed） | ✅ 已实现 | `packages/business-server/src/{image,video}-generation/` |
+| Hold 超时自动 release（StaleHoldReaper，30 分钟） | ✅ 已实现 | `packages/database/src/models/staleHoldReaper.ts` |
+| Admin RBAC + tRPC（users/orders/ledger/pricing/adjustments/webhooks/config） | ✅ 已实现 | `apps/server/src/routers/lambda/admin/` |
+| 用户定价页 / 积分页 / 账单页（接真实 tRPC，Checkout 轮询） | ✅ 已实现 | `src/business/client/BusinessSettingPages/` |
+| 余额不足 UX（402 + PlanLimitCard + 跳转 /settings/plans） | ✅ 已实现 | `src/features/Conversation/Error/PlanLimitCard/` |
+| 注册赠送积分（SIGNUP_CREDIT_GRANT，幂等） | ✅ 已实现 | `packages/business-server/src/user.ts` |
+| Docker 一键栈（app + PG + Redis + 对象存储） | ✅ 可用 | `deploy/` |
+| Agent 多步 LLM 计费（ServerLLMTransport） | ❌ 未接线 | Phase 3 |
+| 国内支付 / 手机短信注册 / Referral | ❌ 未实现 | Phase 5 |
+| Admin 仪表盘聚合指标 | ❌ 占位（info banner） | `pages/DashboardPage.tsx` |
 
 产品约定：
 
@@ -96,7 +107,7 @@ Wedai/
 │   └── usage|self-hosting… # 【上游】官方文档
 ├── apisix/                 # 【Wedai】网关配置（可选）
 ├── src/features/
-│   ├── admin|billing|user-center  # 【Wedai】商业功能（多为占位）
+│   ├── admin|billing|user-center  # 【Wedai】商业功能（Phase 1+2 已实现）
 │   └── …                   # 【上游】对话、Agent、设置等
 ├── packages/               # 上游 monorepo + 可扩展 billing
 ├── apps/                   # 上游应用

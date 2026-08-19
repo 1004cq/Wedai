@@ -170,7 +170,7 @@ export const videoRouter = router({
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Invalid generation topic' });
       }
 
-      const { errorBatch, prechargeResult } = await chargeBeforeGenerate({
+      const { errorBatch, prechargeResult, insufficientBalance } = await chargeBeforeGenerate({
         generationTopicId,
         model,
         params,
@@ -178,6 +178,12 @@ export const videoRouter = router({
         userId,
         workspaceId: wsId,
       });
+      if (insufficientBalance) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Insufficient credits. Please top up your balance to generate videos.',
+        });
+      }
       if (errorBatch) return errorBatch;
 
       // Generate a one-time token for webhook callback verification
