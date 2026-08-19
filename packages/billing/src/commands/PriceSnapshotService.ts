@@ -44,8 +44,10 @@ export class PriceSnapshotService {
         amountMinor: planPrices.amountMinor,
         billingInterval: planPrices.billingInterval,
         archivedAt: planPrices.archivedAt,
+        tokenGrantMonthly: plans.tokenGrantMonthly,
       })
       .from(planPrices)
+      .innerJoin(plans, eq(planPrices.planId, plans.id))
       .where(eq(planPrices.id, planPriceId))
       .limit(1);
 
@@ -59,6 +61,9 @@ export class PriceSnapshotService {
       currency: row.currency,
       amountMinor: row.amountMinor,
       billingInterval: row.billingInterval as PriceSnapshot['billingInterval'],
+      // creditGrant mirrors the plan's monthly token grant so the webhook
+      // knows how many credits to add when the order is paid.
+      creditGrant: row.tokenGrantMonthly ?? BigInt(0),
       snapshotAt: new Date(),
     };
   }

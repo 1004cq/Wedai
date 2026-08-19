@@ -3,7 +3,18 @@
  *
  * Called before modelRuntime.chat(). If it throws `InsufficientBalanceError`,
  * the caller MUST NOT call the provider.
+ *
+ * ## Structured metrics (P4-3)
+ *
+ * Every billing decision emits a structured log line via the `debug` namespace
+ * `lobe-server:billing:chat`.  Enable with DEBUG=lobe-server:billing:*.
+ *
+ * Fields: outcome, chargeMode, provider, modelId, estimatedCredits, durationMs
+ * FORBIDDEN: userId, requestId, billingAccountId (potential PII identifiers
+ * should only appear in internal DB, not in logs).
  */
+import debug from 'debug';
+
 import {
   BillingCommandService,
   PriceSnapshotService,
@@ -97,28 +108,37 @@ async function resolveModelPrice(
 
 // ─── Implementation ───────────────────────────────────────────────────────────
 
+const log = debug('lobe-server:billing:chat');
+
 export async function chargeBeforeChat(params: ChargeBeforeChatParams): Promise<ChatBillingContext> {
   validateRequestId(params.requestId);
+  const startMs = Date.now();
 
   // 1. Resolve charge mode.
+  // byokAllowed and gatewayFeeEnabled are read from env so they can be changed
+  // without a code deploy. Defaults: BYOK=allowed, gateway_fee=disabled.
   const billingCtx: BillingContext = {
+    byokAllowed: process.env.BYOK_ALLOWED !== 'false',
+    gatewayFeeEnabled: process.env.BYOK_GATEWAY_FEE_ENABLED === 'true',
+    isPlatformManagedProvider: false, // Phase 3: read per-provider from admin config table
     provider: params.provider,
     userHasProviderKey: params.userHasProviderKey,
-    isPlatformManagedProvider: false, // TODO: read from admin config
-    byokAllowed: true,               // TODO: read from admin config
-    gatewayFeeEnabled: false,        // TODO: read from admin config
   };
 
   const { chargeMode } = resolveChargeMode(billingCtx);
 
   if (chargeMode === 'byok') {
+    // User supplied their own API key for this provider.
+    // Platform credits are NOT deducted — no hold, settle, or release.
+    // See docs/commercial/BYOK.md for the full decision tree.
+    log('byok_skip %O', { chargeMode, durationMs: Date.now() - startMs, modelId: params.modelId, outcome: 'byok', provider: params.provider });
     return {
-      charged: false,
       billingAccountId: '',
-      requestId: params.requestId,
-      holdResult: null,
+      charged: false,
       heldCredits: 0n,
+      holdResult: null,
       priceSnapshot: null,
+      requestId: params.requestId,
     };
   }
 
@@ -179,17 +199,20 @@ export async function chargeBeforeChat(params: ChargeBeforeChatParams): Promise<
     });
   } catch (err: any) {
     if (err?.code === 'PRECONDITION_FAILED') {
+      log('insufficient_balance %O', { chargeMode, durationMs: Date.now() - startMs, estimatedCredits: estimatedCredits.toString(), modelId: params.modelId, outcome: '402_insufficient_balance', provider: params.provider });
       throw new InsufficientBalanceError();
     }
+    log('hold_error %O', { chargeMode, durationMs: Date.now() - startMs, errorCode: err?.code, modelId: params.modelId, outcome: 'error', provider: params.provider });
     throw err;
   }
 
+  log('hold_success %O', { chargeMode, durationMs: Date.now() - startMs, estimatedCredits: estimatedCredits.toString(), modelId: params.modelId, outcome: 'hold_ok', provider: params.provider });
   return {
-    charged: true,
     billingAccountId: account.id,
-    requestId: params.requestId,
-    holdResult,
+    charged: true,
     heldCredits: estimatedCredits,
+    holdResult,
     priceSnapshot,
+    requestId: params.requestId,
   };
 }

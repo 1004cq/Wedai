@@ -1,6 +1,8 @@
 # Wedai 支付 Webhook 幂等验收与最小实现方案
 
-> 当前结论：审计基线 `a551d9f9` 中没有 Stripe 支付 Webhook、订单入账服务或商业 `webhook_events` 表。现有 messenger/OIDC Webhook 与支付无关；`package.json` 中的 Stripe 依赖也没有被支付处理代码导入。本文件因此是 Phase 1 的实现契约，不代表功能已经完成。30 分钟实际操作与当前阻断状态见 [`ACCEPTANCE_30MIN.md`](./ACCEPTANCE_30MIN.md)。
+> 状态基准：`589f93d`（Phase 1 合入 main，2026-08-19）。
+> Stripe Webhook 已实现（`POST /api/webhooks/stripe`，`StripeWebhookService`，`webhook_events` 表），本文件作为不变的验收契约保留。
+> 实现路径：`apps/server/src/services/payment/StripeWebhookService.ts`、`src/app/(backend)/api/webhooks/stripe/route.ts`。
 
 ## 1. 验收目标
 

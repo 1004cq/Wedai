@@ -4,8 +4,8 @@ import { Button, createModal, useModalContext } from '@lobehub/ui/base-ui';
 import { App, Form, Input } from 'antd';
 import { useState } from 'react';
 
+import { adminApi } from '../api';
 import { useAdminAccess } from '../hooks/useAdminAccess';
-import { adminMockApi } from '../mock/store';
 import type { AdminUserRow } from '../types';
 
 interface BanFormValues {
@@ -27,12 +27,13 @@ const UserBanContent = ({ user, onSuccess }: { onSuccess: () => void; user: Admi
 
     setSubmitting(true);
     try {
-      await adminMockApi.setUserBan({ banned: !banned, reason, userId: user.id });
+      await adminApi.setUserBan({ banned: !banned, reason, userId: user.id });
       message.success(banned ? '已解除用户封禁' : '已封禁用户');
       onSuccess();
       close();
     } catch (error) {
-      message.error(error instanceof Error ? error.message : '更新用户状态失败');
+      const msg = error instanceof Error ? error.message : '更新用户状态失败';
+      message.error(msg);
     } finally {
       setSubmitting(false);
     }
@@ -59,6 +60,6 @@ export const createUserBanModal = (user: AdminUserRow, onSuccess: () => void) =>
     content: <UserBanContent user={user} onSuccess={onSuccess} />,
     footer: null,
     maskClosable: false,
-    title: `${user.status === 'banned' ? '解除封禁' : '封禁用户'} · ${user.nickname}`,
+    title: `${user.status === 'banned' ? '解除封禁' : '封禁用户'} · ${user.nickname || user.id}`,
     width: 'min(92vw, 480px)',
   });

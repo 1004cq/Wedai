@@ -4,77 +4,140 @@ import type { TableColumnsType } from 'antd';
 import { Empty, Grid, Input, Table, Tag, Typography } from 'antd';
 import { useCallback, useState } from 'react';
 
-import { AdminErrorState, AdminPage } from '../components/AdminPage';
+import { adminApi } from '../api';
+import { AdminErrorState, AdminForbiddenBanner, AdminPage } from '../components/AdminPage';
+import { useAdminAccess } from '../hooks/useAdminAccess';
 import { useAdminQuery } from '../hooks/useAdminQuery';
-import { adminMockApi } from '../mock/store';
-import type { AuditLog } from '../types';
 import { formatDateTime } from '../utils';
 
-const DEFAULT_PAGE_SIZE = 10;
+const DEFAULT_PAGE_SIZE = 20;
 
-export const AuditPage = () => {
-  const screens = Grid.useBreakpoint();
+interface LedgerRow {
+  id: string;
+  billingAccountId: string;
+  kind: string;
+  delta: bigint;
+  balanceAfter: bigint;
+  idempotencyKey: string;
+  orderId: string | null;
+  usageRecordId: string | null;
+  reason: string | null;
+  operatorUserId: string | null;
+  createdAt: Date;
+}
+
+const useAuditPage = (billingAccountId: string) => {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
-  const [query, setQuery] = useState('');
   const loader = useCallback(
-    () => adminMockApi.listAudit({ page, pageSize, query }),
-    [page, pageSize, query],
+    () =>
+      billingAccountId.trim()
+        ? adminApi.listLedger({ billingAccountId: billingAccountId.trim(), page, pageSize })
+        : Promise.resolve({ items: [], nextCursor: null }),
+    [billingAccountId, page, pageSize],
   );
-  const { data, error, isLoading, reload } = useAdminQuery(loader);
+  const queryState = useAdminQuery(loader);
+  return { page, pageSize, setPage, setPageSize, ...queryState };
+};
 
-  const columns: TableColumnsType<AuditLog> = [
-    { dataIndex: 'actor', title: '操作人' },
-    { dataIndex: 'action', render: (action: string) => <Tag>{action}</Tag>, title: 'Action' },
-    { dataIndex: 'targetType', title: '目标类型' },
-    { dataIndex: 'targetId', title: '目标 ID' },
-    { dataIndex: 'reason', title: '原因' },
+export const AuditPage = () => {
+  const { state } = useAdminAccess();
+  const screens = Grid.useBreakpoint();
+  const [billingAccountId, setBillingAccountId] = useState('');
+  const { data, error, isLoading, page, pageSize, reload, setPage, setPageSize } =
+    useAuditPage(billingAccountId);
+
+  if (state.status === 'forbidden') return <AdminForbiddenBanner />;
+
+  const columns: TableColumnsType<LedgerRow> = [
+    { dataIndex: 'kind', render: (kind: string) => <Tag>{kind}</Tag>, title: '类型' },
     {
-      dataIndex: 'metadata',
-      render: (metadata: AuditLog['metadata']) => (
-        <Typography.Text code>{JSON.stringify(metadata)}</Typography.Text>
-      ),
-      title: 'Metadata',
+      dataIndex: 'delta',
+      render: (v: bigint) => {
+        const n = Number(v);
+        return (
+          <Typography.Text type={n >= 0 ? 'success' : 'danger'}>
+            {n >= 0 ? `+${n.toLocaleString()}` : n.toLocaleString()}
+          </Typography.Text>
+        );
+      },
+      title: '变动积分',
     },
-    { dataIndex: 'createdAt', render: formatDateTime, title: '时间' },
+    {
+      dataIndex: 'balanceAfter',
+      render: (v: bigint) => Number(v).toLocaleString(),
+      title: '操作后余额',
+    },
+    { dataIndex: 'reason', render: (v?: string | null) => v || '—', title: '原因' },
+    {
+      dataIndex: 'operatorUserId',
+      render: (v?: string | null) => v || '—',
+      title: '操作人',
+    },
+    {
+      dataIndex: 'idempotencyKey',
+      render: (v: string) => (
+        <Typography.Text code copyable style={{ fontSize: 11 }}>
+          {v}
+        </Typography.Text>
+      ),
+      title: '幂等键',
+    },
+    { dataIndex: 'createdAt', render: (v: Date) => formatDateTime(v.toISOString()), title: '时间' },
   ];
+
+  const items: LedgerRow[] = (data?.items ?? []) as LedgerRow[];
+  const total =
+    data?.nextCursor !== null
+      ? (page - 1) * pageSize + items.length + 1
+      : (page - 1) * pageSize + items.length;
 
   return (
     <AdminPage
-      description={'记录调余额、封禁、价格与敏感配置变更；日志不包含密钥明文。'}
-      title={'操作日志'}
+      description={'不可变账本流水。按 Billing Account ID 查询；所有余额变化均有对应条目。'}
+      title={'账本流水（Audit）'}
     >
       <Input.Search
         allowClear
-        placeholder={'搜索操作人 / action / 目标 / 原因'}
-        style={{ maxWidth: 400, width: '100%' }}
+        enterButton={'查询'}
+        placeholder={'输入 Billing Account ID（bac_xxx）'}
+        style={{ maxWidth: 480, width: '100%' }}
+        value={billingAccountId}
+        onChange={(e) => setBillingAccountId(e.target.value)}
         onSearch={(value) => {
+          setBillingAccountId(value.trim());
           setPage(1);
-          setQuery(value.trim());
         }}
       />
-      {error ? (
-        <AdminErrorState error={error} onRetry={reload} />
-      ) : (
-        <Table<AuditLog>
-          columns={columns}
-          dataSource={data?.items}
-          loading={isLoading}
-          locale={{ emptyText: <Empty description={'暂无操作日志'} /> }}
-          rowKey={'id'}
-          scroll={{ x: 'max-content' }}
-          pagination={{
-            current: page,
-            pageSize,
-            showSizeChanger: !!screens.md,
-            simple: !screens.md,
-            total: data?.total,
-            onChange: (nextPage, nextPageSize) => {
-              setPage(nextPageSize === pageSize ? nextPage : 1);
-              setPageSize(nextPageSize);
-            },
-          }}
-        />
+      {!billingAccountId.trim() && (
+        <Empty description={'请输入 Billing Account ID 查询流水'} />
+      )}
+      {billingAccountId.trim() && (
+        <>
+          {error ? (
+            <AdminErrorState error={error} onRetry={reload} />
+          ) : (
+            <Table<LedgerRow>
+              columns={columns}
+              dataSource={items}
+              loading={isLoading}
+              locale={{ emptyText: <Empty description={'该账户暂无流水'} /> }}
+              rowKey={'id'}
+              scroll={{ x: 'max-content' }}
+              pagination={{
+                current: page,
+                pageSize,
+                showSizeChanger: !!screens.md,
+                simple: !screens.md,
+                total,
+                onChange: (nextPage, nextPageSize) => {
+                  setPage(nextPageSize === pageSize ? nextPage : 1);
+                  setPageSize(nextPageSize);
+                },
+              }}
+            />
+          )}
+        </>
       )}
     </AdminPage>
   );

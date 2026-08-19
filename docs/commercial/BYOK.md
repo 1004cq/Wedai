@@ -51,3 +51,12 @@ else:
 - [ ] 清除 Key 后同一模型改为平台扣费
 - [ ] 平台托管 Provider 无法通过 UI/API 写入用户 Key
 - [ ] 密钥更新后旧 Key 不可再用于请求
+
+## 7. 实现状态（Phase 1）
+
+| 能力 | 状态 | 代码路径 |
+|------|------|----------|
+| BYOK 决策（resolveChargeMode） | ✅ 已实现 | `packages/billing/src/policy/BillingPolicy.ts` |
+| chargeBeforeChat BYOK 跳过 | ✅ 已实现 | `packages/business-server/src/chat-billing/chargeBeforeChat.ts` |
+| 网关费（gateway_fee 模式） | ❌ 未实现 | Phase 2 |
+| 平台托管 Provider 强制扣费 | ❌ 未实现（hardcoded false） | Phase 2 |

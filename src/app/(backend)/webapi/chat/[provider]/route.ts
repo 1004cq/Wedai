@@ -1,8 +1,11 @@
 import { AGENT_RUNTIME_ERROR_SET, type ChatCompletionErrorPayload } from '@lobechat/model-runtime';
-import { ChatErrorType } from '@lobechat/types';
+import { ChatErrorType, type ModelTokensUsage } from '@lobechat/types';
+
+import { eq } from 'drizzle-orm';
 
 import { checkAuth } from '@/app/(backend)/middleware/auth';
 import { InsufficientBalanceError, chargeAfterChat, chargeBeforeChat } from '@/business/server/chat-billing';
+import { users } from '@/database/schemas';
 import { createTraceOptions, initModelRuntimeFromDB } from '@/server/modules/ModelRuntime';
 import { type ChatStreamPayload } from '@/types/openai/chat';
 import { createErrorResponse } from '@/utils/errorResponse';
@@ -19,6 +22,19 @@ export const POST = checkAuth(async (req: Request, { params, userId, serverDB })
   try {
     const workspaceId = await resolveValidWorkspaceIdFromRequest({ req, serverDB, userId });
 
+    // ============  0. banned check  ============ //
+    const [userRow] = await serverDB
+      .select({ banned: users.banned })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    if (userRow?.banned) {
+      return createErrorResponse(ChatErrorType.Forbidden, {
+        error: { message: 'Account suspended' },
+        provider,
+      });
+    }
+
     // ============  1. init chat model  ============ //
     const modelRuntime = await initModelRuntimeFromDB(serverDB, userId, provider, workspaceId);
 
@@ -31,13 +47,13 @@ export const POST = checkAuth(async (req: Request, { params, userId, serverDB })
     // Throws InsufficientBalanceError if balance < estimate.
     const billingContext = await chargeBeforeChat({
       db: serverDB,
-      userId,
-      requestId,
-      provider,
-      modelId,
-      userHasProviderKey: modelRuntime.baseURL !== undefined,
       estimatedPromptTokens: estimatePromptTokens(data),
       maxCompletionTokens: data.max_tokens ?? 4096,
+      modelId,
+      provider,
+      requestId,
+      userId,
+      userHasProviderKey: modelRuntime.baseURL !== undefined,
     });
 
     // ============  4. create chat completion  ============ //
@@ -47,50 +63,69 @@ export const POST = checkAuth(async (req: Request, { params, userId, serverDB })
       traceOptions = createTraceOptions(data, { provider, trace: tracePayload });
     }
 
+    // Capture actual token usage from the stream via onUsage callback.
+    // This gives us real numbers for settlement rather than the pre-flight estimate.
+    let capturedUsage: ModelTokensUsage | undefined;
+
     let response: Response;
     try {
       response = await modelRuntime.chat(data, {
-        user: userId,
         ...traceOptions,
+        callback: {
+          onUsage: (usage) => {
+            capturedUsage = usage;
+          },
+        },
         signal: req.signal,
+        user: userId,
       });
     } catch (providerError) {
-      // ============  5a. provider error: release hold  ============ //
+      // ============  5a. provider error / client abort: release hold  ============ //
       await chargeAfterChat({
-        db: serverDB,
-        userId,
         billingContext,
-        success: false,
+        db: serverDB,
         modelId,
         provider,
+        success: false,
+        userId,
       });
       throw providerError;
     }
 
     // ============  5b. success: settle credits  ============ //
-    // For streaming responses we cannot get final usage here (it's in the stream).
-    // We settle with estimated usage; a background reconciliation job can correct later.
-    // Non-streaming responses include usage in the body (read from headers if available).
+    // For streaming responses, onUsage fires when the stream closes.
+    // If onUsage didn't fire (provider doesn't report usage), fall back to
+    // the x-usage header, then to the pre-flight estimate.
     const usageHeader = response.headers.get('x-usage-total-tokens');
-    const rawUsage = usageHeader
-      ? { totalTokens: Number.parseInt(usageHeader, 10) }
-      : { totalTokens: estimatePromptTokens(data) + (data.max_tokens ?? 4096) };
+    const rawUsage = capturedUsage
+      ? {
+          completionTokens: capturedUsage.outputTextTokens,
+          promptTokens: capturedUsage.inputTextTokens,
+          totalTokens: capturedUsage.totalTokens,
+        }
+      : usageHeader
+        ? { totalTokens: Number.parseInt(usageHeader, 10) }
+        : { totalTokens: estimatePromptTokens(data) + (data.max_tokens ?? 4096) };
 
-    // Fire-and-forget settlement (don't block the streaming response).
+    // Fire-and-forget: don't block the streaming response.
+    // The stale-hold reaper handles the rare crash-between-response-and-settle case.
     void chargeAfterChat({
-      db: serverDB,
-      userId,
       billingContext,
-      success: true,
-      rawUsage,
+      db: serverDB,
       modelId,
       provider,
+      rawUsage,
+      success: true,
+      userId,
     });
 
     return response;
   } catch (e) {
     if (e instanceof InsufficientBalanceError) {
-      return createErrorResponse(ChatErrorType.InsufficientBalance as any, {
+      // Use InsufficientBudgetForModel — the existing error type the frontend
+      // PlanLimitCard component recognises.
+      return createErrorResponse(ChatErrorType.InsufficientBudgetForModel, {
+        budget: { pricingBasis: 'estimated' },
         error: { message: e.message },
         provider,
       });
@@ -117,7 +152,7 @@ export const POST = checkAuth(async (req: Request, { params, userId, serverDB })
 /**
  * Rough prompt token estimate from message content length.
  * Used only for pre-flight credit estimation (hold amount).
- * The actual charge uses provider-reported usage.
+ * The actual charge uses provider-reported usage via onUsage callback.
  */
 function estimatePromptTokens(data: ChatStreamPayload): number {
   const messages = data.messages ?? [];
@@ -128,7 +163,8 @@ function estimatePromptTokens(data: ChatStreamPayload): number {
     } else if (Array.isArray(msg.content)) {
       for (const part of msg.content) {
         if (typeof part === 'string') charCount += part.length;
-        else if (part && typeof part === 'object' && 'text' in part) charCount += (part.text as string)?.length ?? 0;
+        else if (part && typeof part === 'object' && 'text' in part)
+          charCount += (part.text as string)?.length ?? 0;
       }
     }
   }

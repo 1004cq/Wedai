@@ -5,12 +5,12 @@ import type { TableColumnsType } from 'antd';
 import { Empty, Flex, Grid, Input, Space, Table, Tag } from 'antd';
 import { useCallback, useState } from 'react';
 
+import { adminApi } from '../api';
 import { createAdjustBalanceModal } from '../components/AdjustBalanceModal';
-import { AdminErrorState, AdminPage } from '../components/AdminPage';
+import { AdminErrorState, AdminForbiddenBanner, AdminPage } from '../components/AdminPage';
 import { createUserBanModal } from '../components/UserBanModal';
 import { useAdminAccess } from '../hooks/useAdminAccess';
 import { useAdminQuery } from '../hooks/useAdminQuery';
-import { adminMockApi } from '../mock/store';
 import type { AdminUserRow } from '../types';
 import { formatCredits, formatDateTime } from '../utils';
 
@@ -21,7 +21,7 @@ const useUsersPage = () => {
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [query, setQuery] = useState('');
   const loader = useCallback(
-    () => adminMockApi.listUsers({ page, pageSize, query }),
+    () => adminApi.listUsers({ page, pageSize, query }),
     [page, pageSize, query],
   );
   const queryState = useAdminQuery(loader);
@@ -30,10 +30,12 @@ const useUsersPage = () => {
 };
 
 export const UsersPage = () => {
-  const { can } = useAdminAccess();
+  const { can, state } = useAdminAccess();
   const screens = Grid.useBreakpoint();
   const { data, error, isLoading, page, pageSize, query, reload, setPage, setPageSize, setQuery } =
     useUsersPage();
+
+  if (state.status === 'forbidden') return <AdminForbiddenBanner />;
 
   const columns: TableColumnsType<AdminUserRow> = [
     {
@@ -42,8 +44,12 @@ export const UsersPage = () => {
       title: '邮箱',
     },
     { dataIndex: 'phone', render: (phone?: string) => phone || '—', title: '手机号' },
-    { dataIndex: 'nickname', title: '昵称' },
-    { dataIndex: 'role', render: (role: string) => <Tag>{role}</Tag>, title: '角色' },
+    {
+      dataIndex: 'nickname',
+      render: (_, user) => user.nickname || user.id,
+      title: '昵称 / 用户名',
+    },
+    { dataIndex: 'role', render: (role: string) => <Tag>{role ?? '—'}</Tag>, title: '角色' },
     {
       dataIndex: 'status',
       render: (status: AdminUserRow['status']) => (
@@ -53,15 +59,13 @@ export const UsersPage = () => {
       ),
       title: '状态',
     },
-    { dataIndex: 'plan', render: (plan: string) => <Tag>{plan}</Tag>, title: '套餐' },
     {
       align: 'right',
       dataIndex: 'balanceCredits',
-      render: formatCredits,
+      render: (v: number) => formatCredits(v),
       title: '可用积分',
     },
     { dataIndex: 'registeredAt', render: formatDateTime, title: '注册时间' },
-    { dataIndex: 'lastActiveAt', render: formatDateTime, title: '最近活跃' },
     {
       fixed: screens.lg ? 'right' : undefined,
       render: (_, user) => (
@@ -89,14 +93,14 @@ export const UsersPage = () => {
 
   return (
     <AdminPage
-      description={'支持邮箱、手机号双通道账号；搜索覆盖邮箱、手机号和昵称。'}
+      description={'支持邮箱、用户名双通道账号搜索。'}
       title={'用户管理'}
     >
       <Flex gap={12} wrap={'wrap'}>
         <Input.Search
           allowClear
           defaultValue={query}
-          placeholder={'搜索邮箱 / 手机号 / 昵称'}
+          placeholder={'搜索邮箱 / 用户名 / 姓名'}
           style={{ maxWidth: 360, width: '100%' }}
           onSearch={(value) => {
             setPage(1);

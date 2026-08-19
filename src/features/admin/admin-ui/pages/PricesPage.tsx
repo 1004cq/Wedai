@@ -1,25 +1,27 @@
 'use client';
 
-import { Button, Select, Switch } from '@lobehub/ui/base-ui';
+import { Button, Switch } from '@lobehub/ui/base-ui';
 import type { TableColumnsType } from 'antd';
 import { App, Empty, InputNumber, Table } from 'antd';
 import { useCallback, useState } from 'react';
 
-import { AdminErrorState, AdminPage } from '../components/AdminPage';
+import { adminApi } from '../api';
+import { AdminErrorState, AdminForbiddenBanner, AdminPage } from '../components/AdminPage';
 import { useAdminAccess } from '../hooks/useAdminAccess';
 import { useAdminQuery } from '../hooks/useAdminQuery';
-import { adminMockApi } from '../mock/store';
 import type { AdminModelPrice } from '../types';
 import { formatDateTime } from '../utils';
 
 export const PricesPage = () => {
   const { message } = App.useApp();
-  const { can } = useAdminAccess();
+  const { can, state } = useAdminAccess();
   const [drafts, setDrafts] = useState<Record<string, AdminModelPrice>>({});
   const [savingId, setSavingId] = useState<string>();
-  const loader = useCallback(() => adminMockApi.listPrices(), []);
+  const loader = useCallback(() => adminApi.listPrices(), []);
   const { data, error, isLoading, reload } = useAdminQuery(loader);
   const canWrite = can('billing:price:write');
+
+  if (state.status === 'forbidden') return <AdminForbiddenBanner />;
 
   const getDraft = (price: AdminModelPrice) => drafts[price.id] ?? price;
   const patchDraft = (price: AdminModelPrice, patch: Partial<AdminModelPrice>) =>
@@ -33,9 +35,17 @@ export const PricesPage = () => {
       message.error('当前账号没有价格写入权限');
       return;
     }
+    const draft = getDraft(price);
     setSavingId(price.id);
     try {
-      await adminMockApi.updatePrice(getDraft(price));
+      // Backend uses upsert: create a new row, archiving the previous active one.
+      await adminApi.upsertPrice({
+        modelId: draft.model,
+        provider: draft.provider,
+        promptCreditsPerKToken: draft.inputCredits,
+        completionCreditsPerKToken: draft.outputCredits,
+        isActive: draft.enabled,
+      });
       message.success(`已更新 ${price.model} 的价格`);
       setDrafts((current) => {
         const next = { ...current };
@@ -50,16 +60,27 @@ export const PricesPage = () => {
     }
   };
 
+  const handleArchive = async (price: AdminModelPrice) => {
+    if (!canWrite) return;
+    try {
+      await adminApi.archivePrice(price.id);
+      message.success(`已归档 ${price.model}`);
+      reload();
+    } catch (cause) {
+      message.error(cause instanceof Error ? cause.message : '归档失败');
+    }
+  };
+
   const creditInput = (
     price: AdminModelPrice,
-    field: 'inputCredits' | 'outputCredits' | 'requestCredits',
-    disabled: boolean,
+    field: 'inputCredits' | 'outputCredits',
+    label: string,
   ) => (
     <InputNumber
-      disabled={!canWrite || disabled}
+      disabled={!canWrite}
       min={0}
       precision={0}
-      style={{ width: 112 }}
+      style={{ width: 96 }}
       value={getDraft(price)[field]}
       onChange={(value) => patchDraft(price, { [field]: value ?? 0 })}
     />
@@ -69,32 +90,12 @@ export const PricesPage = () => {
     { dataIndex: 'provider', title: '服务商' },
     { dataIndex: 'model', title: '模型' },
     {
-      render: (_, price) => (
-        <Select
-          disabled={!canWrite}
-          style={{ width: 120 }}
-          value={getDraft(price).mode}
-          options={[
-            { label: 'Token', value: 'token' },
-            { label: '按次', value: 'per_request' },
-          ]}
-          onChange={(mode) => patchDraft(price, { mode: mode as AdminModelPrice['mode'] })}
-        />
-      ),
-      title: '计费模式',
+      render: (_, price) => creditInput(price, 'inputCredits', '输入'),
+      title: '输入积分/千 token',
     },
     {
-      render: (_, price) => creditInput(price, 'inputCredits', getDraft(price).mode !== 'token'),
-      title: '输入积分',
-    },
-    {
-      render: (_, price) => creditInput(price, 'outputCredits', getDraft(price).mode !== 'token'),
-      title: '输出积分',
-    },
-    {
-      render: (_, price) =>
-        creditInput(price, 'requestCredits', getDraft(price).mode !== 'per_request'),
-      title: '每次积分',
+      render: (_, price) => creditInput(price, 'outputCredits', '输出'),
+      title: '输出积分/千 token',
     },
     {
       render: (_, price) => (
@@ -111,15 +112,25 @@ export const PricesPage = () => {
       fixed: 'right',
       render: (_, price) =>
         canWrite ? (
-          <Button
-            disabled={!drafts[price.id]}
-            loading={savingId === price.id}
-            size={'small'}
-            type={'primary'}
-            onClick={() => handleSave(price)}
-          >
-            保存
-          </Button>
+          <Button.Group>
+            <Button
+              disabled={!drafts[price.id]}
+              loading={savingId === price.id}
+              size={'small'}
+              type={'primary'}
+              onClick={() => handleSave(price)}
+            >
+              保存
+            </Button>
+            <Button
+              danger
+              size={'small'}
+              type={'text'}
+              onClick={() => handleArchive(price)}
+            >
+              归档
+            </Button>
+          </Button.Group>
         ) : null,
       title: '操作',
     },
@@ -127,7 +138,7 @@ export const PricesPage = () => {
 
   return (
     <AdminPage
-      description={'所有价格使用整数积分；价格变更只应影响保存后的新请求。'}
+      description={'所有价格使用整数积分；保存后的新请求使用新价格，历史价格快照不变。'}
       title={'模型价格'}
     >
       {error ? (

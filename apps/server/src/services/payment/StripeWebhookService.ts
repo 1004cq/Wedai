@@ -15,17 +15,27 @@
  *
  * Transaction boundary: steps 4-9 run in a single DB transaction.
  *
- * Failure modes:
- *  - Invalid signature:        caller returns 400 before this service is called
- *  - payload_hash mismatch:    rejects + marks event failed + alerts
- *  - amount/currency mismatch: marks event failed + alerts; returns 200 to stop
- *                              Stripe from retrying a genuinely bad event
- *  - DB transient error:       throws → caller returns 500 → Stripe retries
+ * ## Log field convention
+ *
+ * Every log line is a structured object.  Forbidden fields: any Stripe secret,
+ * raw card data (card number, CVV, expiry), customer email, full Webhook payload.
+ *
+ * Allowed identifiers:
+ *   eventId, eventType, webhookRowId, orderId, ledgerEntryId, attemptCount,
+ *   outcome, reason, durationMs, livemode
+ *
+ * Log levels:
+ *   debug  — normal flow (event registered, idempotent return)
+ *   info   — terminal successes (processed)
+ *   warn   — expected anomalies (late events, missing signature)
+ *   error  — alerts requiring investigation (hash mismatch, amount mismatch,
+ *             business validation failure, DB errors)
  */
 import crypto from 'node:crypto';
 
 import { TRPCError } from '@trpc/server';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
+import debug from 'debug';
 import Stripe from 'stripe';
 
 import { BillingCommandService } from '@lobechat/billing';
@@ -39,17 +49,17 @@ import {
   webhookEvents,
 } from '@lobechat/database';
 
+const log = debug('lobe-server:stripe-webhook');
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Supported event types
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Events that trigger a payment completion flow. */
 const PAYMENT_SUCCESS_EVENTS = new Set([
   'checkout.session.completed',
   'payment_intent.succeeded',
 ]);
 
-/** Events that trigger a payment failure / closure flow. */
 const PAYMENT_FAILURE_EVENTS = new Set([
   'checkout.session.expired',
   'payment_intent.payment_failed',
@@ -83,7 +93,14 @@ export class StripeWebhookService {
    * @param rawBody The original request body string (for hashing).
    */
   async processEvent(event: Stripe.Event, rawBody: string): Promise<WebhookProcessResult> {
+    const startMs = Date.now();
     const payloadHash = sha256(rawBody);
+
+    log('processEvent:start %O', {
+      eventId: event.id,
+      eventType: event.type,
+      livemode: event.livemode,
+    });
 
     // ── Step 1: register event (idempotent INSERT) ────────────────────────────
     const { isNew, event: webhookRow } = await this.wem.upsert({
@@ -94,16 +111,26 @@ export class StripeWebhookService {
       payloadHash,
     } as Parameters<WebhookEventModel['upsert']>[0]);
 
+    log('processEvent:registered %O', {
+      eventId: event.id,
+      isNew,
+      webhookRowId: webhookRow.id,
+    });
+
     // ── Step 2: payload-hash integrity check ─────────────────────────────────
     if (!isNew && webhookRow.payloadHash && webhookRow.payloadHash !== payloadHash) {
-      // Same event_id but different body — security anomaly.
       await this.wem.markFailed(webhookRow.id, 'payload_hash_mismatch');
-      console.error('[stripe-webhook] ALERT: payload hash mismatch', {
+      // ALERT: same event_id delivered with different body — security anomaly.
+      // Do NOT log stored/received hashes (they are derivatives of the payload,
+      // but logging both enables payload reconstruction attacks).
+      console.error('[stripe-webhook] SECURITY ALERT: payload_hash_mismatch', {
         eventId: event.id,
-        stored: webhookRow.payloadHash,
-        received: payloadHash,
+        eventType: event.type,
+        outcome: 'rejected',
+        reason: 'payload_hash_mismatch',
+        webhookRowId: webhookRow.id,
       });
-      return { outcome: 'failed', reason: 'payload_hash_mismatch', alert: true };
+      return { alert: true, outcome: 'failed', reason: 'payload_hash_mismatch' };
     }
 
     // ── Step 3: unknown event type → ignore (2xx, zero funds) ────────────────
@@ -112,10 +139,18 @@ export class StripeWebhookService {
 
     if (!isSuccess && !isFailure) {
       await this.wem.markIgnored(webhookRow.id);
+      log('processEvent:ignored %O', {
+        durationMs: Date.now() - startMs,
+        eventId: event.id,
+        eventType: event.type,
+        outcome: 'ignored',
+        reason: 'unhandled_event_type',
+        webhookRowId: webhookRow.id,
+      });
       return { outcome: 'ignored', reason: `unhandled event type: ${event.type}` };
     }
 
-    // ── Step 4-9: atomic business transaction ─────────────────────────────────
+    // ── Steps 4-9: atomic business transaction ─────────────────────────────────
     return this.db.transaction(async (tx) => {
       // 4. Lock the event row to serialise concurrent deliveries.
       const [lockedEvent] = await tx
@@ -128,27 +163,49 @@ export class StripeWebhookService {
       // 5. Already terminal → return idempotently without touching funds.
       if (lockedEvent.status === 'processed' || lockedEvent.status === 'ignored') {
         const orderId = lockedEvent.orderId ?? '';
-        return { outcome: 'idempotent', orderId };
+        log('processEvent:idempotent %O', {
+          attemptCount: lockedEvent.attemptCount,
+          durationMs: Date.now() - startMs,
+          eventId: event.id,
+          eventType: event.type,
+          orderId,
+          outcome: 'idempotent',
+          priorStatus: lockedEvent.status,
+          webhookRowId: webhookRow.id,
+        });
+        return { orderId, outcome: 'idempotent' };
       }
 
-      // Mark processing + increment attempt inside the same transaction.
+      // Mark processing + increment attempt.
       await tx
         .update(webhookEvents)
         .set({
-          status: 'pending',
-          processingStartedAt: new Date(),
           attemptCount: sql`${webhookEvents.attemptCount} + 1`,
+          processingStartedAt: new Date(),
+          status: 'pending',
         })
         .where(eq(webhookEvents.id, webhookRow.id));
+
+      // Re-read attemptCount for logging (after increment).
+      const attemptCount = (lockedEvent.attemptCount ?? 0) + 1;
 
       // 6. Extract orderId from Stripe metadata (server-set at checkout creation).
       const orderId = extractOrderId(event);
       if (!orderId) {
         await tx
           .update(webhookEvents)
-          .set({ status: 'failed', failureReason: 'missing_order_id_in_metadata' })
+          .set({ failureReason: 'missing_order_id_in_metadata', status: 'failed' })
           .where(eq(webhookEvents.id, webhookRow.id));
-        return { outcome: 'failed', reason: 'missing_order_id_in_metadata', alert: true };
+        console.error('[stripe-webhook] ALERT: missing_order_id_in_metadata', {
+          attemptCount,
+          durationMs: Date.now() - startMs,
+          eventId: event.id,
+          eventType: event.type,
+          outcome: 'rejected',
+          reason: 'missing_order_id_in_metadata',
+          webhookRowId: webhookRow.id,
+        });
+        return { alert: true, outcome: 'failed', reason: 'missing_order_id_in_metadata' };
       }
 
       // 7. Lock the order row.
@@ -162,76 +219,126 @@ export class StripeWebhookService {
       if (!order) {
         await tx
           .update(webhookEvents)
-          .set({ status: 'failed', failureReason: 'order_not_found' })
+          .set({ failureReason: 'order_not_found', status: 'failed' })
           .where(eq(webhookEvents.id, webhookRow.id));
-        return { outcome: 'failed', reason: 'order_not_found', alert: true };
+        console.error('[stripe-webhook] ALERT: order_not_found', {
+          attemptCount,
+          durationMs: Date.now() - startMs,
+          eventId: event.id,
+          eventType: event.type,
+          orderId,
+          outcome: 'rejected',
+          reason: 'order_not_found',
+          webhookRowId: webhookRow.id,
+        });
+        return { alert: true, outcome: 'failed', reason: 'order_not_found' };
       }
 
-      // Validate amount, currency (never trust the Stripe payload — cross-check local order).
+      // Validate amount and currency (never trust the Stripe payload amounts).
       if (isSuccess) {
         const stripeAmount = extractAmount(event);
         const stripeCurrency = extractCurrency(event);
 
         if (stripeAmount !== null && stripeAmount !== Number(order.amountMinor)) {
-          const reason = `amount_mismatch: expected ${order.amountMinor}, got ${stripeAmount}`;
+          const reason = `amount_mismatch`;
           await tx
             .update(webhookEvents)
-            .set({ status: 'failed', failureReason: reason })
+            .set({ failureReason: `amount_mismatch: expected=${order.amountMinor} got=${stripeAmount}`, status: 'failed' })
             .where(eq(webhookEvents.id, webhookRow.id));
-          console.error('[stripe-webhook] ALERT: amount mismatch', { orderId, stripeAmount, expected: order.amountMinor });
-          return { outcome: 'failed', reason, alert: true };
+          // Log amounts for reconciliation; NOT card or customer data.
+          console.error('[stripe-webhook] ALERT: amount_mismatch', {
+            attemptCount,
+            durationMs: Date.now() - startMs,
+            eventId: event.id,
+            eventType: event.type,
+            expectedAmountMinor: order.amountMinor.toString(),
+            orderId,
+            outcome: 'rejected',
+            reason,
+            receivedAmountMinor: stripeAmount,
+            webhookRowId: webhookRow.id,
+          });
+          return { alert: true, outcome: 'failed', reason };
         }
 
         if (stripeCurrency && stripeCurrency.toUpperCase() !== order.currency.toUpperCase()) {
-          const reason = `currency_mismatch: expected ${order.currency}, got ${stripeCurrency}`;
+          const reason = `currency_mismatch`;
           await tx
             .update(webhookEvents)
-            .set({ status: 'failed', failureReason: reason })
+            .set({ failureReason: `currency_mismatch: expected=${order.currency} got=${stripeCurrency}`, status: 'failed' })
             .where(eq(webhookEvents.id, webhookRow.id));
-          console.error('[stripe-webhook] ALERT: currency mismatch', { orderId });
-          return { outcome: 'failed', reason, alert: true };
+          console.error('[stripe-webhook] ALERT: currency_mismatch', {
+            attemptCount,
+            durationMs: Date.now() - startMs,
+            eventId: event.id,
+            eventType: event.type,
+            expectedCurrency: order.currency,
+            orderId,
+            outcome: 'rejected',
+            reason,
+            receivedCurrency: stripeCurrency,
+            webhookRowId: webhookRow.id,
+          });
+          return { alert: true, outcome: 'failed', reason };
         }
       }
 
       // 8. State machine enforcement.
-      // paid is a terminal state — late failure/closed events must not downgrade it.
       if (order.status === 'paid') {
         if (!isSuccess) {
-          console.warn('[stripe-webhook] late failure event ignored for paid order', { orderId, eventType: event.type });
+          // Late failure/close on already-paid order — log but ignore safely.
+          console.warn('[stripe-webhook] late_failure_on_paid_order', {
+            attemptCount,
+            durationMs: Date.now() - startMs,
+            eventId: event.id,
+            eventType: event.type,
+            orderId,
+            outcome: 'idempotent',
+            reason: 'order_already_paid',
+            webhookRowId: webhookRow.id,
+          });
         }
         await tx
           .update(webhookEvents)
-          .set({ status: 'ignored', processedAt: new Date(), orderId })
+          .set({ orderId, processedAt: new Date(), status: 'ignored' })
           .where(eq(webhookEvents.id, webhookRow.id));
-        return { outcome: 'idempotent', orderId };
+        return { orderId, outcome: 'idempotent' };
       }
 
       if (order.status !== 'pending') {
-        // closed or failed — unknown late success from provider; alert for manual review.
         if (isSuccess) {
+          const reason = `order_in_${order.status}_state`;
           await tx
             .update(webhookEvents)
-            .set({ status: 'failed', failureReason: `unexpected_success_for_${order.status}_order` })
+            .set({ failureReason: `unexpected_success_for_${order.status}_order`, status: 'failed' })
             .where(eq(webhookEvents.id, webhookRow.id));
-          return { outcome: 'failed', reason: `order_in_${order.status}_state`, alert: true };
+          console.error('[stripe-webhook] ALERT: unexpected_success_for_non_pending_order', {
+            attemptCount,
+            durationMs: Date.now() - startMs,
+            eventId: event.id,
+            eventType: event.type,
+            orderId,
+            orderStatus: order.status,
+            outcome: 'rejected',
+            reason,
+            webhookRowId: webhookRow.id,
+          });
+          return { alert: true, outcome: 'failed', reason };
         }
-        // Late close/fail for already-closed/failed order → ignore.
         await tx
           .update(webhookEvents)
-          .set({ status: 'ignored', processedAt: new Date(), orderId })
+          .set({ orderId, processedAt: new Date(), status: 'ignored' })
           .where(eq(webhookEvents.id, webhookRow.id));
-        return { outcome: 'idempotent', orderId };
+        return { orderId, outcome: 'idempotent' };
       }
 
       // 9. Execute transition + ledger inside the same transaction.
       if (isSuccess) {
-        // Transition order to paid.
         await tx
           .update(orders)
-          .set({ status: 'paid', paidAt: new Date() })
+          .set({ paidAt: new Date(), status: 'paid' })
           .where(and(eq(orders.id, orderId), eq(orders.status, 'pending')));
 
-        // Look up billing account for this order.
         const [billingAcc] = await tx
           .select()
           .from(billingAccounts)
@@ -240,7 +347,6 @@ export class StripeWebhookService {
 
         if (!billingAcc) throw new TRPCError({ code: 'NOT_FOUND', message: 'billing account not found' });
 
-        // Credit the wallet with the grant from the price snapshot.
         const priceSnap = order.priceSnapshot as { creditGrant?: string };
         const creditGrant = priceSnap?.creditGrant ? BigInt(priceSnap.creditGrant) : BigInt(0);
 
@@ -250,35 +356,57 @@ export class StripeWebhookService {
           const creditResult = await billingService.credit({
             billingAccountId: billingAcc.id,
             credits: creditGrant,
-            orderId: order.id,
             idempotencyKey: `payment:stripe:${event.id}:credit`,
+            orderId: order.id,
             reason: `order paid: ${order.orderNo}`,
           });
           ledgerEntryId = creditResult.ledgerEntryId;
         }
 
-        // Mark event row processed and link to order.
         await tx
           .update(webhookEvents)
-          .set({ status: 'processed', processedAt: new Date(), orderId })
+          .set({ orderId, processedAt: new Date(), status: 'processed' })
           .where(eq(webhookEvents.id, webhookRow.id));
 
-        return { outcome: 'processed', orderId, ledgerEntryId };
+        console.info('[stripe-webhook] processed', {
+          attemptCount,
+          creditGrant: creditGrant.toString(),
+          durationMs: Date.now() - startMs,
+          eventId: event.id,
+          eventType: event.type,
+          ledgerEntryId: ledgerEntryId || null,
+          orderId,
+          outcome: 'processed',
+          webhookRowId: webhookRow.id,
+        });
+
+        return { ledgerEntryId, orderId, outcome: 'processed' };
       }
 
-      // isFailure — close or fail the order.
+      // Failure event — close or fail the order.
       const nextStatus = event.type === 'checkout.session.expired' ? 'closed' : 'failed';
       await tx
         .update(orders)
-        .set({ status: nextStatus, closedAt: nextStatus === 'closed' ? new Date() : undefined })
+        .set({ closedAt: nextStatus === 'closed' ? new Date() : undefined, status: nextStatus })
         .where(and(eq(orders.id, orderId), eq(orders.status, 'pending')));
 
       await tx
         .update(webhookEvents)
-        .set({ status: 'processed', processedAt: new Date(), orderId })
+        .set({ orderId, processedAt: new Date(), status: 'processed' })
         .where(eq(webhookEvents.id, webhookRow.id));
 
-      return { outcome: 'processed', orderId, ledgerEntryId: '' };
+      console.info('[stripe-webhook] processed_failure_event', {
+        attemptCount,
+        durationMs: Date.now() - startMs,
+        eventId: event.id,
+        eventType: event.type,
+        orderId,
+        orderNextStatus: nextStatus,
+        outcome: 'processed',
+        webhookRowId: webhookRow.id,
+      });
+
+      return { ledgerEntryId: '', orderId, outcome: 'processed' };
     });
   }
 }
@@ -291,39 +419,36 @@ function sha256(data: string): string {
   return crypto.createHash('sha256').update(data, 'utf8').digest('hex');
 }
 
-/** Removes PII / secrets from the event before persisting the payload. */
+/**
+ * Removes PII / secrets from the event before persisting.
+ * Retained fields: id, type, created, livemode, object_id, object_status,
+ * amount_total, currency, metadata_order_id.
+ * NEVER persists: customer email, card data, billing address, raw metadata.
+ */
 function scrubPayload(event: Stripe.Event): Record<string, unknown> {
-  // Persist only the minimum fields needed for debugging and reconciliation.
-  // Full card data, customer email, and raw metadata with user PII are omitted.
   return {
-    id: event.id,
-    type: event.type,
+    amount_total: (event.data.object as any)?.amount_total,
     created: event.created,
+    currency: (event.data.object as any)?.currency,
+    id: event.id,
     livemode: event.livemode,
-    // Retain top-level metadata fields used for order lookup, scrub the rest.
+    metadata_order_id: (event.data.object as any)?.metadata?.orderId,
     object_id: (event.data.object as any)?.id,
     object_status: (event.data.object as any)?.status,
-    amount_total: (event.data.object as any)?.amount_total,
-    currency: (event.data.object as any)?.currency,
-    metadata_order_id: (event.data.object as any)?.metadata?.orderId,
+    type: event.type,
   };
 }
 
-/** Extracts the internal orderId from Stripe event metadata. */
 function extractOrderId(event: Stripe.Event): string | null {
   const obj = event.data.object as any;
   return obj?.metadata?.orderId ?? obj?.metadata?.order_id ?? null;
 }
 
-/** Extracts the total amount in minor units (integer) from the Stripe event. */
 function extractAmount(event: Stripe.Event): number | null {
   const obj = event.data.object as any;
-  // checkout.session.completed → amount_total
-  // payment_intent.succeeded  → amount_received
   return obj?.amount_total ?? obj?.amount_received ?? null;
 }
 
-/** Extracts the ISO currency code from the Stripe event. */
 function extractCurrency(event: Stripe.Event): string | null {
   const obj = event.data.object as any;
   return obj?.currency ?? null;

@@ -12,7 +12,12 @@ export const ORG_NAME = 'Wedai';
 export const BRANDING_URL = {
   help: undefined,
   privacy: undefined,
-  subscription: 'https://app.lobehub.com/settings/plans',
+  /**
+   * Wedai: points to the local plans settings page.
+   * PlanLimitCard renders this as the primary "Top up / Upgrade" button.
+   * Using a relative path so it works on any deployment domain.
+   */
+  subscription: '/settings/plans',
   support: undefined,
   terms: undefined,
 };

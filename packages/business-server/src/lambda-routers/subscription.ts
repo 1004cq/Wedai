@@ -6,7 +6,7 @@ import { TRPCError } from '@trpc/server';
 import { and, eq } from 'drizzle-orm';
 
 import { authedProcedure, router } from '@/libs/trpc/lambda';
-import { serverDatabase } from '@/libs/trpc/lambda/middleware';
+import { bannedCheck, serverDatabase } from '@/libs/trpc/lambda/middleware';
 import {
   billingAccounts,
   plans,
@@ -14,7 +14,7 @@ import {
   subscriptions,
 } from '@/database/schemas';
 
-const subProcedure = authedProcedure.use(serverDatabase);
+const subProcedure = authedProcedure.use(serverDatabase).use(bannedCheck);
 
 export const subscriptionRouter = router({
   /** Returns the caller's active subscription, or null. */

@@ -1,4 +1,13 @@
 export default {
+  // Checkout result banner
+  'checkout.cancelled': 'Payment cancelled. You can choose a plan again.',
+  'checkout.createFailed': 'Failed to create order. Please try again.',
+  'checkout.failed': 'Order failed. Please contact support or place a new order.',
+  'checkout.paid': 'Credits added! Your balance has been updated.',
+  'checkout.processing': 'Payment processing — waiting for confirmation…',
+  'checkout.timeout':
+    'No confirmation yet. Your payment may still be processing. Credits will appear automatically once confirmed — no need to pay again.',
+
   // Credits page
   'credits.available': 'Available Credits',
   'credits.balance': 'Balance After',
