@@ -507,8 +507,20 @@ export const webhookEvents = pgTable(
     payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
     /** Internal order ID resolved from the payload, if applicable. */
     orderId: text('order_id').references(() => orders.id, { onDelete: 'restrict' }),
+    /**
+     * SHA-256 hex digest of the raw (pre-parse) provider request body.
+     * Used to detect same event_id with different payload — which is a
+     * security anomaly and must be rejected with an alert.
+     */
+    payloadHash: varchar('payload_hash', { length: 64 }),
     /** Number of processing attempts (for retry observability). */
     attemptCount: integer('attempt_count').notNull().default(0),
+    /**
+     * Timestamp when this event row was locked for processing.
+     * Acts as a crash-lease: if the processing pod dies, another instance
+     * can take over after `processingStartedAt + timeout`.
+     */
+    processingStartedAt: timestamptz('processing_started_at'),
     processedAt: timestamptz('processed_at'),
     failureReason: text('failure_reason'),
     createdAt: createdAt(),

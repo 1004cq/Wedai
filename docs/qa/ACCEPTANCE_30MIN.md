@@ -26,8 +26,8 @@
 | 个人定价 | `http://localhost:3010/settings/plans` | 路由已注册，但 `ENABLE_BUSINESS_FEATURES=false` 且页面组件返回 `null`，当前不可验收 |
 | 个人余额 | `http://localhost:3010/settings/credits` | 路由已注册，但页面组件返回 `null`，当前不可验收 |
 | 个人账单 | `http://localhost:3010/settings/billing` | 路由已注册，但页面组件返回 `null`，当前不可验收 |
-| Stripe Webhook | **不存在** | 仓库没有 Stripe handler/SDK 调用，因此当前没有合法的 `stripe listen --forward-to` 路径 |
-| 订单/余额查询 | **不存在** | 没有商业订单、wallet、ledger、payment webhook schema，也没有可用后台页面/API |
+|| Stripe Webhook | **已实现** `POST /api/webhooks/stripe` | `stripe listen --forward-to http://localhost:3010/api/webhooks/stripe` |
+|| 订单/余额查询 | **已实现（DB 层）** | 迁移后有商业表（`billing_accounts`/`wallets`/`ledger_entries`/`webhook_events`）；tRPC `topUp.getOrder` 可查订单状态 |
 | 余额不足拦截 | **不存在** | 计费插槽为 no-op，不能证明模型调用前已检查余额 |
 
 不要把 `/api/webhooks/casdoor`、`/api/webhooks/logto`、messenger 或视频生成 Webhook 当成 Stripe 支付回调；它们是其他业务。
@@ -86,7 +86,7 @@ curl --noproxy '*' -sS -o /dev/null -w '%{http_code}\n' "$SERVER_URL/signin"
 | --- | --- | --- |
 | 注册/登录/登出页面和 Better Auth API | ✅ 代码已存在；本机环境未启动 | `/signup`、`/signin` 可正常渲染，测试数据库可写 |
 | 定价/充值入口 | ❌ 空页面且商业开关关闭 | `/settings/plans` 能创建真实 Test Mode checkout，而不是空白页 |
-| Stripe Webhook 路由 | ❌ 不存在 | 仓库中存在已验签支付 handler，并能给出一个真实路由 |
+|| Stripe Webhook | **已实现** `POST /api/webhooks/stripe` | `stripe listen --forward-to http://localhost:3010/api/webhooks/stripe` |
 | 订单、余额、流水、事件表 | ❌ 不存在 | 迁移后存在真实 schema，且有只读查询或后台页可核账 |
 | 余额不足中间件 | ❌ no-op | 模型 provider 调用前执行服务端原子余额检查/预占 |
 
@@ -120,7 +120,7 @@ rg -n "payment_webhook_events|billing_accounts|payment_attempts|ledger_entries|w
 
 ### 4.2 8–18 分钟：Stripe Test 支付成功到账
 
-当前仓库状态：**❌ 阻断/未实现。** `/settings/plans` 是空组件，没有 checkout；Stripe 支付 Webhook 路由不存在。因此当前没有可填写的真实 `stripe listen --forward-to` 命令，也不能把浏览器 success 页面当作到账证明。
+当前仓库状态：**⚠️ 部分实现。** DB 层、webhook handler 和订单 tRPC 已实现（本 PR）；`/settings/plans` UI 仍为空组件，Stripe 配置变量需按 §2.2 设置后方可执行 e2e 测试。
 
 只有在就绪度闸门全部通过后，本节才能执行。执行时必须：
 

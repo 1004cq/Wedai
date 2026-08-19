@@ -695,4 +695,13 @@ export class WebhookEventModel {
       .returning();
     return row;
   }
+
+  async markIgnored(id: string): Promise<WebhookEvent> {
+    const [row] = await this.db
+      .update(webhookEvents)
+      .set({ status: 'ignored', processedAt: new Date() })
+      .where(eq(webhookEvents.id, id))
+      .returning();
+    return row;
+  }
 }
