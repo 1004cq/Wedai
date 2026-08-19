@@ -7,9 +7,8 @@
  *  - Application middleware calls this adapter, then passes the result to
  *    billing domain commands.
  */
-import Stripe from 'stripe';
-
 import type { PriceSnapshot } from '@lobechat/billing';
+import Stripe from 'stripe';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Singleton Stripe client (lazy; throws if key absent at call time)
@@ -30,18 +29,18 @@ function getStripe(): Stripe {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface CheckoutSessionParams {
+  /** Absolute URL that Stripe redirects to on cancel. */
+  cancelUrl: string;
   /** Internal order ID used as idempotency key and metadata. */
   orderId: string;
   /** Internal order number shown to the user. */
   orderNo: string;
   /** Price snapshot read from the server (never trusted from the client). */
   priceSnapshot: PriceSnapshot;
-  /** Absolute URL that Stripe redirects to on success. */
-  successUrl: string;
-  /** Absolute URL that Stripe redirects to on cancel. */
-  cancelUrl: string;
   /** Stripe customer ID, if the user has one. */
   stripeCustomerId?: string;
+  /** Absolute URL that Stripe redirects to on success. */
+  successUrl: string;
 }
 
 export interface CheckoutSessionResult {
@@ -121,4 +120,72 @@ export class StripePaymentService {
     if (!secret) throw new Error('STRIPE_WEBHOOK_SECRET is not configured');
     return getStripe().webhooks.constructEvent(rawBody, signature, secret);
   }
+
+  /** Returns true when STRIPE_SECRET_KEY is configured (safe to call without throwing). */
+  static isConfigured(): boolean {
+    return Boolean(process.env.STRIPE_SECRET_KEY);
+  }
+
+  /**
+   * Looks up the most recent Checkout Session for an internal order ID.
+   * Uses Stripe search API — metadata.orderId is set server-side at session creation.
+   *
+   * Returns only safe, non-PII fields. Never logs or returns secrets/card data.
+   */
+  static async lookupCheckoutSessionByOrderId(
+    orderId: string,
+  ): Promise<StripeCheckoutLookup | null> {
+    if (!StripePaymentService.isConfigured()) return null;
+
+    const stripe = getStripe();
+    const query = `metadata['orderId']:'${orderId.replaceAll("'", '')}'`;
+    const result = await stripe.checkout.sessions.search({ limit: 1, query });
+
+    const session = result.data[0];
+    if (!session) return null;
+
+    return {
+      paymentIntentId:
+        typeof session.payment_intent === 'string'
+          ? session.payment_intent
+          : (session.payment_intent?.id ?? null),
+      paymentStatus: session.payment_status ?? null,
+      sessionId: session.id,
+      sessionStatus: session.status ?? null,
+    };
+  }
+
+  /**
+   * Retrieves PaymentIntent status when a PI id is known (e.g. from checkout session).
+   * Returns safe fields only.
+   */
+  static async lookupPaymentIntent(
+    paymentIntentId: string,
+  ): Promise<StripePaymentIntentLookup | null> {
+    if (!StripePaymentService.isConfigured()) return null;
+
+    const stripe = getStripe();
+    const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+
+    return {
+      paymentIntentId: pi.id,
+      status: pi.status ?? null,
+    };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Reconciliation lookup types (no secrets / card data)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface StripeCheckoutLookup {
+  paymentIntentId: string | null;
+  paymentStatus: string | null;
+  sessionId: string;
+  sessionStatus: string | null;
+}
+
+export interface StripePaymentIntentLookup {
+  paymentIntentId: string;
+  status: string | null;
 }

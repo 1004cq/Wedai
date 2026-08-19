@@ -16,6 +16,7 @@ import { adminDashboardRouter } from './routers/dashboard';
 import { adminLedgerRouter } from './routers/ledger';
 import { adminOrdersRouter } from './routers/orders';
 import { adminPricingRouter } from './routers/pricing';
+import { adminReconciliationRouter } from './routers/reconciliation';
 import { adminUsersRouter } from './routers/users';
 import { adminWebhooksRouter } from './routers/webhooks';
 
@@ -26,6 +27,7 @@ export const adminRouter = router({
   ledger: adminLedgerRouter,
   orders: adminOrdersRouter,
   pricing: adminPricingRouter,
+  reconciliation: adminReconciliationRouter,
   users: adminUsersRouter,
   webhooks: adminWebhooksRouter,
 });
