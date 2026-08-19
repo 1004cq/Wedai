@@ -83,6 +83,14 @@ export const modelPrices = pgTable(
     completionCreditsPerKToken: bigint('completion_credits_per_k_token', { mode: 'bigint' })
       .notNull()
       .default(BigInt(2)),
+    /**
+     * Flat credits charged per single request (image / video generation).
+     * 0 = disabled (falls through to token-based pricing).
+     * When > 0, this takes precedence over per-token rates for that model.
+     */
+    requestCreditsFlat: bigint('request_credits_flat', { mode: 'bigint' })
+      .notNull()
+      .default(BigInt(0)),
     /** When false this row is a draft; when true it is actively used for billing. */
     isActive: boolean('is_active').notNull().default(false),
     archivedAt: timestamptz('archived_at'),

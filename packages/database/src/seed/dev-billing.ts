@@ -85,7 +85,8 @@ async function seed() {
   // ── Model prices ──────────────────────────────────────────────────────────
   // 1 credit per 1 000 prompt tokens, 2 credits per 1 000 completion tokens
   // for common models. Admin can override via admin.pricing.upsert.
-  const defaultModels = [
+  // Text models (token-based pricing)
+  const textModels = [
     { modelId: 'gpt-4o', provider: 'openai' },
     { modelId: 'gpt-4o-mini', provider: 'openai' },
     { modelId: 'claude-3-5-sonnet-20241022', provider: 'anthropic' },
@@ -97,19 +98,44 @@ async function seed() {
   await db
     .insert(modelPrices)
     .values(
-      defaultModels.map((m) => ({
+      textModels.map((m) => ({
         id: idGenerator('modelPrices'),
         modelId: m.modelId,
         provider: m.provider,
         promptCreditsPerKToken: BigInt(1),
         completionCreditsPerKToken: BigInt(2),
+        requestCreditsFlat: BigInt(0),
         isActive: true,
-        note: 'dev seed',
+        note: 'dev seed - text',
       })),
     )
     .onConflictDoNothing();
 
-  console.log(`  ✓ model_prices: ${defaultModels.length} models seeded`);
+  // Image/video models (per-request flat pricing, 100 credits per generation)
+  const generationModels = [
+    { modelId: 'dall-e-3', provider: 'openai' },
+    { modelId: 'stable-diffusion-3', provider: 'stabilityai' },
+  ];
+
+  await db
+    .insert(modelPrices)
+    .values(
+      generationModels.map((m) => ({
+        id: idGenerator('modelPrices'),
+        modelId: m.modelId,
+        provider: m.provider,
+        promptCreditsPerKToken: BigInt(0),
+        completionCreditsPerKToken: BigInt(0),
+        requestCreditsFlat: BigInt(100),
+        isActive: true,
+        note: 'dev seed - image generation',
+      })),
+    )
+    .onConflictDoNothing();
+
+  const defaultModels = [...textModels, ...generationModels];
+
+  console.log(`  ✓ model_prices: ${textModels.length} text + ${generationModels.length} image models seeded`);
   console.log('Dev billing seed complete.');
 }
 
