@@ -27,7 +27,8 @@ export const adminAdjustmentsRouter = router({
     .input(
       z.object({
         billingAccountId: z.string().min(1),
-        credits: z.number().int().positive(),
+        /** Integer credits. Pass as number (< 2^53) or string for large values. */
+        credits: z.union([z.number().int().positive(), z.string().regex(/^[1-9]\d*$/)]).transform((v) => Number(v)),
         reason: z.string().min(1).max(256),
         /** Caller-supplied stable key — same key returns same result. */
         idempotencyKey: z.string().min(1).max(128),
@@ -72,7 +73,8 @@ export const adminAdjustmentsRouter = router({
     .input(
       z.object({
         billingAccountId: z.string().min(1),
-        credits: z.number().int().positive(),
+        /** Integer credits. Pass as number (< 2^53) or string for large values. */
+        credits: z.union([z.number().int().positive(), z.string().regex(/^[1-9]\d*$/)]).transform((v) => Number(v)),
         reason: z.string().min(1).max(256),
         idempotencyKey: z.string().min(1).max(128),
       }),

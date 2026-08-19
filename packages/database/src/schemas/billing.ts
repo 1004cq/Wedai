@@ -464,6 +464,8 @@ export const ledgerEntries = pgTable(
     index('ledger_entries_order_id_idx').on(t.orderId),
     index('ledger_entries_usage_record_id_idx').on(t.usageRecordId),
     index('ledger_entries_kind_idx').on(t.kind),
+    // Composite index for StaleHoldReaper: WHERE kind='hold' AND created_at < cutoff
+    index('ledger_entries_kind_created_at_idx').on(t.kind, t.createdAt),
   ],
 );
 
