@@ -36,9 +36,17 @@ export const getPaymentConfig = () => {
        * Example: whsec_xxx
        */
       STRIPE_WEBHOOK_SECRET: z.string().optional(),
+
+      /**
+       * Credit units to grant every new user upon registration (integer).
+       * Set to 0 or omit to disable the welcome grant.
+       * Example: 100000  → 100 000 credits on signup
+       */
+      SIGNUP_CREDIT_GRANT: z.coerce.number().int().nonnegative().default(0),
     },
     runtimeEnv: {
       NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
+      SIGNUP_CREDIT_GRANT: process.env.SIGNUP_CREDIT_GRANT,
       STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
       STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET,
     },

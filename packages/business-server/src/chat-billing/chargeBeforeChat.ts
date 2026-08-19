@@ -112,13 +112,16 @@ export async function chargeBeforeChat(params: ChargeBeforeChatParams): Promise<
   const { chargeMode } = resolveChargeMode(billingCtx);
 
   if (chargeMode === 'byok') {
+    // User supplied their own API key for this provider.
+    // Platform credits are NOT deducted — no hold, settle, or release.
+    // See docs/commercial/BYOK.md for the full decision tree.
     return {
       charged: false,
       billingAccountId: '',
-      requestId: params.requestId,
-      holdResult: null,
       heldCredits: 0n,
+      holdResult: null,
       priceSnapshot: null,
+      requestId: params.requestId,
     };
   }
 
