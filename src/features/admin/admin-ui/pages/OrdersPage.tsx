@@ -5,33 +5,32 @@ import type { TableColumnsType } from 'antd';
 import { Empty, Grid, Table, Tag } from 'antd';
 import { useCallback, useState } from 'react';
 
-import { AdminErrorState, AdminPage } from '../components/AdminPage';
+import { adminApi } from '../api';
+import { AdminErrorState, AdminForbiddenBanner, AdminPage } from '../components/AdminPage';
+import { useAdminAccess } from '../hooks/useAdminAccess';
 import { useAdminQuery } from '../hooks/useAdminQuery';
-import { adminMockApi } from '../mock/store';
 import type { AdminOrderRow, AdminOrderStatus } from '../types';
-import { formatCredits, formatDateTime, formatMinorCurrency } from '../utils';
+import { formatDateTime, formatMinorCurrency } from '../utils';
 
 const DEFAULT_PAGE_SIZE = 10;
 
 export const OrdersPage = () => {
+  const { state } = useAdminAccess();
   const screens = Grid.useBreakpoint();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [status, setStatus] = useState<AdminOrderStatus>();
   const loader = useCallback(
-    () => adminMockApi.listOrders({ page, pageSize, status }),
+    () => adminApi.listOrders({ page, pageSize, status }),
     [page, pageSize, status],
   );
   const { data, error, isLoading, reload } = useAdminQuery(loader);
 
+  if (state.status === 'forbidden') return <AdminForbiddenBanner />;
+
   const columns: TableColumnsType<AdminOrderRow> = [
     { dataIndex: 'orderNo', title: '订单号' },
-    { dataIndex: 'userDisplay', title: '用户' },
-    {
-      dataIndex: 'type',
-      render: (type: AdminOrderRow['type']) => (type === 'subscription' ? '订阅套餐' : '积分包'),
-      title: '类型',
-    },
+    { dataIndex: 'userId', title: '用户 ID' },
     {
       dataIndex: 'status',
       render: (value: AdminOrderStatus) => {
@@ -45,14 +44,23 @@ export const OrdersPage = () => {
       },
       title: '状态',
     },
-    { align: 'right', dataIndex: 'amountMinor', render: formatMinorCurrency, title: '金额' },
-    { align: 'right', dataIndex: 'credits', render: formatCredits, title: '积分' },
-    { dataIndex: 'paymentProvider', title: '支付渠道' },
-    { dataIndex: 'createdAt', render: formatDateTime, title: '时间' },
+    {
+      align: 'right',
+      dataIndex: 'amountMinor',
+      render: formatMinorCurrency,
+      title: '金额',
+    },
+    { dataIndex: 'currency', title: '币种' },
+    { dataIndex: 'createdAt', render: formatDateTime, title: '创建时间' },
+    {
+      dataIndex: 'paidAt',
+      render: (v?: string) => (v ? formatDateTime(v) : '—'),
+      title: '支付时间',
+    },
   ];
 
   return (
-    <AdminPage description={'查看订阅与积分包订单，状态筛选由服务端查询形状承载。'} title={'订单'}>
+    <AdminPage description={'订单由 Stripe Webhook 驱动状态机；此处只读。'} title={'订单'}>
       <Select
         allowClear
         placeholder={'按状态筛选'}

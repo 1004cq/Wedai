@@ -63,3 +63,16 @@ export const AdminErrorState = ({ error, onRetry }: { error: Error; onRetry: () 
     type={'error'}
   />
 );
+
+/**
+ * Shown when the server returns 403 FORBIDDEN.
+ * Explicit message rather than silent empty list — satisfies ACCEPTANCE §7.
+ */
+export const AdminForbiddenBanner = () => (
+  <Alert
+    showIcon
+    description={'当前账号角色不是 admin，无法访问管理后台。请联系超级管理员设置角色后刷新页面。'}
+    message={'无管理员权限（403 Forbidden）'}
+    type={'warning'}
+  />
+);
