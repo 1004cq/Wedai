@@ -24,6 +24,8 @@ import type {
   OrderListQuery,
   PagedResult,
   SetUserBanInput,
+  SmsConfig,
+  SmsConfigUpdate,
 } from './types';
 
 // ─── cursor-based → page-based bridge ────────────────────────────────────────
@@ -172,6 +174,14 @@ async function debitBalance(input: {
   return lambdaClient.admin.adjustments.debit.mutate(input);
 }
 
+async function getSmsConfig(): Promise<SmsConfig> {
+  return lambdaClient.admin.config.smsSettings.query();
+}
+
+async function updateSmsConfig(input: SmsConfigUpdate): Promise<SmsConfig> {
+  return lambdaClient.admin.config.updateSms.mutate(input);
+}
+
 // ─── Exported client ─────────────────────────────────────────────────────────
 
 export const adminApi = {
@@ -180,6 +190,7 @@ export const adminApi = {
   debitBalance,
   getConfigStatus,
   getOrder,
+  getSmsConfig,
   getUser,
   listLedger,
   listOrders,
@@ -187,6 +198,7 @@ export const adminApi = {
   listUsers,
   setUserBan,
   updateLlmProvider,
+  updateSmsConfig,
   upsertPrice,
 };
 

@@ -973,6 +973,13 @@
       "when": 1785648315270,
       "tag": "0138_wedai_plans_catalog",
       "breakpoints": true
+    },
+    {
+      "idx": 139,
+      "version": "7",
+      "when": 1785648316270,
+      "tag": "0139_system_sms_config",
+      "breakpoints": true
     }
   ],
   "version": "6"

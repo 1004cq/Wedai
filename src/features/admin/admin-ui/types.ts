@@ -126,28 +126,32 @@ export interface SmtpConfigUpdate extends Omit<SmtpConfig, 'passwordConfigured'>
   password?: string;
 }
 
-export type SmsProvider = 'aliyun' | 'custom' | 'tencent';
+export type SmsProvider = 'aliyun_pnvs' | 'mock';
 
 export interface SmsConfig {
   accessKeyIdConfigured: boolean;
+  accessKeyIdMasked: string | null;
   accessKeySecretConfigured: boolean;
+  configured: boolean;
   enabled: boolean;
   enablePhoneRegister: boolean;
-  endpoint: string;
+  mock: boolean;
   provider: SmsProvider;
-  region: string;
-  signName: string;
-  templateCode: string;
+  schemeName: string | null;
+  signName: string | null;
+  templateCode: string | null;
 }
 
-export interface SmsConfigUpdate extends Omit<
-  SmsConfig,
-  'accessKeyIdConfigured' | 'accessKeySecretConfigured'
-> {
-  /** 留空或仅空白字符时不覆盖服务端已有值。 */
+export interface SmsConfigUpdate {
   accessKeyId?: string;
-  /** 留空或仅空白字符时不覆盖服务端已有值。 */
   accessKeySecret?: string;
+  enabled?: boolean;
+  enablePhoneRegister?: boolean;
+  mock?: boolean;
+  provider?: SmsProvider;
+  schemeName?: string | null;
+  signName?: string | null;
+  templateCode?: string | null;
 }
 
 export interface PageQuery {
