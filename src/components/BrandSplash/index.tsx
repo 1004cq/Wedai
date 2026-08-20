@@ -3,6 +3,8 @@
 /**
  * Session-scoped brand splash shown once per browser tab session.
  *
+ * Primary visual: /brand/umm-logo.png (umm brushstroke wordmark).
+ *
  * SSR/hydration: renders nothing until useEffect runs on the client, so the
  * server HTML matches the first client paint (no splash flash / mismatch).
  */
@@ -10,9 +12,15 @@ import { BRANDING_NAME } from '@lobechat/business-const';
 import { createStaticStyles } from 'antd-style';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 
-import { ProductLogo } from '@/components/Branding';
+import Image from '@/libs/next/Image';
 
 export const BRAND_SPLASH_SESSION_KEY = 'wedai_splash_done';
+export const BRAND_SPLASH_LOGO_SRC = '/brand/umm-logo.png';
+
+/** Optional subtitle under the logo. Set to empty string to hide. */
+export const BRAND_SPLASH_SUBTITLE = BRANDING_NAME;
+
+const LOGO_SIZE = 160;
 
 const MIN_DISPLAY_MS = 800;
 const MAX_DISPLAY_MS = 2000;
@@ -23,14 +31,24 @@ type SplashPhase = 'idle' | 'visible' | 'exiting' | 'done';
 
 const styles = createStaticStyles(({ css }) => ({
   brandName: css`
-    font-size: 1.5rem;
-    font-weight: 600;
-    letter-spacing: 0.04em;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: light-dark(#737373, #a3a3a3);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+
+    html[data-theme='light'] & {
+      color: #737373;
+    }
+
+    html[data-theme='dark'] & {
+      color: #a3a3a3;
+    }
   `,
   content: css`
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: 0.75rem;
     align-items: center;
     justify-content: center;
 
@@ -38,7 +56,7 @@ const styles = createStaticStyles(({ css }) => ({
 
     @keyframes wedai-splash-enter {
       from {
-        transform: scale(0.94);
+        transform: scale(0.96);
         opacity: 0;
       }
 
@@ -54,6 +72,22 @@ const styles = createStaticStyles(({ css }) => ({
       animation: none;
     }
   `,
+  logoFrame: css`
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    border-radius: 12px;
+
+    background: #fafafa;
+    box-shadow: 0 0 0 1px rgb(0 0 0 / 4%);
+
+    html[data-theme='dark'] & {
+      background: #fafafa;
+      box-shadow: 0 8px 32px rgb(0 0 0 / 35%);
+    }
+  `,
   overlay: css`
     pointer-events: auto;
 
@@ -65,20 +99,16 @@ const styles = createStaticStyles(({ css }) => ({
     align-items: center;
     justify-content: center;
 
-    color: light-dark(#141414, #f5f5f5);
-
-    background: light-dark(#fafafa, #0d0d0d);
+    background: light-dark(#fff, #111);
 
     transition: opacity ${EXIT_TRANSITION_MS}ms ease;
 
     html[data-theme='light'] & {
-      color: #141414;
-      background: #fafafa;
+      background: #fff;
     }
 
     html[data-theme='dark'] & {
-      color: #f5f5f5;
-      background: #0d0d0d;
+      background: #111;
     }
   `,
   overlayExit: css`
@@ -162,8 +192,21 @@ const BrandSplash = memo(() => {
       onTransitionEnd={handleTransitionEnd}
     >
       <div aria-hidden className={styles.content}>
-        <ProductLogo size={72} type="flat" />
-        <span className={styles.brandName}>{BRANDING_NAME}</span>
+        <div className={styles.logoFrame}>
+          <Image
+            priority
+            unoptimized
+            alt="umm"
+            height={LOGO_SIZE}
+            src={BRAND_SPLASH_LOGO_SRC}
+            style={{ display: 'block', height: LOGO_SIZE, objectFit: 'contain', width: LOGO_SIZE }}
+            width={LOGO_SIZE}
+            onError={finish}
+          />
+        </div>
+        {BRAND_SPLASH_SUBTITLE ? (
+          <span className={styles.brandName}>{BRAND_SPLASH_SUBTITLE}</span>
+        ) : null}
       </div>
     </div>
   );
