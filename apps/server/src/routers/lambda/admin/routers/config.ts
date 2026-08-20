@@ -13,7 +13,9 @@
  * Phase 3 follow-up; for now admins configure secrets via environment
  * variables or a secrets manager.
  */
+import { isSmsConfigured } from '@/envs/sms';
 import { router } from '@/libs/trpc/lambda';
+
 import { adminProcedure } from '../middleware';
 
 /** Returns true if the env var is set to a non-empty string. */
@@ -59,8 +61,8 @@ export const adminConfigRouter = router({
       },
 
       sms: {
-        /** Whether a SMS provider is configured. */
-        configured: false, // Phase 5-4: phone login not yet implemented
+        /** Whether a SMS provider is configured (boolean only — no secrets). */
+        configured: isSmsConfigured(),
       },
 
       billing: {

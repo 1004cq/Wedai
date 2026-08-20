@@ -47,6 +47,7 @@ vi.mock('better-auth/plugins', () => ({
   emailOTP: vi.fn(() => ({ id: 'email-otp' })),
   genericOAuth: vi.fn(() => ({ id: 'generic-oauth' })),
   magicLink: vi.fn(() => ({ id: 'magic-link' })),
+  phoneNumber: vi.fn(() => ({ id: 'phone-number' })),
 }));
 
 vi.mock('undici', () => ({
@@ -104,6 +105,12 @@ vi.mock('@/libs/oidc-provider/session-cleanup', () => ({
 
 vi.mock('@/server/services/email', () => ({
   EmailService: vi.fn(),
+}));
+
+vi.mock('@/server/services/sms', () => ({
+  normalizePhoneToE164: vi.fn(() => '+8613800138000'),
+  sendSms: vi.fn(),
+  SmsRateLimitError: class SmsRateLimitError extends Error {},
 }));
 
 vi.mock('@/server/services/user', () => ({

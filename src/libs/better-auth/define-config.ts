@@ -5,10 +5,11 @@ import { createNanoId, idGenerator, serverDB } from '@lobechat/database';
 import * as schema from '@lobechat/database/schemas';
 import bcrypt from 'bcryptjs';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
+import { APIError } from 'better-auth/api';
 import { verifyPassword as defaultVerifyPassword } from 'better-auth/crypto';
 import { type BetterAuthOptions } from 'better-auth/minimal';
 import { betterAuth } from 'better-auth/minimal';
-import { admin, emailOTP, genericOAuth, magicLink } from 'better-auth/plugins';
+import { admin, emailOTP, genericOAuth, magicLink, phoneNumber } from 'better-auth/plugins';
 import { type BetterAuthPlugin } from 'better-auth/types';
 import { EnvHttpProxyAgent, setGlobalDispatcher } from 'undici';
 
@@ -27,6 +28,7 @@ import { createSecondaryStorage, getTrustedOrigins } from '@/libs/better-auth/ut
 import { parseSSOProviders } from '@/libs/better-auth/utils/server';
 import { clearMismatchedOIDCSession } from '@/libs/oidc-provider/session-cleanup';
 import { EmailService } from '@/server/services/email';
+import { normalizePhoneToE164, sendSms, SmsRateLimitError } from '@/server/services/sms';
 import { UserService } from '@/server/services/user';
 
 const LOCAL_NO_PROXY_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
@@ -241,7 +243,10 @@ export function defineConfig(customOptions: CustomBetterAuthOptions) {
               id: user.id,
               username: user.username as string | null,
               createdAt: user.createdAt,
-              // TODO: if add phone plugin, we should fill phone here
+              phone:
+                (user as { phoneNumber?: string | null }).phoneNumber ??
+                (user as { phone?: string | null }).phone ??
+                null,
             });
           },
         },
@@ -261,6 +266,7 @@ export function defineConfig(customOptions: CustomBetterAuthOptions) {
         image: 'avatar',
         // NOTE: use drizzle filed instead of db field, so use fullName instead of full_name
         name: 'fullName',
+        phoneNumber: 'phone',
       },
       modelName: 'users',
     },
@@ -288,6 +294,7 @@ export function defineConfig(customOptions: CustomBetterAuthOptions) {
       customRules: {
         '/request-password-reset': { max: 3, window: 60 },
         '/send-verification-email': { max: 3, window: 60 },
+        '/phone-number/send-otp': { max: 5, window: 60 },
       },
     },
     plugins: [
@@ -317,6 +324,35 @@ export function defineConfig(customOptions: CustomBetterAuthOptions) {
             to: email,
             ...template,
           });
+        },
+      }),
+      phoneNumber({
+        allowedAttempts: 3,
+        expiresIn: OTP_EXPIRES_IN,
+        otpLength: 6,
+        phoneNumberValidator: async (phone) => normalizePhoneToE164(phone) !== null,
+        signUpOnVerification: {
+          getTempEmail: (phone) => {
+            const digits = phone.replaceAll(/\D/g, '');
+            return `phone+${digits}@phone.wedai.internal`;
+          },
+        },
+        sendOTP: async ({ phoneNumber: phone, code }, ctx) => {
+          const normalized = normalizePhoneToE164(phone) ?? phone;
+          const ip =
+            ctx?.request?.headers?.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+            ctx?.request?.headers?.get('x-real-ip') ??
+            null;
+          try {
+            await sendSms({ code, ip, phoneNumber: normalized });
+          } catch (error) {
+            if (error instanceof SmsRateLimitError) {
+              throw APIError.from('TOO_MANY_REQUESTS', {
+                message: 'Too many verification code requests. Please try again later.',
+              });
+            }
+            throw error;
+          }
         },
       }),
       passkey({
