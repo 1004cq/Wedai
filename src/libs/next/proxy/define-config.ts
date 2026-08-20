@@ -92,7 +92,7 @@ export function defineConfig() {
 
     // These pages are responsive on their own; always serve the desktop bundle
     // so mobile UA does not land on mobile-specific routes.
-    const desktopOnlyPaths = ['/share', '/verify', '/acceptance'];
+    const desktopOnlyPaths = ['/share', '/verify', '/acceptance', '/admin'];
     const isDesktopOnlyPath = desktopOnlyPaths.some(
       (path) => url.pathname === path || url.pathname.startsWith(`${path}/`),
     );

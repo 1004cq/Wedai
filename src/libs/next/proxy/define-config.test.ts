@@ -52,6 +52,18 @@ describe('defineConfig locale path-traversal hardening', () => {
   });
 });
 
+describe('defineConfig admin SPA rewrite', () => {
+  it('rewrites /admin into the desktop SPA catch-all', async () => {
+    const rewrite = await run('http://localhost:3010/admin?hl=zh-CN');
+    expect(new URL(rewrite!).pathname).toMatch(/^\/spa\/[^/]+\/admin$/);
+  });
+
+  it('rewrites nested admin paths', async () => {
+    const rewrite = await run('http://localhost:3010/admin/users');
+    expect(new URL(rewrite!).pathname).toMatch(/^\/spa\/[^/]+\/admin\/users$/);
+  });
+});
+
 describe('defineConfig Workbench SPA rewrite', () => {
   it('routes Workbench-owned paths only for mobile devices', async () => {
     const mobileAcceptance = await run(
