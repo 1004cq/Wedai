@@ -1,19 +1,16 @@
 /**
- * admin.config — read-only system configuration status.
+ * admin.config — system configuration status + SMS settings (masked).
  *
  * SECURITY CONTRACT (P3-1):
- *  - Secret values are NEVER returned — only a boolean `configured` flag.
- *  - Masked display (e.g. "sk_test_••••1234") is acceptable for non-secret
- *    identifiers (app IDs, endpoints) but must never show the full value.
- *  - Only `adminProcedure` callers (role='admin' in DB) may read this.
- *  - Ordinary users and unauthenticated callers receive FORBIDDEN.
- *
- * Why read-only here: modifying secrets via tRPC requires careful update
- * semantics (only overwrite when non-empty string submitted). That's a
- * Phase 3 follow-up; for now admins configure secrets via environment
- * variables or a secrets manager.
+ *  - Secret values are NEVER returned — only boolean `configured` or masked id.
+ *  - accessKeySecret is write-only; empty string on update means "keep existing".
  */
+import { z } from 'zod';
+
+import { SystemSmsConfigModel } from '@/database/models/systemSmsConfig';
 import { router } from '@/libs/trpc/lambda';
+import { getAdminSmsConfigView, getSmsConfig, isSmsOperational } from '@/server/services/sms';
+
 import { adminProcedure } from '../middleware';
 
 /** Returns true if the env var is set to a non-empty string. */
@@ -22,11 +19,6 @@ const isSet = (name: string): boolean => {
   return typeof v === 'string' && v.trim().length > 0;
 };
 
-/**
- * Masks a string value, showing only the last 4 characters.
- * Returns null if the value is not set.
- * NEVER call this on a full secret key — only on non-sensitive identifiers.
- */
 const maskId = (name: string): string | null => {
   const v = process.env[name];
   if (!v || v.trim().length === 0) return null;
@@ -34,40 +26,67 @@ const maskId = (name: string): string | null => {
   return trimmed.length <= 4 ? '••••' : `••••${trimmed.slice(-4)}`;
 };
 
+const updateSmsSchema = z.object({
+  accessKeyId: z.string().optional(),
+  accessKeySecret: z.string().optional(),
+  enablePhoneRegister: z.boolean().optional(),
+  enabled: z.boolean().optional(),
+  mock: z.boolean().optional(),
+  provider: z.enum(['aliyun_pnvs', 'mock']).optional(),
+  schemeName: z.string().nullable().optional(),
+  signName: z.string().nullable().optional(),
+  templateCode: z.string().nullable().optional(),
+});
+
 export const adminConfigRouter = router({
-  /**
-   * Returns configuration status for all commercial integrations.
-   * Secret values are replaced with boolean `configured` flags.
-   */
-  status: adminProcedure.query(() => {
+  status: adminProcedure.query(async () => {
+    const smsView = await getAdminSmsConfigView();
+
     return {
       stripe: {
-        /** Whether Stripe integration is enabled. */
         enabled: isSet('STRIPE_SECRET_KEY') && isSet('STRIPE_WEBHOOK_SECRET'),
         publishableKeyConfigured: isSet('NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY'),
         secretKeyConfigured: isSet('STRIPE_SECRET_KEY'),
         webhookSecretConfigured: isSet('STRIPE_WEBHOOK_SECRET'),
       },
-
       email: {
-        /** Whether SMTP or Resend is configured for transactional email. */
         configured: isSet('SMTP_HOST') || isSet('RESEND_API_KEY'),
         provider: isSet('RESEND_API_KEY') ? 'resend' : isSet('SMTP_HOST') ? 'smtp' : null,
-        // Mask the SMTP host (not a secret, but no need to show full value)
         smtpHost: maskId('SMTP_HOST'),
         fromEmail: maskId('SMTP_FROM') ?? maskId('RESEND_FROM'),
       },
-
       sms: {
-        /** Whether a SMS provider is configured. */
-        configured: false, // Phase 5-4: phone login not yet implemented
+        configured: smsView.configured,
       },
-
       billing: {
         byokAllowed: process.env.BYOK_ALLOWED !== 'false',
         byokGatewayFeeEnabled: process.env.BYOK_GATEWAY_FEE_ENABLED === 'true',
         signupCreditGrant: Number.parseInt(process.env.SIGNUP_CREDIT_GRANT ?? '0', 10) || 0,
       },
+    };
+  }),
+
+  /** Full SMS settings for admin UI — secrets masked / boolean only. */
+  smsSettings: adminProcedure.query(async () => getAdminSmsConfigView()),
+
+  updateSms: adminProcedure.input(updateSmsSchema).mutation(async ({ ctx, input }) => {
+    const model = new SystemSmsConfigModel(ctx.serverDB);
+    await model.upsert({
+      accessKeyId: input.accessKeyId,
+      accessKeySecret: input.accessKeySecret,
+      enablePhoneRegister: input.enablePhoneRegister,
+      enabled: input.enabled,
+      mock: input.mock,
+      provider: input.provider,
+      schemeName: input.schemeName,
+      signName: input.signName,
+      templateCode: input.templateCode,
+    });
+
+    const cfg = await getSmsConfig();
+    return {
+      configured: isSmsOperational(cfg),
+      ...(await getAdminSmsConfigView()),
     };
   }),
 });

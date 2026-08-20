@@ -61,8 +61,14 @@ const rateLimitAuthRequest = async (request: NextRequest): Promise<Response | nu
   if (!cfg.enabled) return null;
 
   const pathname = request.nextUrl?.pathname ?? new URL(request.url).pathname;
-  const isLogin = pathname.includes('sign-in') || pathname.includes('login');
-  const isRegister = pathname.includes('sign-up') || pathname.includes('register');
+  const isLogin =
+    pathname.includes('sign-in') ||
+    pathname.includes('login') ||
+    pathname.includes('phone-number/send-otp');
+  const isRegister =
+    pathname.includes('sign-up') ||
+    pathname.includes('register') ||
+    pathname.includes('phone-number/send-otp');
 
   if (!isLogin && !isRegister) return null;
 

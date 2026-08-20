@@ -15,18 +15,19 @@
  * The ForbiddenBanner component renders this as an explicit UI state rather
  * than a silent empty list.
  */
+import { lambdaClient } from '@/libs/trpc/client';
+
 import type {
   AdminDashboardMetrics,
   AdminModelPrice,
   AdminOrderRow,
   AdminUserRow,
-  AuditListQuery,
   OrderListQuery,
   PagedResult,
   SetUserBanInput,
+  SmsConfig,
+  SmsConfigUpdate,
 } from './types';
-
-import { lambdaClient } from '@/libs/trpc/client';
 
 // ─── cursor-based → page-based bridge ────────────────────────────────────────
 // The backend uses cursor pagination (offset-based cursor = (page-1)*pageSize).
@@ -53,9 +54,10 @@ async function listUsers(query: {
     nextCursor: res.nextCursor,
     page: query.page,
     pageSize: query.pageSize,
-    total: res.nextCursor !== null
-      ? cursor + res.items.length + 1   // at least one more page
-      : cursor + res.items.length,
+    total:
+      res.nextCursor !== null
+        ? cursor + res.items.length + 1 // at least one more page
+        : cursor + res.items.length,
   } as any;
 }
 
@@ -86,9 +88,7 @@ async function listOrders(query: OrderListQuery): Promise<PagedResult<AdminOrder
     nextCursor: res.nextCursor,
     page: query.page,
     pageSize: query.pageSize,
-    total: res.nextCursor !== null
-      ? cursor + res.items.length + 1
-      : cursor + res.items.length,
+    total: res.nextCursor !== null ? cursor + res.items.length + 1 : cursor + res.items.length,
   } as any;
 }
 
@@ -161,6 +161,14 @@ async function dashboardSummary(): Promise<AdminDashboardMetrics> {
   return lambdaClient.admin.dashboard.summary.query();
 }
 
+async function getSmsConfig(): Promise<SmsConfig> {
+  return lambdaClient.admin.config.smsSettings.query();
+}
+
+async function updateSmsConfig(input: SmsConfigUpdate): Promise<SmsConfig> {
+  return lambdaClient.admin.config.updateSms.mutate(input);
+}
+
 // ─── Export ─────────────────────────────────────────────────────────────────
 
 async function exportLedgerCsv(input: {
@@ -179,6 +187,7 @@ export const adminApi = {
   creditBalance,
   debitBalance,
   getOrder,
+  getSmsConfig,
   getUser,
   exportLedgerCsv,
   listLedger,
@@ -186,6 +195,7 @@ export const adminApi = {
   listPrices,
   listUsers,
   setUserBan,
+  updateSmsConfig,
   upsertPrice,
 };
 
@@ -203,12 +213,12 @@ function mapUser(row: {
   createdAt: Date;
 }): AdminUserRow {
   return {
-    balanceCredits: 0,           // populated lazily by getUser when detail is needed
+    balanceCredits: 0, // populated lazily by getUser when detail is needed
     email: row.email ?? undefined,
     id: row.id,
     lastActiveAt: row.createdAt.toISOString(),
     nickname: row.fullName ?? row.username ?? row.email ?? row.id,
-    plan: 'free',                // plan not returned by list endpoint
+    plan: 'free', // plan not returned by list endpoint
     registeredAt: row.createdAt.toISOString(),
     role: (row.role as AdminUserRow['role']) ?? 'user',
     status: row.banned ? 'banned' : 'active',
