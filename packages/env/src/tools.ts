@@ -27,7 +27,11 @@ export const getToolsConfig = () => {
       CRAWLER_IMPLS: z.string().optional(),
       JINA_USE_CN_DOMAINS: z.enum(['true', 'false']).optional(),
       SEARCH_PROVIDERS: z.string().optional(),
-      SEARXNG_URL: z.string().url().optional(),
+      // core deploy sets SEARXNG_URL='' when SearXNG is not started; empty must not fail the process.
+      SEARXNG_URL: z.preprocess(
+        (value) => (value === '' || value === null ? undefined : value),
+        z.string().url().optional(),
+      ),
       /**
        * Length at which a function-call tool name is compressed to an opaque
        * `MD5HASH_…` (OpenAI caps function names at 64). `0` disables

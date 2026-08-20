@@ -172,6 +172,8 @@ compose() {
   if [[ "${DEPLOY_PROFILE}" == 'full' ]]; then
     docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile full "$@"
   else
+    # core profile: do not start SearXNG. Empty SEARXNG_URL is expected;
+    # packages/env treats '' as unset so the app does not 500.
     SEARXNG_URL='' docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
   fi
 }
