@@ -1,10 +1,13 @@
 import { AGENT_RUNTIME_ERROR_SET, type ChatCompletionErrorPayload } from '@lobechat/model-runtime';
 import { ChatErrorType, type ModelTokensUsage } from '@lobechat/types';
-
 import { eq } from 'drizzle-orm';
 
 import { checkAuth } from '@/app/(backend)/middleware/auth';
-import { InsufficientBalanceError, chargeAfterChat, chargeBeforeChat } from '@/business/server/chat-billing';
+import {
+  chargeAfterChat,
+  chargeBeforeChat,
+  InsufficientBalanceError,
+} from '@/business/server/chat-billing';
 import { users } from '@/database/schemas';
 import { createTraceOptions, initModelRuntimeFromDB } from '@/server/modules/ModelRuntime';
 import { type ChatStreamPayload } from '@/types/openai/chat';
@@ -45,6 +48,9 @@ export const POST = checkAuth(async (req: Request, { params, userId, serverDB })
     // ============  3. billing: pre-flight hold  ============ //
     // Determines BYOK vs platform; if platform, atomically reserves credits.
     // Throws InsufficientBalanceError if balance < estimate.
+    // Platform admin/env keys are not BYOK. Until we pass an explicit
+    // "user vault has apiKey" flag from initModelRuntimeFromDB, never mark
+    // BYOK here — otherwise platform proxy URLs look like user keys.
     const billingContext = await chargeBeforeChat({
       db: serverDB,
       estimatedPromptTokens: estimatePromptTokens(data),
@@ -53,7 +59,7 @@ export const POST = checkAuth(async (req: Request, { params, userId, serverDB })
       provider,
       requestId,
       userId,
-      userHasProviderKey: modelRuntime.baseURL !== undefined,
+      userHasProviderKey: false,
     });
 
     // ============  4. create chat completion  ============ //
