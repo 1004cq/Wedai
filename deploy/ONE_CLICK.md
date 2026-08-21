@@ -153,10 +153,26 @@ WEDAI_SEARXNG_IMAGE=searxng/searxng:2026.7.28-c01178d03
 WEDAI_BIND_ADDRESS=127.0.0.1
 APP_URL=https://chat.example.com
 AUTH_TRUSTED_ORIGINS=https://chat.example.com
-S3_ENDPOINT=https://files.example.com
+S3_ENDPOINT=http://rustfs:9000
+S3_PUBLIC_DOMAIN=https://chat.example.com
+S3_SET_ACL=1
+RUSTFS_LOBE_BUCKET=wedai
 ```
 
-将 `chat.example.com` 反向代理到 `127.0.0.1:3210`，将 `files.example.com` 反向代理到 `127.0.0.1:9000`。`S3_ENDPOINT` 必须能被用户浏览器访问，否则文件上传会失败。生产环境应启用 HTTPS，不要把 PostgreSQL、Redis 或 `9001` 管理端暴露到公网。
+将 `chat.example.com` 反向代理到 `127.0.0.1:3210`，并增加 bucket 路径反代（path-style 公网读）：
+
+```nginx
+location /wedai/ {
+    proxy_pass http://127.0.0.1:9000;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    client_max_body_size 100m;
+}
+```
+
+也可以单独用 `files.example.com` → `127.0.0.1:9000`，并设 `S3_ENDPOINT=https://files.example.com`、`S3_SET_ACL=0`（预签名）。生产环境应启用 HTTPS，不要把 PostgreSQL、Redis 或 `9001` 管理端暴露到公网。
 
 ## 8. 常用命令
 
