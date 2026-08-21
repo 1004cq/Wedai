@@ -82,7 +82,7 @@ describe('settings useCategory', () => {
     expect(keys).not.toContain(SettingsTabs.Provider);
   });
 
-  it('hides ServiceModel for non-admins when commercial BYOK is locked', () => {
+  it('hides ServiceModel for everyone when commercial BYOK is locked', () => {
     useUserStore.setState({
       user: { id: 'u1', role: 'user' },
     } as any);
@@ -97,7 +97,7 @@ describe('settings useCategory', () => {
     expect(keys).not.toContain(SettingsTabs.Provider);
   });
 
-  it('keeps ServiceModel for admins when commercial BYOK is locked', () => {
+  it('hides ServiceModel for admins when commercial BYOK is locked', () => {
     useUserStore.setState({
       user: { id: 'admin-1', role: 'admin' },
     } as any);
@@ -108,7 +108,7 @@ describe('settings useCategory', () => {
 
     const keys = result.current.flatMap((group) => group.items.map((item) => item.key));
 
-    expect(keys).toContain(SettingsTabs.ServiceModel);
+    expect(keys).not.toContain(SettingsTabs.ServiceModel);
     expect(keys).not.toContain(SettingsTabs.Provider);
   });
 

@@ -10,7 +10,8 @@ import { userProfileSelectors } from '@/store/user/slices/auth/selectors';
  * Commercial AI configuration visibility.
  *
  * - Provider menu follows `showProvider` (forced off when BYOK_ALLOWED=false).
- * - Service Model: under business + BYOK lock, only site admins may open it;
+ * - Service Model is removed from personal settings when BYOK is locked;
+ *   platform keys are configured via `/admin/providers` (env), not this UI.
  *   OSS / BYOK-enabled builds keep the existing open behavior.
  */
 export const usePlatformAiSettingsAccess = () => {
@@ -20,7 +21,7 @@ export const usePlatformAiSettingsAccess = () => {
   const isAdmin = role === 'admin';
 
   const platformAiLocked = enableBusinessFeatures && !showProvider;
-  const showServiceModel = !platformAiLocked || isAdmin;
+  const showServiceModel = !platformAiLocked;
 
   return {
     isAdmin,
