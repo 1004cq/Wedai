@@ -32,6 +32,7 @@ import {
 } from '@lobechat/types';
 import { errorCauseFrom } from '@lobechat/utils';
 import { TRPCError } from '@trpc/server';
+import { eq } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 
@@ -45,6 +46,7 @@ import { RbacModel } from '@/database/models/rbac';
 import { SessionModel } from '@/database/models/session';
 import { UserModel } from '@/database/models/user';
 import { UserPersonaModel } from '@/database/models/userMemory/persona';
+import { users } from '@/database/schemas';
 import { authedProcedure, router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
 import { KeyVaultsGateKeeper } from '@/server/modules/KeyVaultsEncrypt';
@@ -59,6 +61,11 @@ import { OnboardingService } from '@/server/services/onboarding';
 import { createTaskRecommendationService } from '@/server/services/taskRecommendation/service';
 import { understandingProviders } from '@/server/services/understanding/providers';
 import { createUnderstandingService } from '@/server/services/understanding/service';
+import {
+  assertByokWritesAllowed,
+  assertPlatformAiSettingsWritable,
+  isByokAllowed,
+} from '@/server/utils/byokPolicy';
 import { after } from '@/server/utils/scheduleAfterResponse';
 
 const usernameSchema = z
@@ -352,6 +359,7 @@ export const userRouter = router({
       lastName: state.lastName,
       onboarding: state.onboarding,
       preference: state.preference as UserPreference,
+      role: state.role,
       settings: state.settings,
       userId: ctx.userId,
       username: state.username,
@@ -709,6 +717,22 @@ export const userRouter = router({
 
   updateSettings: userProcedure.input(UserSettingsSchema).mutation(async ({ ctx, input }) => {
     const { keyVaults, ...res } = input as Partial<UserSettings>;
+
+    if (keyVaults) {
+      assertByokWritesAllowed();
+    }
+
+    const touchesPlatformAiDefaults = Boolean(
+      res.systemAgent || res.defaultAgent || res.languageModel,
+    );
+    if (touchesPlatformAiDefaults && !isByokAllowed()) {
+      const [row] = await ctx.serverDB
+        .select({ role: users.role })
+        .from(users)
+        .where(eq(users.id, ctx.userId))
+        .limit(1);
+      assertPlatformAiSettingsWritable(row?.role);
+    }
 
     if (ctx.workspaceId && (hasOwnerSettingChange(res) || hasMemberSettingChange(res))) {
       const rbac = new RbacModel(ctx.serverDB, ctx.userId);

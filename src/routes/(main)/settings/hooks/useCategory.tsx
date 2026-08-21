@@ -29,6 +29,7 @@ import {
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { usePlatformAiSettingsAccess } from '@/hooks/usePlatformAiSettingsAccess';
 import { useElectronStore } from '@/store/electron';
 import { electronSyncSelectors } from '@/store/electron/selectors';
 import { SettingsTabs } from '@/store/global/initialState';
@@ -71,6 +72,7 @@ export const useCategory = () => {
   const { t: tSubscription } = useTranslation('subscription');
   const mobile = useServerConfigStore((s) => s.isMobile);
   const { hideDocs, showApiKeyManage, showProvider } = useServerConfigStore(featureFlagsSelectors);
+  const { showServiceModel } = usePlatformAiSettingsAccess();
   const [avatar, username] = useUserStore((s) => [
     userProfileSelectors.userAvatar(s),
     userProfileSelectors.nickName(s),
@@ -158,7 +160,7 @@ export const useCategory = () => {
         key: SettingsTabs.Provider,
         label: t('tab.provider'),
       },
-      {
+      showServiceModel && {
         icon: Sparkles,
         key: SettingsTabs.ServiceModel,
         label: t('tab.serviceModel'),
@@ -273,6 +275,7 @@ export const useCategory = () => {
     mobile,
     showApiKeyManage,
     showProvider,
+    showServiceModel,
     isDevMode,
     enableOAuthApps,
     avatarUrl,

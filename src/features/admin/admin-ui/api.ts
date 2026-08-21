@@ -15,17 +15,16 @@
  * The ForbiddenBanner component renders this as an explicit UI state rather
  * than a silent empty list.
  */
+import { lambdaClient } from '@/libs/trpc/client';
+
 import type {
   AdminModelPrice,
   AdminOrderRow,
   AdminUserRow,
-  AuditListQuery,
   OrderListQuery,
   PagedResult,
   SetUserBanInput,
 } from './types';
-
-import { lambdaClient } from '@/libs/trpc/client';
 
 // ─── cursor-based → page-based bridge ────────────────────────────────────────
 // The backend uses cursor pagination (offset-based cursor = (page-1)*pageSize).
@@ -52,9 +51,10 @@ async function listUsers(query: {
     nextCursor: res.nextCursor,
     page: query.page,
     pageSize: query.pageSize,
-    total: res.nextCursor !== null
-      ? cursor + res.items.length + 1   // at least one more page
-      : cursor + res.items.length,
+    total:
+      res.nextCursor !== null
+        ? cursor + res.items.length + 1 // at least one more page
+        : cursor + res.items.length,
   } as any;
 }
 
@@ -85,9 +85,7 @@ async function listOrders(query: OrderListQuery): Promise<PagedResult<AdminOrder
     nextCursor: res.nextCursor,
     page: query.page,
     pageSize: query.pageSize,
-    total: res.nextCursor !== null
-      ? cursor + res.items.length + 1
-      : cursor + res.items.length,
+    total: res.nextCursor !== null ? cursor + res.items.length + 1 : cursor + res.items.length,
   } as any;
 }
 
@@ -134,6 +132,12 @@ async function archivePrice(id: string): Promise<void> {
   await lambdaClient.admin.pricing.archive.mutate({ id });
 }
 
+// ─── System config status ─────────────────────────────────────────────────────
+
+async function getConfigStatus() {
+  return lambdaClient.admin.config.status.query();
+}
+
 // ─── Adjustments ─────────────────────────────────────────────────────────────
 
 async function creditBalance(input: {
@@ -160,6 +164,7 @@ export const adminApi = {
   archivePrice,
   creditBalance,
   debitBalance,
+  getConfigStatus,
   getOrder,
   getUser,
   listLedger,
@@ -184,12 +189,12 @@ function mapUser(row: {
   createdAt: Date;
 }): AdminUserRow {
   return {
-    balanceCredits: 0,           // populated lazily by getUser when detail is needed
+    balanceCredits: 0, // populated lazily by getUser when detail is needed
     email: row.email ?? undefined,
     id: row.id,
     lastActiveAt: row.createdAt.toISOString(),
     nickname: row.fullName ?? row.username ?? row.email ?? row.id,
-    plan: 'free',                // plan not returned by list endpoint
+    plan: 'free', // plan not returned by list endpoint
     registeredAt: row.createdAt.toISOString(),
     role: (row.role as AdminUserRow['role']) ?? 'user',
     status: row.banned ? 'banned' : 'active',

@@ -33,4 +33,16 @@ describe('admin mobile containment markers', () => {
     expect(text).toContain('adminMobileListStyles.card');
     expect(text).toContain('AdminScrollSurface');
   });
+
+  it('ProvidersPage is wired as a read-only LLM env status surface', () => {
+    const page = readFileSync(path.resolve(here, 'pages/ProvidersPage.tsx'), 'utf8');
+    const layout = readFileSync(path.resolve(here, 'components/AdminLayout.tsx'), 'utf8');
+    const app = readFileSync(path.resolve(here, 'AdminApp.tsx'), 'utf8');
+
+    expect(page).toContain('getConfigStatus');
+    expect(page).toContain('永不回显密钥明文');
+    expect(layout).toContain('/admin/providers');
+    expect(layout).toContain('system:llm:config');
+    expect(app).toContain('ProvidersPage');
+  });
 });

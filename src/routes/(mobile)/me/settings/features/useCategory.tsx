@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next';
 
 import { type CellProps } from '@/components/Cell';
 import { useWorkspaceAwareNavigate } from '@/features/Workspace/useWorkspaceAwareNavigate';
+import { usePlatformAiSettingsAccess } from '@/hooks/usePlatformAiSettingsAccess';
 import { SettingsTabs } from '@/store/global/initialState';
 import {
   featureFlagsSelectors,
@@ -55,6 +56,7 @@ export const useCategory = (): CategoryGroup[] => {
   const navigate = useWorkspaceAwareNavigate();
   const { t } = useTranslation(['setting', 'auth', 'subscription']);
   const { hideDocs, showApiKeyManage, showProvider } = useServerConfigStore(featureFlagsSelectors);
+  const { showServiceModel } = usePlatformAiSettingsAccess();
   const enableBusinessFeatures = useServerConfigStore(serverConfigSelectors.enableBusinessFeatures);
   const isDevMode = useUserStore((s) => userGeneralSettingsSelectors.config(s).isDevMode);
   const enableOAuthApps = useUserStore(labPreferSelectors.enableOAuthApps);
@@ -109,11 +111,12 @@ export const useCategory = (): CategoryGroup[] => {
       // non-LobeHub providers, and desktop users often bring their own API keys.
       showProvider &&
         makeItem({ icon: Brain, key: SettingsTabs.Provider, label: t('setting:tab.provider') }),
-      makeItem({
-        icon: Sparkles,
-        key: SettingsTabs.ServiceModel,
-        label: t('setting:tab.serviceModel'),
-      }),
+      showServiceModel &&
+        makeItem({
+          icon: Sparkles,
+          key: SettingsTabs.ServiceModel,
+          label: t('setting:tab.serviceModel'),
+        }),
       makeItem({ icon: SkillsIcon, key: SettingsTabs.Skill, label: t('setting:tab.skill') }),
       makeItem({ icon: Blocks, key: SettingsTabs.Connector, label: t('setting:tab.connector') }),
       makeItem({ icon: BrainCircuit, key: SettingsTabs.Memory, label: t('setting:tab.memory') }),
@@ -164,6 +167,7 @@ export const useCategory = (): CategoryGroup[] => {
     hideDocs,
     showApiKeyManage,
     showProvider,
+    showServiceModel,
     isDevMode,
     enableOAuthApps,
     navigate,

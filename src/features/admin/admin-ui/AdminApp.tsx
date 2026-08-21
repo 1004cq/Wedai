@@ -10,6 +10,7 @@ import { EmailConfigPage } from './pages/EmailConfigPage';
 import { OrdersPage } from './pages/OrdersPage';
 import { PaymentConfigPage } from './pages/PaymentConfigPage';
 import { PricesPage } from './pages/PricesPage';
+import { ProvidersPage } from './pages/ProvidersPage';
 import { SmsConfigPage } from './pages/SmsConfigPage';
 import { UsersPage } from './pages/UsersPage';
 
@@ -45,6 +46,14 @@ export const AdminApp = () => (
         element={
           <AdminGuard permission={'billing:price:read'}>
             <PricesPage />
+          </AdminGuard>
+        }
+      />
+      <Route
+        path={'providers'}
+        element={
+          <AdminGuard permission={'system:llm:config'}>
+            <ProvidersPage />
           </AdminGuard>
         }
       />

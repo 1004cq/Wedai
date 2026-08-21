@@ -26,7 +26,7 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-const createWrapper = (showProvider: boolean) => {
+const createWrapper = (showProvider: boolean, enableBusinessFeatures = false) => {
   const Wrapper = ({ children }: { children: ReactNode }) => (
     <Provider
       createStore={() =>
@@ -36,6 +36,11 @@ const createWrapper = (showProvider: boolean) => {
               provider_settings: true,
             }),
             showProvider,
+          },
+          serverConfig: {
+            aiProvider: {},
+            enableBusinessFeatures,
+            telemetry: {},
           },
         })
       }
@@ -74,6 +79,36 @@ describe('settings useCategory', () => {
 
     const keys = result.current.flatMap((group) => group.items.map((item) => item.key));
 
+    expect(keys).not.toContain(SettingsTabs.Provider);
+  });
+
+  it('hides ServiceModel for non-admins when commercial BYOK is locked', () => {
+    useUserStore.setState({
+      user: { id: 'u1', role: 'user' },
+    } as any);
+
+    const { result } = renderHook(() => useCategory(), {
+      wrapper: createWrapper(false, true),
+    });
+
+    const keys = result.current.flatMap((group) => group.items.map((item) => item.key));
+
+    expect(keys).not.toContain(SettingsTabs.ServiceModel);
+    expect(keys).not.toContain(SettingsTabs.Provider);
+  });
+
+  it('keeps ServiceModel for admins when commercial BYOK is locked', () => {
+    useUserStore.setState({
+      user: { id: 'admin-1', role: 'admin' },
+    } as any);
+
+    const { result } = renderHook(() => useCategory(), {
+      wrapper: createWrapper(false, true),
+    });
+
+    const keys = result.current.flatMap((group) => group.items.map((item) => item.key));
+
+    expect(keys).toContain(SettingsTabs.ServiceModel);
     expect(keys).not.toContain(SettingsTabs.Provider);
   });
 

@@ -13,6 +13,7 @@ import {
   getOAuthService,
   GithubCopilotOAuthService,
 } from '@/server/services/oauthDeviceFlow/providers/githubCopilot';
+import { assertByokWritesAllowed } from '@/server/utils/byokPolicy';
 
 const oauthProcedure = wsCompatProcedure.use(serverDatabase).use(async (opts) => {
   const { ctx } = opts;
@@ -110,6 +111,7 @@ export const oauthDeviceFlowRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      assertByokWritesAllowed();
       const config = getOAuthConfig(input.providerId);
 
       if (!config) {
@@ -191,6 +193,7 @@ export const oauthDeviceFlowRouter = router({
   revokeAuth: oauthWriteProcedure
     .input(z.object({ providerId: z.string() }))
     .mutation(async ({ input, ctx }) => {
+      assertByokWritesAllowed();
       // Clear OAuth tokens and user info from keyVaults
       await ctx.aiProviderModel.updateConfig(
         input.providerId,

@@ -1401,6 +1401,11 @@ When I am ___, I need ___
   'tab.proxy': 'Proxy',
   'tab.security': 'Security',
   'tab.serviceModel': 'Service Model',
+  'platformAi.adminOnly.title': 'Configured by administrator',
+  'platformAi.adminOnly.desc':
+    'AI providers and service models are managed centrally. Contact an admin if you need a different model.',
+  'platformAi.adminManaged.desc':
+    'User bring-your-own-key is disabled. Changes here apply as platform defaults for all users.',
   'tab.skill': 'Skills',
   'tab.skillDesc': 'Manage your connected skills and integrations',
   'tab.skillDetail': 'Skill Details',

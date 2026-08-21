@@ -131,6 +131,28 @@ describe('aiProviderRouter', () => {
         mockGateKeeper.encrypt,
       );
     });
+
+    it('should reject create when BYOK_ALLOWED=false', async () => {
+      const previous = process.env.BYOK_ALLOWED;
+      process.env.BYOK_ALLOWED = 'false';
+      const mockCreate = vi.fn();
+      vi.mocked(AiProviderModel).prototype.create = mockCreate;
+
+      try {
+        const caller = aiProviderRouter.createCaller(createMockContext());
+        await expect(
+          caller.createAiProvider({
+            id: mockProviderId,
+            name: 'Test Provider',
+            source: 'custom',
+          }),
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        expect(mockCreate).not.toHaveBeenCalled();
+      } finally {
+        if (previous === undefined) delete process.env.BYOK_ALLOWED;
+        else process.env.BYOK_ALLOWED = previous;
+      }
+    });
   });
 
   describe('getAiProviderById', () => {
@@ -317,6 +339,27 @@ describe('aiProviderRouter', () => {
         mockGateKeeper.encrypt,
         KeyVaultsGateKeeper.getUserKeyVaults,
       );
+    });
+
+    it('should reject config updates when BYOK_ALLOWED=false', async () => {
+      const previous = process.env.BYOK_ALLOWED;
+      process.env.BYOK_ALLOWED = 'false';
+      const mockUpdateConfig = vi.fn();
+      vi.mocked(AiProviderModel).prototype.updateConfig = mockUpdateConfig;
+
+      try {
+        const caller = aiProviderRouter.createCaller(createMockContext());
+        await expect(
+          caller.updateAiProviderConfig({
+            id: mockProviderId,
+            value: { keyVaults: { apiKey: 'sk-user' } },
+          }),
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        expect(mockUpdateConfig).not.toHaveBeenCalled();
+      } finally {
+        if (previous === undefined) delete process.env.BYOK_ALLOWED;
+        else process.env.BYOK_ALLOWED = previous;
+      }
     });
   });
 

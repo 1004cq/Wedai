@@ -121,6 +121,11 @@ export interface LobeUser {
   id: string;
   interests?: string[];
   latestName?: string | null;
+  /**
+   * Site-level role from `users.role` (e.g. `admin`).
+   * Used for commercial UI gates; every mutation still re-checks on the server.
+   */
+  role?: string | null;
   username?: string | null;
 }
 
@@ -275,6 +280,8 @@ export interface UserInitializationState {
    * Referral lifecycle status for the current user (invitee side).
    */
   referralStatus?: ReferralStatusString;
+  /** Site-level role from `users.role` (e.g. `admin`). */
+  role?: string | null;
   settings: PartialDeep<UserSettings>;
   subscriptionPlan?: Plans;
   userId?: string;

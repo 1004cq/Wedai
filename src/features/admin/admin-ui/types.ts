@@ -12,6 +12,7 @@ export type AdminPermission =
   | 'billing:webhook:read'
   | 'role:assign'
   | 'system:email:config'
+  | 'system:llm:config'
   | 'system:sms:config'
   | 'user:ban'
   | 'user:read'

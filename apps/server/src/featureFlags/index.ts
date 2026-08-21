@@ -86,10 +86,21 @@ const getMergedFeatureFlags = async (userId?: string) => {
 
   // Shared runtime config can contain production allowlists even in local development.
   // Apply development defaults after the global snapshot; user-specific overrides below still win.
-  const globalFlags = applyDevelopmentFeatureFlagDefaults(
+  let globalFlags = applyDevelopmentFeatureFlagDefaults(
     merge(DEFAULT_FEATURE_FLAGS, globalSnapshot?.data || {}),
     globalSnapshot?.data,
   );
+
+  // Commercial lock-down: when BYOK is disabled, hide user-facing provider / key settings
+  // regardless of FEATURE_FLAGS so UI and billing policy stay aligned.
+  if (process.env.BYOK_ALLOWED === 'false') {
+    globalFlags = {
+      ...globalFlags,
+      openai_api_key: false,
+      openai_proxy_url: false,
+      provider_settings: false,
+    };
+  }
 
   if (!userId) {
     return globalFlags;
@@ -104,7 +115,18 @@ const getMergedFeatureFlags = async (userId?: string) => {
     return globalFlags;
   }
 
-  return merge(globalFlags, userOverrideSnapshot.data as Partial<IFeatureFlags>);
+  let merged = merge(globalFlags, userOverrideSnapshot.data as Partial<IFeatureFlags>);
+
+  if (process.env.BYOK_ALLOWED === 'false') {
+    merged = {
+      ...merged,
+      openai_api_key: false,
+      openai_proxy_url: false,
+      provider_settings: false,
+    };
+  }
+
+  return merged;
 };
 
 /**
