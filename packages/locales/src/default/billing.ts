@@ -21,9 +21,15 @@ export default {
   'credits.title': 'Credits & Balance',
 
   // Plans page
+  'plans.buy': 'Buy',
+  'plans.creditsOnce': 'credits',
+  'plans.creditsPerMonth': 'credits / mo',
   'plans.current': 'Current',
   'plans.currentPlan': 'Current plan',
+  'plans.free': 'Free',
   'plans.noPlans': 'No plans available yet.',
+  'plans.oneTime': 'one-time',
+  'plans.perMonth': 'mo',
   'plans.renewsOn': 'renews',
   'plans.subscribe': 'Subscribe',
   'plans.title': 'Choose a Plan',

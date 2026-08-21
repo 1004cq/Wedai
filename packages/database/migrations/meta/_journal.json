@@ -966,6 +966,13 @@
       "when": 1785648314270,
       "tag": "0137_system_llm_providers",
       "breakpoints": true
+    },
+    {
+      "idx": 138,
+      "version": "7",
+      "when": 1785648315270,
+      "tag": "0138_wedai_plans_catalog",
+      "breakpoints": true
     }
   ],
   "version": "6"

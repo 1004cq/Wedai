@@ -176,6 +176,9 @@ const Plans: FC = () => {
             const isCurrent = activeSub?.plan?.id === plan.id;
             const price = plan.prices[0];
             const isCreating = creatingPriceId === price?.id;
+            const isOneTime = price?.billingInterval === 'one_time';
+            const isFree = Number(price?.amountMinor ?? 0) === 0;
+            const grant = Number(plan.tokenGrantMonthly ?? 0);
 
             return (
               <div className={styles.card} key={plan.id} style={{ flex: '1 1 220px' }}>
@@ -186,10 +189,16 @@ const Plans: FC = () => {
 
                 {price && (
                   <p className={styles.price}>
-                    {price.currency} {(Number(price.amountMinor) / 100).toFixed(2)}
+                    ¥
+                    {(Number(price.amountMinor) / 100).toFixed(
+                      Number(price.amountMinor) % 100 === 0 ? 0 : 1,
+                    )}
                     <span style={{ fontSize: 13, fontWeight: 400, opacity: 0.6 }}>
-                      {' / '}
-                      {price.billingInterval}
+                      {isOneTime
+                        ? ` · ${t('plans.oneTime')}`
+                        : isFree
+                          ? ''
+                          : ` / ${t('plans.perMonth')}`}
                     </span>
                   </p>
                 )}
@@ -198,23 +207,29 @@ const Plans: FC = () => {
                   <p style={{ fontSize: 13, opacity: 0.7 }}>{plan.description}</p>
                 )}
 
-                {plan.tokenGrantMonthly && Number(plan.tokenGrantMonthly) > 0 && (
+                {grant > 0 && (
                   <p style={{ fontSize: 13 }}>
                     <span className={styles.badge}>
-                      {(Number(plan.tokenGrantMonthly) / 1_000_000).toFixed(1)}M{' '}
-                      {t('plans.tokensPerMonth')}
+                      {grant.toLocaleString()}{' '}
+                      {isOneTime ? t('plans.creditsOnce') : t('plans.creditsPerMonth')}
                     </span>
                   </p>
                 )}
 
                 <Button
-                  disabled={isCurrent || !price || !!creatingPriceId}
+                  disabled={isCurrent || !price || isFree || !!creatingPriceId}
                   loading={isCreating}
                   size="small"
-                  type={isCurrent ? 'default' : 'primary'}
+                  type={isCurrent || isFree ? 'default' : 'primary'}
                   onClick={() => price && handleSubscribe(price.id)}
                 >
-                  {isCurrent ? t('plans.current') : t('plans.subscribe')}
+                  {isCurrent
+                    ? t('plans.current')
+                    : isFree
+                      ? t('plans.free')
+                      : isOneTime
+                        ? t('plans.buy')
+                        : t('plans.subscribe')}
                 </Button>
               </div>
             );
