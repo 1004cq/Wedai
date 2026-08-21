@@ -2,9 +2,10 @@
 
 import { Flexbox } from '@lobehub/ui';
 import { memo } from 'react';
-import { Outlet, useParams } from 'react-router';
+import { Navigate, Outlet, useParams } from 'react-router';
 
 import { useWorkspaceAwareNavigate } from '@/features/Workspace/useWorkspaceAwareNavigate';
+import { usePlatformAiSettingsAccess } from '@/hooks/usePlatformAiSettingsAccess';
 
 import DesktopLayoutContainer from './_layout/Desktop/Container';
 import ProviderDetailPageComponent from './detail';
@@ -13,6 +14,11 @@ import ProviderMenu from './ProviderMenu';
 // Layout component that wraps provider pages with navigation
 export const ProviderLayout = memo(() => {
   const navigate = useWorkspaceAwareNavigate();
+  const { showProvider } = usePlatformAiSettingsAccess();
+
+  if (!showProvider) {
+    return <Navigate replace to={'/settings'} />;
+  }
 
   const handleProviderSelect = (providerKey: string) => {
     navigate(`/settings/provider/${providerKey}`);
@@ -40,6 +46,11 @@ ProviderLayout.displayName = 'ProviderLayout';
 export const ProviderDetailPage = memo(() => {
   const params = useParams<{ providerId: string }>();
   const navigate = useWorkspaceAwareNavigate();
+  const { showProvider } = usePlatformAiSettingsAccess();
+
+  if (!showProvider) {
+    return <Navigate replace to={'/settings'} />;
+  }
 
   const handleProviderSelect = (providerKey: string) => {
     navigate(`/settings/provider/${providerKey}`);
@@ -62,6 +73,11 @@ type ProviderPageType = {
 
 const ProviderPage = (props: ProviderPageType) => {
   const { mobile } = props;
+  const { showProvider } = usePlatformAiSettingsAccess();
+
+  if (!showProvider) {
+    return <Navigate replace to={'/settings'} />;
+  }
 
   // For mobile or when used via SettingsContent, use the old Page component
   // This is a fallback for non-router usage

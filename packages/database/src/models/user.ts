@@ -114,6 +114,7 @@ export class UserModel {
         lastName: users.lastName,
         onboarding: users.onboarding,
         preference: users.preference,
+        role: users.role,
         settingsDefaultAgent: userSettings.defaultAgent,
 
         settingsGeneral: userSettings.general,
@@ -175,6 +176,7 @@ export class UserModel {
       lastName: state.lastName || undefined,
       onboarding: state.onboarding || undefined,
       preference: state.preference as UserPreference,
+      role: state.role || undefined,
       settings,
       userId: this.userId,
       username: state.username || undefined,

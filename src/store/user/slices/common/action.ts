@@ -140,6 +140,7 @@ export class CommonActionImpl {
                     id: data.userId,
                     interests: data.interests,
                     latestName: data.lastName,
+                    role: data.role,
                     username: data.username,
                   } as LobeUser)
                 : this.#get().user;

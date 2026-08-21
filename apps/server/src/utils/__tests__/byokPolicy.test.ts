@@ -3,8 +3,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   assertByokWritesAllowed,
+  assertPlatformAiSettingsWritable,
   BYOK_WRITES_DISABLED_MESSAGE,
   isByokAllowed,
+  PLATFORM_AI_ADMIN_ONLY_MESSAGE,
 } from '../byokPolicy';
 
 describe('byokPolicy', () => {
@@ -39,6 +41,21 @@ describe('byokPolicy', () => {
       expect(error).toBeInstanceOf(TRPCError);
       expect((error as TRPCError).code).toBe('FORBIDDEN');
       expect((error as TRPCError).message).toBe(BYOK_WRITES_DISABLED_MESSAGE);
+    }
+  });
+
+  it('allows platform AI defaults for admins when BYOK is off', () => {
+    process.env.BYOK_ALLOWED = 'false';
+    expect(() => assertPlatformAiSettingsWritable('admin')).not.toThrow();
+  });
+
+  it('rejects platform AI defaults for non-admins when BYOK is off', () => {
+    process.env.BYOK_ALLOWED = 'false';
+    expect(() => assertPlatformAiSettingsWritable('user')).toThrow(TRPCError);
+    try {
+      assertPlatformAiSettingsWritable(undefined);
+    } catch (error) {
+      expect((error as TRPCError).message).toBe(PLATFORM_AI_ADMIN_ONLY_MESSAGE);
     }
   });
 });
