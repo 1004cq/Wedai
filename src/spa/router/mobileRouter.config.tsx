@@ -164,6 +164,16 @@ export const sharedMainAreaChildren: RouteObject[] = [
           {
             element: dynamicElement(
               () =>
+                import('@/routes/(main)/community/(detail)/group_agent').then(
+                  (m) => m.MobileGroupAgentDetailPage,
+                ),
+              'Mobile > Discover > Detail > Group Agent',
+            ),
+            path: 'group_agent/:slug',
+          },
+          {
+            element: dynamicElement(
+              () =>
                 import('@/routes/(main)/community/(detail)/model').then((m) => m.MobileModelPage),
               'Mobile > Discover > Detail > Model',
             ),
