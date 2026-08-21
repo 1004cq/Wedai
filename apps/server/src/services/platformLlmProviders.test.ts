@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   mergeLlmCredentialUpdate,
   mergePlatformCredentialsIntoKeyVaults,
-} from '../platformLlmProviders';
+} from './platformLlmProviders';
 
 describe('mergeLlmCredentialUpdate', () => {
   it('skips empty secret fields and clears on clearSecrets', () => {
