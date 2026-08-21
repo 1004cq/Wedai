@@ -14,9 +14,9 @@ type Params = Promise<{ id: string }>;
  *
  * Features:
  * - Query database to get file record (without userId filter for public access)
- * - Resolve a browser-reachable object URL via FileService.getFullFileUrl
- *   (public S3_PUBLIC_DOMAIN when S3_SET_ACL=1, otherwise cached presigned URL)
- * - Return 302 redirect
+ * - Stream object bytes from storage via the server's S3 credentials
+ * - Return 200 with Content-Type so <img src="/f/..."> never depends on
+ *   browser-reachable S3 endpoints or cached 302 Location headers
  *
  * NOTE: This endpoint is intentionally unauthenticated. The proxy URL is
  * embedded in bare `<img>` tags, download links, and links shared to AI — none
@@ -39,6 +39,7 @@ export const GET = async (_req: Request, segmentData: { params: Params }) => {
     if (!file) {
       log('File not found: %s', id);
       return new Response('File not found', {
+        headers: { 'Cache-Control': 'private, no-store' },
         status: 404,
       });
     }
@@ -46,20 +47,28 @@ export const GET = async (_req: Request, segmentData: { params: Params }) => {
     // Create file service with file owner's userId
     const fileService = new FileService(db, file.userId);
 
-    // Prefer getFullFileUrl so commercial deploys with an internal S3_ENDPOINT
-    // (e.g. http://rustfs:9000) still redirect browsers to S3_PUBLIC_DOMAIN.
-    const redirectUrl = await fileService.getFullFileUrl(file.url);
-    if (!redirectUrl) {
-      log('Empty redirect URL for file: %s', id);
-      return new Response('File unavailable', { status: 404 });
-    }
-    log('File redirect URL resolved');
+    // Serve bytes through the app so commercial deploys with an internal
+    // S3_ENDPOINT (e.g. http://rustfs:9000) never require the browser to
+    // follow a redirect to an unreachable host. Also avoids sticky 302
+    // caches that previously pointed at rustfs.
+    const bytes = await fileService.getFileByteArray(file.url);
+    const contentType = file.fileType || 'application/octet-stream';
 
-    // Return 302 redirect
-    return Response.redirect(redirectUrl, 302);
+    log('File proxy streaming %s bytes (%s)', bytes.byteLength, contentType);
+
+    return new Response(bytes, {
+      headers: {
+        'Cache-Control': 'public, max-age=31536000, immutable',
+        'Content-Length': String(bytes.byteLength),
+        'Content-Type': contentType,
+        'X-Content-Type-Options': 'nosniff',
+      },
+      status: 200,
+    });
   } catch (error) {
     console.error('File proxy error:', error);
     return new Response('Internal server error', {
+      headers: { 'Cache-Control': 'private, no-store' },
       status: 500,
     });
   }
