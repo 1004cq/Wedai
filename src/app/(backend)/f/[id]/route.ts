@@ -14,7 +14,8 @@ type Params = Promise<{ id: string }>;
  *
  * Features:
  * - Query database to get file record (without userId filter for public access)
- * - Generate a temporary S3 presigned preview URL
+ * - Resolve a browser-reachable object URL via FileService.getFullFileUrl
+ *   (public S3_PUBLIC_DOMAIN when S3_SET_ACL=1, otherwise cached presigned URL)
  * - Return 302 redirect
  *
  * NOTE: This endpoint is intentionally unauthenticated. The proxy URL is
@@ -45,9 +46,14 @@ export const GET = async (_req: Request, segmentData: { params: Params }) => {
     // Create file service with file owner's userId
     const fileService = new FileService(db, file.userId);
 
-    // Web: Generate a cached S3 presigned URL, normalizing legacy full S3 URLs.
-    const redirectUrl = await fileService.createCachedPreSignedUrlForPreview(file.url);
-    log('Web S3 presigned URL generated');
+    // Prefer getFullFileUrl so commercial deploys with an internal S3_ENDPOINT
+    // (e.g. http://rustfs:9000) still redirect browsers to S3_PUBLIC_DOMAIN.
+    const redirectUrl = await fileService.getFullFileUrl(file.url);
+    if (!redirectUrl) {
+      log('Empty redirect URL for file: %s', id);
+      return new Response('File unavailable', { status: 404 });
+    }
+    log('File redirect URL resolved');
 
     // Return 302 redirect
     return Response.redirect(redirectUrl, 302);
