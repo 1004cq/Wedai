@@ -1,13 +1,11 @@
 'use client';
 
 import { memo } from 'react';
+import { Navigate } from 'react-router';
 
-import Category from './features/Category';
+/** Intermediate settings shell removed — entries live on `/me`. */
+const MeSettingsRedirect = memo(() => <Navigate replace to="/me" />);
 
-const MeSettingsPage = memo(() => {
-  return <Category />;
-});
+MeSettingsRedirect.displayName = 'MeSettingsRedirect';
 
-MeSettingsPage.displayName = 'MeSettingsPage';
-
-export default MeSettingsPage;
+export default MeSettingsRedirect;

@@ -1,13 +1,11 @@
 'use client';
 
 import { memo } from 'react';
+import { Navigate } from 'react-router';
 
-import Category from './features/Category';
+/** Intermediate account shell removed — entries live on `/me`. */
+const MeProfileRedirect = memo(() => <Navigate replace to="/me" />);
 
-const MeProfilePage = memo(() => {
-  return <Category />;
-});
+MeProfileRedirect.displayName = 'MeProfileRedirect';
 
-MeProfilePage.displayName = 'MeProfilePage';
-
-export default MeProfilePage;
+export default MeProfileRedirect;

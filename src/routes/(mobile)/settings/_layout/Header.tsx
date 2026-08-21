@@ -51,7 +51,7 @@ const Header = memo(() => {
     } else if (isProvider) {
       navigate('/settings/provider/all', { escape: true });
     } else {
-      navigate('/me/settings', { escape: true });
+      navigate('/me', { escape: true });
     }
   };
 

@@ -1,76 +1,154 @@
 import { act, renderHook } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { type ReactNode } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type * as ConstVersionModule from '@/const/version';
-import { ServerConfigStoreProvider } from '@/store/serverConfig/Provider';
+import { mapFeatureFlagsEnvToState } from '@/config/featureFlags';
+import { SettingsTabs } from '@/store/global/initialState';
+import { initServerConfigStore, Provider } from '@/store/serverConfig/store';
 import { useUserStore } from '@/store/user';
 
-import { useCategory } from '../features/useCategory';
+import { SettingsGroupKey } from '../../settings/features/useCategory';
+import { MeGroupKey, useCategory } from '../features/useCategory';
 
-const wrapper: React.JSXElementConstructor<{ children: React.ReactNode }> = ({ children }) => (
-  <ServerConfigStoreProvider>{children}</ServerConfigStoreProvider>
-);
+const navigate = vi.fn();
 
-// Mock dependencies
-const mockNavigate = vi.fn();
 vi.mock('react-router', () => ({
-  useNavigate: () => mockNavigate,
+  useNavigate: () => navigate,
 }));
 
 vi.mock('react-i18next', () => ({
-  useTranslation: vi.fn(() => ({
-    t: vi.fn((key) => key),
-  })),
+  useTranslation: () => ({
+    t: (key: string) => key,
+  }),
 }));
 
-// Mock version constants
-vi.mock('@/const/version', async (importOriginal) => {
-  const actual = await importOriginal<typeof ConstVersionModule>();
-  return {
-    ...actual,
-    isServerMode: false,
-  };
-});
+vi.mock('@/components/ChangelogModal', () => ({
+  openChangelogModal: vi.fn(),
+}));
+
+const createWrapper = (enableBusinessFeatures = true) => {
+  const Wrapper = ({ children }: { children: ReactNode }) => (
+    <Provider
+      createStore={() =>
+        initServerConfigStore({
+          featureFlags: {
+            ...mapFeatureFlagsEnvToState({
+              provider_settings: true,
+            }),
+            hideDocs: false,
+            showProvider: true,
+          },
+          serverConfig: {
+            aiProvider: {},
+            enableBusinessFeatures,
+            telemetry: {},
+          },
+        })
+      }
+    >
+      {children}
+    </Provider>
+  );
+
+  return Wrapper;
+};
+
+const initialUserStoreState = useUserStore.getState();
 
 afterEach(() => {
-  mockNavigate.mockReset();
+  navigate.mockReset();
+  useUserStore.setState(initialUserStoreState, true);
 });
 
-describe('useCategory', () => {
-  it('should return correct items when the user is logged in with authentication', () => {
+const flattenKeys = (groups: ReturnType<typeof useCategory>) =>
+  groups.flatMap((group) => group.items.map((item) => item.key));
+
+describe('me home useCategory', () => {
+  it('lifts settings entries onto Me without intermediate profile/settings shells', () => {
     act(() => {
       useUserStore.setState({ isSignedIn: true });
     });
 
-    const { result } = renderHook(() => useCategory(), { wrapper });
-
-    act(() => {
-      const items = result.current;
-      expect(items.some((item) => item.key === 'profile')).toBe(true);
-      expect(items.some((item) => item.key === 'setting')).toBe(true);
-      expect(items.some((item) => item.key === 'get-desktop-app')).toBe(false);
-      expect(items.some((item) => item.key === 'docs')).toBe(false);
-      expect(items.some((item) => item.key === 'feedback')).toBe(false);
-      expect(items.some((item) => item.key === 'changelog')).toBe(true);
+    const { result } = renderHook(() => useCategory(), {
+      wrapper: createWrapper(true),
     });
+
+    const groups = result.current;
+    const keys = flattenKeys(groups);
+
+    // No intermediate Me shells (old keys: profile/setting menu entries → /me/*)
+    expect(keys).not.toContain('setting');
+    expect(groups.map((g) => g.key)).not.toContain('setting');
+
+    // Account (remapped general)
+    expect(groups.find((g) => g.key === SettingsGroupKey.General)?.title).toBe(
+      'setting:group.profile',
+    );
+    expect(keys).toContain(SettingsTabs.Profile);
+    expect(keys).toContain(SettingsTabs.Stats);
+    expect(keys).toContain(SettingsTabs.Appearance);
+
+    // Deduped — profile/stats appear once
+    expect(keys.filter((k) => k === SettingsTabs.Profile)).toHaveLength(1);
+    expect(keys.filter((k) => k === SettingsTabs.Stats)).toHaveLength(1);
+
+    // Plans & billing
+    expect(keys).toContain(SettingsTabs.Plans);
+    expect(keys).toContain(SettingsTabs.Usage);
+    expect(keys).toContain(SettingsTabs.Credits);
+    expect(keys).toContain(SettingsTabs.Billing);
+    expect(keys).toContain(SettingsTabs.Referral);
+
+    // Agent
+    expect(keys).toContain(SettingsTabs.Skill);
+    expect(keys).toContain(SettingsTabs.Connector);
+    expect(keys).toContain(SettingsTabs.Memory);
+    expect(keys).toContain(SettingsTabs.Creds);
+
+    // System
+    expect(keys).toContain(SettingsTabs.Storage);
+    expect(keys).toContain(SettingsTabs.Advanced);
+    expect(keys).toContain(SettingsTabs.About);
+
+    // Other
+    const other = groups.find((g) => g.key === MeGroupKey.Other);
+    expect(other).toBeDefined();
+    expect(other?.items.map((i) => i.key)).toEqual(expect.arrayContaining(['changelog', 'logout']));
   });
 
-  it('should return correct items when the user is not logged in', () => {
+  it('navigates to atomic settings paths from lifted items', () => {
+    act(() => {
+      useUserStore.setState({ isSignedIn: true });
+    });
+
+    const { result } = renderHook(() => useCategory(), {
+      wrapper: createWrapper(true),
+    });
+
+    const credits = result.current
+      .flatMap((g) => g.items)
+      .find((item) => item.key === SettingsTabs.Credits);
+
+    expect(credits).toBeDefined();
+    act(() => {
+      credits?.onClick?.({} as any);
+    });
+    expect(navigate).toHaveBeenCalledWith(`/settings/${SettingsTabs.Credits}`);
+  });
+
+  it('when logged out, only keeps the Other group (changelog)', () => {
     act(() => {
       useUserStore.setState({ isSignedIn: false });
     });
 
-    const { result } = renderHook(() => useCategory(), { wrapper });
-
-    act(() => {
-      const items = result.current;
-      expect(items.some((item) => item.key === 'profile')).toBe(false);
-      expect(items.some((item) => item.key === 'setting')).toBe(false);
-      expect(items.some((item) => item.key === 'data')).toBe(false);
-      expect(items.some((item) => item.key === 'get-desktop-app')).toBe(false);
-      expect(items.some((item) => item.key === 'docs')).toBe(false);
-      expect(items.some((item) => item.key === 'feedback')).toBe(false);
-      expect(items.some((item) => item.key === 'changelog')).toBe(true);
+    const { result } = renderHook(() => useCategory(), {
+      wrapper: createWrapper(true),
     });
+
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].key).toBe(MeGroupKey.Other);
+    expect(flattenKeys(result.current)).toContain('changelog');
+    expect(flattenKeys(result.current)).not.toContain('logout');
+    expect(flattenKeys(result.current)).not.toContain(SettingsTabs.Credits);
   });
 });
