@@ -6,6 +6,7 @@ describe('Wedai admin permissions', () => {
   it('grants operational permissions to admin without role assignment', () => {
     expect(canRole('admin', 'admin:dashboard:read')).toBe(true);
     expect(canRole('admin', 'billing:payment:config')).toBe(true);
+    expect(canRole('admin', 'system:llm:config')).toBe(true);
     expect(canRole('admin', 'role:assign')).toBe(false);
   });
 

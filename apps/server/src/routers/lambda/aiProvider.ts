@@ -17,6 +17,7 @@ import { getServerGlobalConfig } from '@/server/globalConfig';
 import { KeyVaultsGateKeeper } from '@/server/modules/KeyVaultsEncrypt';
 import { initModelRuntimeFromDB } from '@/server/modules/ModelRuntime';
 import { getUserScopedAiProviderRuntimeState } from '@/server/services/aiProviderAccess';
+import { assertByokWritesAllowed } from '@/server/utils/byokPolicy';
 import { type AiProviderDetailItem, type AiProviderRuntimeState } from '@/types/aiProvider';
 import {
   CreateAiProviderSchema,
@@ -109,6 +110,7 @@ export const aiProviderRouter = router({
     .use(withScopedPermission('ai_provider:create'))
     .input(CreateAiProviderSchema)
     .mutation(async ({ input, ctx }) => {
+      assertByokWritesAllowed();
       try {
         const data = await ctx.aiProviderModel.create(input, ctx.gateKeeper.encrypt);
         return data?.id;
@@ -151,6 +153,7 @@ export const aiProviderRouter = router({
     .use(requireWorkspaceRoleWhenScoped('admin'))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
+      assertByokWritesAllowed();
       return ctx.aiProviderModel.delete(input.id);
     }),
 
@@ -163,6 +166,7 @@ export const aiProviderRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      assertByokWritesAllowed();
       if (isOfficialProvider(input.id) && input.enabled === false) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
@@ -183,6 +187,7 @@ export const aiProviderRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      assertByokWritesAllowed();
       return ctx.aiProviderModel.update(input.id, input.value);
     }),
 
@@ -196,6 +201,7 @@ export const aiProviderRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      assertByokWritesAllowed();
       return ctx.aiProviderModel.updateConfig(
         input.id,
         input.value,
@@ -217,6 +223,7 @@ export const aiProviderRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      assertByokWritesAllowed();
       return ctx.aiProviderModel.updateOrder(input.sortMap);
     }),
 });

@@ -59,6 +59,7 @@ import { OnboardingService } from '@/server/services/onboarding';
 import { createTaskRecommendationService } from '@/server/services/taskRecommendation/service';
 import { understandingProviders } from '@/server/services/understanding/providers';
 import { createUnderstandingService } from '@/server/services/understanding/service';
+import { assertByokWritesAllowed } from '@/server/utils/byokPolicy';
 import { after } from '@/server/utils/scheduleAfterResponse';
 
 const usernameSchema = z
@@ -709,6 +710,10 @@ export const userRouter = router({
 
   updateSettings: userProcedure.input(UserSettingsSchema).mutation(async ({ ctx, input }) => {
     const { keyVaults, ...res } = input as Partial<UserSettings>;
+
+    if (keyVaults) {
+      assertByokWritesAllowed();
+    }
 
     if (ctx.workspaceId && (hasOwnerSettingChange(res) || hasMemberSettingChange(res))) {
       const rbac = new RbacModel(ctx.serverDB, ctx.userId);

@@ -2,6 +2,7 @@
 
 import {
   AuditOutlined,
+  CloudServerOutlined,
   CreditCardOutlined,
   DashboardOutlined,
   MailOutlined,
@@ -117,6 +118,12 @@ const MENU_DEFINITIONS: AdminMenuDefinition[] = [
     label: '模型价格',
     path: '/admin/prices',
     permission: 'billing:price:read',
+  },
+  {
+    icon: <CloudServerOutlined />,
+    label: '模型服务商',
+    path: '/admin/providers',
+    permission: 'system:llm:config',
   },
   {
     icon: <CreditCardOutlined />,

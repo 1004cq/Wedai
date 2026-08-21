@@ -26,6 +26,17 @@ export const getServerFeatureFlagsValue = () => {
   const flags = parseFeatureFlag(env.FEATURE_FLAGS);
 
   const result = merge(DEFAULT_FEATURE_FLAGS, flags);
+
+  // Align with server runtime: BYOK off hides provider / key settings for all users.
+  if (process.env.BYOK_ALLOWED === 'false') {
+    return {
+      ...result,
+      openai_api_key: false,
+      openai_proxy_url: false,
+      provider_settings: false,
+    };
+  }
+
   return result;
 };
 

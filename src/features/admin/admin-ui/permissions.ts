@@ -13,6 +13,7 @@ export const ADMIN_PERMISSIONS = [
   'billing:webhook:read',
   'billing:payment:config',
   'system:email:config',
+  'system:llm:config',
   'system:sms:config',
   'admin:audit:read',
 ] as const satisfies readonly AdminPermission[];

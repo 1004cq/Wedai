@@ -623,6 +623,31 @@ describe('userRouter', () => {
       expect(mockGateKeeper.encrypt).toHaveBeenCalledWith(JSON.stringify(mockSettings.keyVaults));
     });
 
+    it('should reject keyVaults writes when BYOK_ALLOWED=false', async () => {
+      const previous = process.env.BYOK_ALLOWED;
+      process.env.BYOK_ALLOWED = 'false';
+
+      const mockUpdateSetting = vi.fn();
+      vi.mocked(UserModel).mockImplementation(
+        () =>
+          ({
+            updateSetting: mockUpdateSetting,
+          }) as any,
+      );
+
+      try {
+        await expect(
+          userRouter.createCaller({ ...mockCtx }).updateSettings({
+            keyVaults: { openai: { key: 'test-key' } },
+          }),
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        expect(mockUpdateSetting).not.toHaveBeenCalled();
+      } finally {
+        if (previous === undefined) delete process.env.BYOK_ALLOWED;
+        else process.env.BYOK_ALLOWED = previous;
+      }
+    });
+
     it('should update settings without key vaults', async () => {
       const mockSettings = {
         general: { language: 'en-US' },
