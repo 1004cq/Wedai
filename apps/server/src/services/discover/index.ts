@@ -570,8 +570,13 @@ export class DiscoverService {
       });
 
       if (!data) {
-        log('getAssistantDetail: assistant not found for identifier=%s', identifier);
-        return;
+        // Market M2M tokens can list agents but often cannot read detail (401).
+        // Fall back to the public assistant index so self-hosted community pages work.
+        log(
+          'getAssistantDetail: market returned empty for identifier=%s, falling back to legacy',
+          identifier,
+        );
+        return this.legacyGetAssistantDetail(rest);
       }
 
       const normalizedAuthor = this.normalizeAuthorField(data.author);
@@ -640,8 +645,11 @@ export class DiscoverService {
       log('getAssistantDetail: returning assistant with %d related items', result.related.length);
       return result;
     } catch (error) {
-      log('getAssistantDetail: error fetching from market SDK: %O', error);
-      return;
+      log(
+        'getAssistantDetail: market SDK failed (%O), falling back to legacy assistant store',
+        error,
+      );
+      return this.legacyGetAssistantDetail(rest);
     }
   };
 
@@ -785,13 +793,10 @@ export class DiscoverService {
       log('getAssistantList: error fetching from market SDK: %O', error);
       if (options.throwOnError) throw error;
 
-      return {
-        currentPage: page,
-        items: [],
-        pageSize,
-        totalCount: 0,
-        totalPages: 0,
-      };
+      // Self-hosted deployments often have M2M list auth issues; keep community
+      // browsable via the public assistant index instead of an empty page.
+      log('getAssistantList: falling back to legacy assistant store');
+      return this.legacyGetAssistantList(rest);
     }
   };
 

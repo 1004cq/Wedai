@@ -355,18 +355,18 @@ describe('DiscoverService', () => {
       ).rejects.toBe(marketError);
     });
 
-    it('getAssistantList should retain the empty fallback by default', async () => {
+    it('getAssistantList should fall back to legacy when market errors by default', async () => {
       mockMarket.agents.getAgentList.mockRejectedValue(new Error('Market unavailable'));
 
       const result = await service.getAssistantList({ q: 'assistant' });
 
-      expect(result).toEqual({
-        currentPage: 1,
-        items: [],
-        pageSize: 20,
-        totalCount: 0,
-        totalPages: 0,
-      });
+      expect(mockAssistantStore.getAgentIndex).toHaveBeenCalled();
+      expect(result.items.length).toBeGreaterThan(0);
+      expect(result.items[0]).toEqual(
+        expect.objectContaining({
+          identifier: expect.any(String),
+        }),
+      );
     });
 
     it('getAssistantDetail should fetch from market SDK by default', async () => {
@@ -383,6 +383,42 @@ describe('DiscoverService', () => {
           identifier: 'market-assistant-1',
           title: 'Market Assistant 1',
           related: expect.any(Array),
+        }),
+      );
+    });
+
+    it('getAssistantDetail should fall back to legacy when market detail is unauthorized', async () => {
+      mockMarket.agents.getAgentDetail.mockRejectedValue(
+        Object.assign(new Error('invalid_token'), { status: 401 }),
+      );
+
+      const result = await service.getAssistantDetail({
+        identifier: 'assistant-1',
+      });
+
+      expect(mockMarket.agents.getAgentDetail).toHaveBeenCalled();
+      expect(mockAssistantStore.getAgent).toHaveBeenCalledWith('assistant-1', 'en');
+      expect(result).toEqual(
+        expect.objectContaining({
+          identifier: 'assistant-1',
+          title: 'Test Assistant 1',
+          related: expect.any(Array),
+        }),
+      );
+    });
+
+    it('getAssistantDetail should fall back to legacy when market returns empty', async () => {
+      mockMarket.agents.getAgentDetail.mockResolvedValue(null);
+
+      const result = await service.getAssistantDetail({
+        identifier: 'assistant-2',
+      });
+
+      expect(mockAssistantStore.getAgent).toHaveBeenCalledWith('assistant-2', 'en');
+      expect(result).toEqual(
+        expect.objectContaining({
+          identifier: 'assistant-2',
+          title: 'Test Assistant 2',
         }),
       );
     });
