@@ -101,6 +101,18 @@ RUN --mount=type=cache,id=wedai-next-cache,target=/app/.next/cache,sharing=locke
     --mount=type=cache,id=wedai-turbo-cache,target=/app/.turbo,sharing=locked \
     npm run build:docker
 
+# Next NFT under pnpm can leave `@swc/helpers` with only a few `.cjs` files while
+# runtime resolves `esm/_interop_require_default.js`. Overwrite the traced copy
+# with the full package from the builder install.
+RUN set -e && \
+    HELPERS_SRC="$(find /app/node_modules/.pnpm -type d -path '*/node_modules/@swc/helpers' | head -n 1)" && \
+    HELPERS_DST="$(find /app/.next/standalone/node_modules/.pnpm -type d -path '*/node_modules/@swc/helpers' | head -n 1)" && \
+    test -n "${HELPERS_SRC}" && test -n "${HELPERS_DST}" && \
+    test -f "${HELPERS_SRC}/esm/_interop_require_default.js" && \
+    rm -rf "${HELPERS_DST}" && \
+    cp -a "${HELPERS_SRC}" "${HELPERS_DST}" && \
+    test -f "${HELPERS_DST}/esm/_interop_require_default.js"
+
 ## Application image, copy all the files for production
 FROM busybox:1.38.0-glibc AS app
 
