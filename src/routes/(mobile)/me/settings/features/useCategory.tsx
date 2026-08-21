@@ -9,7 +9,6 @@ import {
   CreditCard,
   Database,
   EllipsisIcon,
-  Gift,
   Info,
   KeyIcon,
   KeyRound,
@@ -98,11 +97,7 @@ export const useCategory = (): CategoryGroup[] => {
             key: SettingsTabs.Billing,
             label: t('subscription:tab.billing'),
           }),
-          makeItem({
-            icon: Gift,
-            key: SettingsTabs.Referral,
-            label: t('subscription:tab.referral'),
-          }),
+          // Referral rewards product is incomplete — hide menu entry; deep-link shows placeholder.
         ]
       : [];
 

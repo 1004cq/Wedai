@@ -14,7 +14,6 @@ import {
   EllipsisIcon,
   EthernetPort,
   FlaskConical,
-  Gift,
   Info,
   KeyboardIcon,
   KeyIcon,
@@ -141,7 +140,7 @@ export const useCategory = () => {
         { icon: ChartColumnBigIcon, key: SettingsTabs.Usage, label: t('tab.usage') },
         { icon: Coins, key: SettingsTabs.Credits, label: tSubscription('tab.credits') },
         { icon: CreditCard, key: SettingsTabs.Billing, label: tSubscription('tab.billing') },
-        { icon: Gift, key: SettingsTabs.Referral, label: tSubscription('tab.referral') },
+        // Referral rewards product is incomplete — hide menu entry; deep-link shows placeholder.
       ];
 
       groups.push({

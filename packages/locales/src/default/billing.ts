@@ -39,4 +39,17 @@ export default {
   'billing.status': 'Status',
   'billing.title': 'Billing & Usage',
   'billing.tokens': 'Tokens',
+
+  // Usage page
+  'usage.desc': 'Model consumption for your account.',
+  'usage.empty': 'No usage yet. Start chatting to see token and credit spend here.',
+  'usage.recent': 'Recent usage',
+  'usage.summaryCredits': 'Credits (this page)',
+  'usage.summaryTokens': 'Tokens (this page)',
+  'usage.title': 'Usage',
+
+  // Referral placeholder
+  'referral.comingSoon': 'Coming soon',
+  'referral.desc': 'Invite rewards are not available yet. Check back later for referral bonuses.',
+  'referral.title': 'Referral Rewards',
 };

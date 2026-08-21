@@ -92,12 +92,12 @@ describe('me home useCategory', () => {
     expect(keys.filter((k) => k === SettingsTabs.Profile)).toHaveLength(1);
     expect(keys.filter((k) => k === SettingsTabs.Stats)).toHaveLength(1);
 
-    // Plans & billing
+    // Plans & billing (Referral hidden until productized)
     expect(keys).toContain(SettingsTabs.Plans);
     expect(keys).toContain(SettingsTabs.Usage);
     expect(keys).toContain(SettingsTabs.Credits);
     expect(keys).toContain(SettingsTabs.Billing);
-    expect(keys).toContain(SettingsTabs.Referral);
+    expect(keys).not.toContain(SettingsTabs.Referral);
 
     // Agent
     expect(keys).toContain(SettingsTabs.Skill);

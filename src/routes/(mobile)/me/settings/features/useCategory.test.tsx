@@ -7,7 +7,7 @@ import { SettingsTabs } from '@/store/global/initialState';
 import { initServerConfigStore, Provider } from '@/store/serverConfig/store';
 import { useUserStore } from '@/store/user';
 
-import { SettingsGroupKey, useCategory } from './useCategory';
+import { useCategory } from './useCategory';
 
 vi.hoisted(() => {
   Object.defineProperty(globalThis, 'localStorage', {
@@ -143,10 +143,33 @@ describe('mobile settings useCategory', () => {
       wrapper: createWrapper(true),
     });
 
-    const developerGroup = result.current.find((group) => group.key === SettingsGroupKey.Developer);
-    const systemGroup = result.current.find((group) => group.key === SettingsGroupKey.System);
+    const keys = result.current.flatMap((group) => group.items.map((item) => item.key));
 
-    expect(developerGroup?.items.map((item) => item.key)).toContain(SettingsTabs.OAuthApps);
-    expect(systemGroup?.items.map((item) => item.key)).not.toContain(SettingsTabs.OAuthApps);
+    expect(keys).toContain(SettingsTabs.OAuthApps);
+  });
+
+  it('shows billing tabs without Referral when business features are on', () => {
+    const { result } = renderHook(() => useCategory(), {
+      wrapper: createWrapper(true, true),
+    });
+
+    const keys = result.current.flatMap((group) => group.items.map((item) => item.key));
+
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        SettingsTabs.Plans,
+        SettingsTabs.Usage,
+        SettingsTabs.Credits,
+        SettingsTabs.Billing,
+      ]),
+    );
+    expect(keys).not.toContain(SettingsTabs.Referral);
+
+    const plans = result.current
+      .flatMap((group) => group.items)
+      .find((item) => item.key === SettingsTabs.Plans);
+
+    plans?.onClick?.();
+    expect(navigate).toHaveBeenCalledWith(`/settings/${SettingsTabs.Plans}`);
   });
 });
