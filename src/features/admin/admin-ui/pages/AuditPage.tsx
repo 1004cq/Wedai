@@ -6,6 +6,7 @@ import { useCallback, useState } from 'react';
 
 import { adminApi } from '../api';
 import { AdminErrorState, AdminForbiddenBanner, AdminPage } from '../components/AdminPage';
+import { AdminScrollSurface } from '../components/AdminScrollSurface';
 import { useAdminAccess } from '../hooks/useAdminAccess';
 import { useAdminQuery } from '../hooks/useAdminQuery';
 import { formatDateTime } from '../utils';
@@ -13,17 +14,17 @@ import { formatDateTime } from '../utils';
 const DEFAULT_PAGE_SIZE = 20;
 
 interface LedgerRow {
-  id: string;
-  billingAccountId: string;
-  kind: string;
-  delta: bigint;
   balanceAfter: bigint;
-  idempotencyKey: string;
-  orderId: string | null;
-  usageRecordId: string | null;
-  reason: string | null;
-  operatorUserId: string | null;
+  billingAccountId: string;
   createdAt: Date;
+  delta: bigint;
+  id: string;
+  idempotencyKey: string;
+  kind: string;
+  operatorUserId: string | null;
+  orderId: string | null;
+  reason: string | null;
+  usageRecordId: string | null;
 }
 
 const useAuditPage = (billingAccountId: string) => {
@@ -109,33 +110,33 @@ export const AuditPage = () => {
           setPage(1);
         }}
       />
-      {!billingAccountId.trim() && (
-        <Empty description={'请输入 Billing Account ID 查询流水'} />
-      )}
+      {!billingAccountId.trim() && <Empty description={'请输入 Billing Account ID 查询流水'} />}
       {billingAccountId.trim() && (
         <>
           {error ? (
             <AdminErrorState error={error} onRetry={reload} />
           ) : (
-            <Table<LedgerRow>
-              columns={columns}
-              dataSource={items}
-              loading={isLoading}
-              locale={{ emptyText: <Empty description={'该账户暂无流水'} /> }}
-              rowKey={'id'}
-              scroll={{ x: 'max-content' }}
-              pagination={{
-                current: page,
-                pageSize,
-                showSizeChanger: !!screens.md,
-                simple: !screens.md,
-                total,
-                onChange: (nextPage, nextPageSize) => {
-                  setPage(nextPageSize === pageSize ? nextPage : 1);
-                  setPageSize(nextPageSize);
-                },
-              }}
-            />
+            <AdminScrollSurface>
+              <Table<LedgerRow>
+                columns={columns}
+                dataSource={items}
+                loading={isLoading}
+                locale={{ emptyText: <Empty description={'该账户暂无流水'} /> }}
+                rowKey={'id'}
+                scroll={{ x: 800 }}
+                pagination={{
+                  current: page,
+                  pageSize,
+                  showSizeChanger: !!screens.md,
+                  simple: !screens.md,
+                  total,
+                  onChange: (nextPage, nextPageSize) => {
+                    setPage(nextPageSize === pageSize ? nextPage : 1);
+                    setPageSize(nextPageSize);
+                  },
+                }}
+              />
+            </AdminScrollSurface>
           )}
         </>
       )}

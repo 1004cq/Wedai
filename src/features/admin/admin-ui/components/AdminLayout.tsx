@@ -11,8 +11,8 @@ import {
   TeamOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
-import { Drawer, Flexbox, Text } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
+import { Flexbox, Text } from '@lobehub/ui';
+import { Button, Drawer } from '@lobehub/ui/base-ui';
 import type { MenuProps } from 'antd';
 import { Grid, Layout, Menu, Tag } from 'antd';
 import { createStaticStyles, cssVar } from 'antd-style';
@@ -29,8 +29,20 @@ const ADMIN_DRAWER_WIDTH = 260;
 
 const styles = createStaticStyles(({ css }) => ({
   app: css`
+    overflow-x: hidden;
+
+    width: 100%;
+    max-width: 100vw;
     min-height: 100dvh;
+
     background: ${cssVar.colorBgLayout};
+
+    /* Nested antd Layout defaults can grow with wide tables and blow past the viewport. */
+    .ant-layout {
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+    }
   `,
   brandLogo: css`
     width: 32px;
@@ -41,7 +53,8 @@ const styles = createStaticStyles(({ css }) => ({
   content: css`
     box-sizing: border-box;
     width: 100%;
-    max-width: 1600px;
+    min-width: 0;
+    max-width: min(1600px, 100%);
     margin-inline: auto;
   `,
   drawerBody: css`
@@ -209,10 +222,9 @@ export const AdminLayout = ({ children }: PropsWithChildren) => {
       </Layout>
       {!isDesktop && (
         <Drawer
-          bodyStyle={{ padding: 0 }}
+          noHeader
           open={drawerOpen}
           placement={'left'}
-          title={null}
           width={ADMIN_DRAWER_WIDTH}
           onClose={() => setDrawerOpen(false)}
         >
