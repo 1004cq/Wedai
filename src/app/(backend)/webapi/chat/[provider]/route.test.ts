@@ -26,6 +26,28 @@ vi.mock('@/auth', () => ({
   },
 }));
 
+vi.mock('@/database/core/db-adaptor', () => ({
+  getServerDB: vi.fn().mockResolvedValue({
+    select: vi.fn().mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          limit: vi.fn().mockResolvedValue([{ banned: false }]),
+        }),
+      }),
+    }),
+  }),
+}));
+
+vi.mock('../../_utils/workspace', () => ({
+  resolveValidWorkspaceIdFromRequest: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@/business/server/chat-billing', () => ({
+  InsufficientBalanceError: class InsufficientBalanceError extends Error {},
+  chargeAfterChat: vi.fn().mockResolvedValue(undefined),
+  chargeBeforeChat: vi.fn().mockResolvedValue(undefined),
+}));
+
 // 模拟请求和响应
 let request: Request;
 beforeEach(() => {
@@ -90,7 +112,12 @@ describe('POST handler', () => {
         body: JSON.stringify(mockChatPayload),
       });
 
-      const mockChatResponse: any = { success: true, message: 'Reply from agent' };
+      const mockChatResponse = new Response(
+        JSON.stringify({ success: true, message: 'Reply from agent' }),
+        {
+          headers: { 'Content-Type': 'application/json' },
+        },
+      );
       const mockRuntime: LobeRuntimeAI = {
         baseURL: 'abc',
         chat: vi.fn().mockResolvedValue(mockChatResponse),
@@ -100,11 +127,14 @@ describe('POST handler', () => {
 
       const response = await POST(request as unknown as Request, { params: mockParams });
 
-      expect(response).toEqual(mockChatResponse);
-      expect(mockRuntime.chat).toHaveBeenCalledWith(mockChatPayload, {
-        user: 'test-user-id',
-        signal: expect.anything(),
-      });
+      expect(response).toBe(mockChatResponse);
+      expect(mockRuntime.chat).toHaveBeenCalledWith(
+        mockChatPayload,
+        expect.objectContaining({
+          signal: expect.anything(),
+          user: 'test-user-id',
+        }),
+      );
     });
 
     it('should return an error response when chat completion fails', async () => {
