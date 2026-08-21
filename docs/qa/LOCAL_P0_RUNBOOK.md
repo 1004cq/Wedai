@@ -6,10 +6,10 @@
 ## 前置条件
 
 ```bash
-command -v bun   # >= 1.2
-command -v pnpm  # >= 9
+command -v bun  # >= 1.2
+command -v pnpm # >= 9
 command -v docker
-command -v stripe  # Stripe CLI
+command -v stripe # Stripe CLI
 ```
 
 ---
@@ -37,7 +37,7 @@ KEY_VAULTS_SECRET=一个随机base64字符串
 
 # Stripe Test Mode（P0 §2 §3 必须）
 STRIPE_SECRET_KEY=sk_test_xxx
-STRIPE_WEBHOOK_SECRET=     # 第三步会填
+STRIPE_WEBHOOK_SECRET= # 第三步会填
 
 # 让浏览器能初始化 Stripe.js（Plans 页面的 Checkout 按钮）
 NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_xxx
@@ -70,19 +70,32 @@ psql $DATABASE_URL -c "\dt billing_accounts plans plan_prices orders wallets led
 pnpm db:seed:dev
 ```
 
+写入 Wedai 正式目录（见 `docs/commercial/WEDAI_PLANS_CATALOG.md`）：
+
+| slug           | 价格      | 积分        |
+| -------------- | --------- | ----------- |
+| free           | ¥0        | 100000 / 月 |
+| pack\_basic    | ¥9.9 一次 | 9999        |
+| pack\_standard | ¥29 一次  | 29000       |
+| plus\_monthly  | ¥50 / 月  | 50000       |
+| pro\_monthly   | ¥99 / 月  | 99000       |
+
+生产库也可依赖迁移 `0138_wedai_plans_catalog`（应用启动自动执行）。
+
 输出示例：
+
 ```
-Seeding dev billing data…
-  ✓ plans: free, pro_monthly
-  ✓ plan_prices: free (¥0), pro_monthly (¥39.00)
-  ✓ model_prices: 6 text + 2 image models seeded
+Seeding Wedai billing catalog…
+  ✓ free: 免费版 — ¥0.00 / monthly → 100000 credits …
+  ✓ pack_basic: …
 Dev billing seed complete.
 ```
 
 验证：
 
 ```bash
-psql $DATABASE_URL -c "SELECT slug, name, status FROM plans;"
+psql $DATABASE_URL -c "SELECT slug, name, token_grant_monthly, status FROM plans ORDER BY sort_order;"
+psql $DATABASE_URL -c "SELECT p.slug, pp.amount_minor, pp.billing_interval FROM plan_prices pp JOIN plans p ON p.id = pp.plan_id WHERE pp.archived_at IS NULL;"
 psql $DATABASE_URL -c "SELECT model_id, provider, is_active, request_credits_flat FROM model_prices;"
 ```
 
@@ -130,6 +143,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:3010/signin
 5. 用刚注册的凭据重新登录，进入 `/settings/profile`。
 
 **通过标准**：
+
 - 用户只创建一次
 - 登出后受保护页面要求重新登录
 - 错误凭据不泄露内部信息
@@ -166,6 +180,7 @@ psql $DATABASE_URL -c "
 ```
 
 **通过标准**：
+
 - `status = 'paid'`
 - `wallet_credits > 0`（等于套餐 tokenGrantMonthly = 5000000）
 - `stripe listen` 收到 `checkout.session.completed` 并返回 200
@@ -201,6 +216,7 @@ psql $DATABASE_URL -c "
 ```
 
 **通过标准**：
+
 - `event_count = 1`
 - `ledger_count = 1`
 - `available` 与 P0-2 结束时相同（没有再增加）
@@ -245,6 +261,7 @@ psql $DATABASE_URL -c "
 ```
 
 **通过标准**：
+
 - 余额为 0 时 provider 未被调用，前端有明确提示
 - 充值后调用成功，ledger 出现 `hold` + `debit` + `release`（如有多余）条目
 
@@ -252,12 +269,12 @@ psql $DATABASE_URL -c "
 
 ## 常见问题
 
-| 现象 | 原因 | 处理 |
-|------|------|------|
-| `/settings/plans` 侧边栏不出现 | `ENABLE_BUSINESS_FEATURES` 未生效 | 确认已拉取最新 main（589f93d+）；重启 dev 服务器 |
-| Plans 页面显示「No plans available yet」 | 未运行 seed | 执行 `pnpm db:seed:dev` |
-| Stripe Checkout 点击无反应 | `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` 未配置 | 填入 `pk_test_xxx` 后重启服务器 |
-| Webhook 返回 400 验签失败 | `STRIPE_WEBHOOK_SECRET` 与 `stripe listen --print-secret` 不匹配 | 停止 `stripe listen`，重新运行并复制 `whsec_xxx` |
-| 余额不足仍能发消息 | BYOK 模式跳过计费（正常行为） | 在 `设置 → 模型服务商` 中删除该 provider 的 API Key，改用平台模型 |
-| `pnpm db:seed:dev` 报唯一约束冲突 | Seed 已运行过 | 正常，使用 `ON CONFLICT DO NOTHING`，冲突不影响结果 |
-| Admin tRPC 返回 403 | 用户角色不是 admin | 执行 `psql $DATABASE_URL -c "UPDATE users SET role='admin' WHERE id='$USER_ID';"` |
+| 现象                                     | 原因                                                             | 处理                                                                              |
+| ---------------------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `/settings/plans` 侧边栏不出现           | `ENABLE_BUSINESS_FEATURES` 未生效                                | 确认已拉取最新 main（589f93d+）；重启 dev 服务器                                  |
+| Plans 页面显示「No plans available yet」 | 未运行 seed                                                      | 执行 `pnpm db:seed:dev`                                                           |
+| Stripe Checkout 点击无反应               | `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` 未配置                      | 填入 `pk_test_xxx` 后重启服务器                                                   |
+| Webhook 返回 400 验签失败                | `STRIPE_WEBHOOK_SECRET` 与 `stripe listen --print-secret` 不匹配 | 停止 `stripe listen`，重新运行并复制 `whsec_xxx`                                  |
+| 余额不足仍能发消息                       | BYOK 模式跳过计费（正常行为）                                    | 在 `设置 → 模型服务商` 中删除该 provider 的 API Key，改用平台模型                 |
+| `pnpm db:seed:dev` 报唯一约束冲突        | Seed 已运行过                                                    | 正常，使用 `ON CONFLICT DO NOTHING`，冲突不影响结果                               |
+| Admin tRPC 返回 403                      | 用户角色不是 admin                                               | 执行 `psql $DATABASE_URL -c "UPDATE users SET role='admin' WHERE id='$USER_ID';"` |
