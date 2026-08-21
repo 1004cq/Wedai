@@ -25,6 +25,9 @@ describe('configRouter', () => {
     describe('Model Provider env', () => {
       describe('OPENAI_MODEL_LIST', () => {
         it('custom deletion, addition, and renaming of models', async () => {
+          const originalApiKey = process.env.OPENAI_API_KEY;
+          // Business mode only enables openai when a platform key exists.
+          process.env.OPENAI_API_KEY = 'sk-test-for-model-list';
           process.env.OPENAI_MODEL_LIST =
             '-all,+llama,+claude-2，-gpt-3.5-turbo,gpt-4-0125-preview=gpt-4-turbo,gpt-4-0125-preview=gpt-4-32k';
 
@@ -35,6 +38,11 @@ describe('configRouter', () => {
 
           expect(result).toMatchSnapshot();
           process.env.OPENAI_MODEL_LIST = '';
+          if (originalApiKey === undefined) {
+            delete process.env.OPENAI_API_KEY;
+          } else {
+            process.env.OPENAI_API_KEY = originalApiKey;
+          }
         });
 
         it('should work correct with gpt-4', async () => {
@@ -147,9 +155,24 @@ describe('configRouter', () => {
         });
       });
 
-      it('should enable the default DeepSeek provider without a server API key', async () => {
+      it('disables DeepSeek without a platform key in business mode', async () => {
         const originalApiKey = process.env.DEEPSEEK_API_KEY;
         delete process.env.DEEPSEEK_API_KEY;
+
+        const response = await router.getGlobalConfig();
+
+        expect(response.serverConfig.aiProvider?.deepseek?.enabled).toBe(false);
+
+        if (originalApiKey === undefined) {
+          delete process.env.DEEPSEEK_API_KEY;
+        } else {
+          process.env.DEEPSEEK_API_KEY = originalApiKey;
+        }
+      });
+
+      it('enables DeepSeek when a platform API key is present', async () => {
+        const originalApiKey = process.env.DEEPSEEK_API_KEY;
+        process.env.DEEPSEEK_API_KEY = 'sk-deepseek-test';
 
         const response = await router.getGlobalConfig();
 
