@@ -113,4 +113,12 @@ describe('AssistantItem', () => {
       openSpy.mockRestore();
     }
   });
+
+  it('navigates to group agent detail when the item type is agent-group', () => {
+    render(<AssistantItem {...item} type="agent-group" />);
+
+    fireEvent.click(screen.getByTestId('assistant-item'));
+
+    expect(mocks.navigate).toHaveBeenCalledWith('/community/group_agent/jailbreak-mode');
+  });
 });

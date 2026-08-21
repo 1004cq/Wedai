@@ -21,3 +21,17 @@ describe('mobileRouter task routes', () => {
     expect(source).not.toContain("import('@/routes/(main)/tasks/_layout')");
   });
 });
+
+describe('mobileRouter community detail routes', () => {
+  it('registers group agent detail alongside agent detail (parity with desktop)', async () => {
+    const source = await readFile(
+      path.join(process.cwd(), 'src/spa/router/mobileRouter.config.tsx'),
+      'utf8',
+    );
+
+    expect(source).toContain("path: 'agent/:slug'");
+    expect(source).toContain("path: 'group_agent/:slug'");
+    expect(source).toContain("import('@/routes/(main)/community/(detail)/group_agent')");
+    expect(source).toContain('MobileGroupAgentDetailPage');
+  });
+});
