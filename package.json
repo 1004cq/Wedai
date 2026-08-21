@@ -40,6 +40,7 @@
     "apps/desktop/src/main"
   ],
   "scripts": {
+    "billing:reap-holds": "pnpm --filter @lobechat/database billing:reap-holds",
     "build": "bun run build:spa && bun run build:spa:auth && bun run build:spa:workbench && bun run build:spa:copy && bun run build:next",
     "build:analyze": "cross-env NODE_OPTIONS=--max-old-space-size=81920 next experimental-analyze",
     "build:docker": "pnpm run build:spa && pnpm run build:spa:mobile && pnpm run build:spa:auth && pnpm run build:spa:workbench && pnpm run build:spa:copy && cross-env NODE_OPTIONS=--max-old-space-size=8192 DOCKER=true next build",
@@ -59,7 +60,6 @@
     "db:generate": "drizzle-kit generate && npm run workflow:dbml",
     "db:migrate": "cross-env MIGRATION_DB=1 tsx ./scripts/migrateServerDB/index.ts",
     "db:seed:dev": "pnpm --filter @lobechat/database seed:dev-billing",
-    "billing:reap-holds": "pnpm --filter @lobechat/database billing:reap-holds",
     "db:studio": "drizzle-kit studio",
     "db:visualize": "dbdocs build docs/development/database-schema.dbml --project lobe-chat",
     "desktop:build:all": "npm run desktop:build:main",
@@ -221,6 +221,7 @@
     "@lobechat/agent-signal": "workspace:*",
     "@lobechat/agent-templates": "workspace:*",
     "@lobechat/artifact-template": "workspace:*",
+    "@lobechat/billing": "workspace:*",
     "@lobechat/builtin-agents": "workspace:*",
     "@lobechat/builtin-skills": "workspace:*",
     "@lobechat/builtin-tool-activator": "workspace:*",
