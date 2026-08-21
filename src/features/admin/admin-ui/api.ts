@@ -138,6 +138,20 @@ async function getConfigStatus() {
   return lambdaClient.admin.config.status.query();
 }
 
+async function updateLlmProvider(input: {
+  accessKeyId?: string;
+  apiKey?: string;
+  baseURL?: string | null;
+  clearSecrets?: boolean;
+  enabled?: boolean;
+  providerId: string;
+  region?: string | null;
+  secretAccessKey?: string;
+  sessionToken?: string;
+}) {
+  return lambdaClient.admin.config.updateLlmProvider.mutate(input);
+}
+
 // ─── Adjustments ─────────────────────────────────────────────────────────────
 
 async function creditBalance(input: {
@@ -172,6 +186,7 @@ export const adminApi = {
   listPrices,
   listUsers,
   setUserBan,
+  updateLlmProvider,
   upsertPrice,
 };
 

@@ -34,13 +34,17 @@ describe('admin mobile containment markers', () => {
     expect(text).toContain('AdminScrollSurface');
   });
 
-  it('ProvidersPage is wired as a read-only LLM env status surface', () => {
+  it('ProvidersPage is an editable LLM secret surface that never echoes plaintext', () => {
     const page = readFileSync(path.resolve(here, 'pages/ProvidersPage.tsx'), 'utf8');
     const layout = readFileSync(path.resolve(here, 'components/AdminLayout.tsx'), 'utf8');
     const app = readFileSync(path.resolve(here, 'AdminApp.tsx'), 'utf8');
+    const api = readFileSync(path.resolve(here, 'api.ts'), 'utf8');
 
     expect(page).toContain('getConfigStatus');
+    expect(page).toContain('updateLlmProvider');
     expect(page).toContain('永不回显密钥明文');
+    expect(page).toContain('留空不会覆盖已有密钥');
+    expect(api).toContain('updateLlmProvider');
     expect(layout).toContain('/admin/providers');
     expect(layout).toContain('system:llm:config');
     expect(app).toContain('ProvidersPage');

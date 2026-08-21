@@ -27,6 +27,10 @@ import { type LobeChatDatabase } from '@/database/type';
 import { getLLMConfig } from '@/envs/llm';
 import { createLLMGenerationTracingHook } from '@/server/services/llmGenerationTracing/hook';
 import { ensureFreshOAuthToken } from '@/server/services/oauthDeviceFlow/refresh';
+import {
+  mergePlatformCredentialsIntoKeyVaults,
+  resolvePlatformLlmCredentials,
+} from '@/server/services/platformLlmProviders';
 
 import { KeyVaultsGateKeeper } from '../KeyVaultsEncrypt';
 import apiKeyManager from './apiKeyManager';
@@ -469,6 +473,16 @@ export const initModelRuntimeFromDB = async (
   // 3. Build ClientSecretPayload from keyVaults based on runtimeProvider
   // This ensures provider-specific fields (e.g., cloudflareBaseURLOrAccountID) are included
   let keyVaults = (providerConfig?.keyVaults || {}) as ProviderKeyVaults;
+
+  // 3.25. Platform secrets (admin DB) fill gaps when BYOK / user vaults are empty.
+  // Env fallback remains inside getParamsFromPayload.
+  const platformCredentials = await resolvePlatformLlmCredentials(db, provider);
+  if (platformCredentials) {
+    keyVaults = mergePlatformCredentialsIntoKeyVaults(
+      keyVaults,
+      platformCredentials,
+    ) as ProviderKeyVaults;
+  }
 
   // 3.5. OAuth device-flow providers with rotating refresh tokens (e.g.
   // SuperGrok): proactively refresh + persist the token pair before building

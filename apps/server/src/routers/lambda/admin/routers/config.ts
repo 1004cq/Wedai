@@ -1,21 +1,29 @@
 /**
- * admin.config — read-only system configuration status.
+ * admin.config — system configuration status + LLM platform secret writes.
  *
- * SECURITY CONTRACT (P3-1):
- *  - Secret values are NEVER returned — only a boolean `configured` flag.
- *  - Masked display (e.g. "sk_test_••••1234") is acceptable for non-secret
- *    identifiers (app IDs, endpoints) but must never show the full value.
- *  - Only `adminProcedure` callers (role='admin' in DB) may read this.
- *  - Ordinary users and unauthenticated callers receive FORBIDDEN.
- *
- * Why read-only here: modifying secrets via tRPC requires careful update
- * semantics (only overwrite when non-empty string submitted). That's a
- * Phase 3 follow-up; for now admins configure secrets via environment
- * variables or a secrets manager.
+ * SECURITY CONTRACT:
+ *  - Secret values are NEVER returned — only boolean `configured` flags
+ *    (and non-secret baseURL / region for editing).
+ *  - Updates use empty-skip overwrite: blank apiKey / secret fields leave
+ *    existing ciphertext untouched.
+ *  - Only `adminProcedure` callers (role='admin' in DB) may read/write.
  */
+import { TRPCError } from '@trpc/server';
+import { z } from 'zod';
+
+import {
+  hasUsableCredentials,
+  type SystemLlmCredentials,
+  SystemLlmProviderModel,
+} from '@/database/models/systemLlmProvider';
 import { router } from '@/libs/trpc/lambda';
+import { LLM_PROVIDER_STATUS } from '@/server/const/adminLlmProviders';
+import { KeyVaultsGateKeeper } from '@/server/modules/KeyVaultsEncrypt';
+import { mergeLlmCredentialUpdate } from '@/server/services/platformLlmProviders';
 
 import { adminProcedure } from '../middleware';
+
+export { LLM_PROVIDER_STATUS };
 
 /** Returns true if the env var is set to a non-empty string. */
 const isSet = (name: string, env: NodeJS.ProcessEnv = process.env): boolean => {
@@ -35,33 +43,65 @@ const maskId = (name: string, env: NodeJS.ProcessEnv = process.env): string | nu
   return trimmed.length <= 4 ? '••••' : `••••${trimmed.slice(-4)}`;
 };
 
-/** Curated platform LLM env keys shown in admin (configured flags only). */
-export const LLM_PROVIDER_STATUS = [
-  { envKey: 'OPENAI_API_KEY', id: 'openai', label: 'OpenAI' },
-  { envKey: 'ANTHROPIC_API_KEY', id: 'anthropic', label: 'Anthropic' },
-  { envKey: 'GOOGLE_API_KEY', id: 'google', label: 'Google' },
-  { envKey: 'AZURE_API_KEY', id: 'azure', label: 'Azure OpenAI' },
-  { envKey: 'DEEPSEEK_API_KEY', id: 'deepseek', label: 'DeepSeek' },
-  { envKey: 'ZHIPU_API_KEY', id: 'zhipu', label: '智谱 Zhipu' },
-  { envKey: 'MOONSHOT_API_KEY', id: 'moonshot', label: 'Moonshot / Kimi' },
-  { envKey: 'QWEN_API_KEY', id: 'qwen', label: '通义千问 Qwen' },
-  { envKey: 'VOLCENGINE_API_KEY', id: 'volcengine', label: '火山引擎' },
-  { envKey: 'MINIMAX_API_KEY', id: 'minimax', label: 'MiniMax' },
-  { envKey: 'OPENROUTER_API_KEY', id: 'openrouter', label: 'OpenRouter' },
-  { envKey: 'GROQ_API_KEY', id: 'groq', label: 'Groq' },
-  { envKey: 'MISTRAL_API_KEY', id: 'mistral', label: 'Mistral' },
-  { envKey: 'PERPLEXITY_API_KEY', id: 'perplexity', label: 'Perplexity' },
-  { envKey: 'AWS_ACCESS_KEY_ID', id: 'bedrock', label: 'AWS Bedrock' },
-] as const;
+export type AdminLlmProviderStatus = {
+  baseURL: string | null;
+  configured: boolean;
+  dbConfigured: boolean;
+  enabled: boolean;
+  envConfigured: boolean;
+  envKey: string;
+  id: string;
+  label: string;
+  region: string | null;
+  source: 'both' | 'db' | 'env' | 'none';
+};
+
+export type BuildAdminConfigStatusOptions = {
+  llmDbRows?: Array<{
+    credentials: SystemLlmCredentials;
+    enabled: boolean;
+    provider: string;
+  }>;
+};
 
 /** Pure builder — unit-tested without adminProcedure / DB. */
-export const buildAdminConfigStatus = (env: NodeJS.ProcessEnv = process.env) => {
-  const llmProviders = LLM_PROVIDER_STATUS.map(({ envKey, id, label }) => ({
-    configured: isSet(envKey, env),
-    envKey,
-    id,
-    label,
-  }));
+export const buildAdminConfigStatus = (
+  env: NodeJS.ProcessEnv = process.env,
+  options: BuildAdminConfigStatusOptions = {},
+) => {
+  const dbByProvider = new Map(
+    (options.llmDbRows ?? []).map((row) => [row.provider, row] as const),
+  );
+
+  const llmProviders: AdminLlmProviderStatus[] = LLM_PROVIDER_STATUS.map(
+    ({ envKey, id, label }) => {
+      const envConfigured = isSet(envKey, env);
+      const dbRow = dbByProvider.get(id);
+      const dbConfigured = !!dbRow && dbRow.enabled && hasUsableCredentials(dbRow.credentials);
+      const configured = envConfigured || dbConfigured;
+      const source: AdminLlmProviderStatus['source'] =
+        envConfigured && dbConfigured
+          ? 'both'
+          : dbConfigured
+            ? 'db'
+            : envConfigured
+              ? 'env'
+              : 'none';
+
+      return {
+        baseURL: dbRow?.credentials.baseURL?.trim() ? dbRow.credentials.baseURL.trim() : null,
+        configured,
+        dbConfigured,
+        enabled: dbRow ? dbRow.enabled : true,
+        envConfigured,
+        envKey,
+        id,
+        label,
+        region: dbRow?.credentials.region?.trim() ? dbRow.credentials.region.trim() : null,
+        source,
+      };
+    },
+  );
 
   const byokAllowed = env.BYOK_ALLOWED !== 'false';
 
@@ -95,8 +135,8 @@ export const buildAdminConfigStatus = (env: NodeJS.ProcessEnv = process.env) => 
     },
 
     /**
-     * Platform LLM keys live in server env (not editable here in Phase 1).
-     * Only `configured` booleans — never secret values.
+     * Platform LLM keys: env and/or DB. Only `configured` booleans + non-secret
+     * baseURL/region — never secret values.
      */
     llm: {
       byokAllowed,
@@ -107,10 +147,102 @@ export const buildAdminConfigStatus = (env: NodeJS.ProcessEnv = process.env) => 
   };
 };
 
+const updateLlmProviderInput = z.object({
+  accessKeyId: z.string().optional(),
+  apiKey: z.string().optional(),
+  baseURL: z.string().nullable().optional(),
+  clearSecrets: z.boolean().optional(),
+  enabled: z.boolean().optional(),
+  providerId: z.string().min(1),
+  region: z.string().nullable().optional(),
+  secretAccessKey: z.string().optional(),
+  sessionToken: z.string().optional(),
+});
+
 export const adminConfigRouter = router({
   /**
    * Returns configuration status for all commercial integrations.
    * Secret values are replaced with boolean `configured` flags.
    */
-  status: adminProcedure.query(() => buildAdminConfigStatus()),
+  status: adminProcedure.query(async ({ ctx }) => {
+    let llmDbRows: BuildAdminConfigStatusOptions['llmDbRows'];
+    try {
+      const gateKeeper = await KeyVaultsGateKeeper.initWithEnvKey();
+      llmDbRows = await SystemLlmProviderModel.listAll(ctx.serverDB, gateKeeper);
+    } catch {
+      llmDbRows = [];
+    }
+    return buildAdminConfigStatus(process.env, { llmDbRows });
+  }),
+
+  /**
+   * Upsert platform LLM credentials for one provider.
+   * Empty apiKey / secret fields are ignored (do not wipe existing secrets).
+   * Pass clearSecrets=true to remove stored secrets while keeping baseURL/region.
+   */
+  updateLlmProvider: adminProcedure
+    .input(updateLlmProviderInput)
+    .mutation(async ({ ctx, input }) => {
+      const meta = LLM_PROVIDER_STATUS.find((p) => p.id === input.providerId);
+      if (!meta) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Unknown LLM provider' });
+      }
+
+      let gateKeeper: Awaited<ReturnType<typeof KeyVaultsGateKeeper.initWithEnvKey>>;
+      try {
+        gateKeeper = await KeyVaultsGateKeeper.initWithEnvKey();
+      } catch {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'KEY_VAULTS_SECRET is not configured; cannot store encrypted platform keys.',
+        });
+      }
+
+      const existing = await SystemLlmProviderModel.findByProvider(
+        ctx.serverDB,
+        input.providerId,
+        gateKeeper,
+      );
+
+      const patch: SystemLlmCredentials = {
+        accessKeyId: input.accessKeyId,
+        apiKey: input.apiKey,
+        baseURL: input.baseURL === null ? undefined : input.baseURL,
+        region: input.region === null ? undefined : input.region,
+        secretAccessKey: input.secretAccessKey,
+        sessionToken: input.sessionToken,
+      };
+
+      const credentials = mergeLlmCredentialUpdate(existing?.credentials ?? {}, patch, {
+        clearSecrets: input.clearSecrets,
+      });
+
+      const enabled = input.enabled ?? existing?.enabled ?? true;
+
+      await SystemLlmProviderModel.upsertByProvider(
+        ctx.serverDB,
+        {
+          credentials,
+          enabled,
+          provider: input.providerId,
+        },
+        gateKeeper,
+      );
+
+      // Never echo secrets — return the same shape as status row.
+      const status = buildAdminConfigStatus(process.env, {
+        llmDbRows: [
+          {
+            credentials,
+            enabled,
+            provider: input.providerId,
+          },
+          ...(
+            await SystemLlmProviderModel.listAll(ctx.serverDB, gateKeeper).catch(() => [])
+          ).filter((row) => row.provider !== input.providerId),
+        ],
+      });
+
+      return status.llm.providers.find((p) => p.id === input.providerId)!;
+    }),
 });

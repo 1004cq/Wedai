@@ -85,14 +85,22 @@ export const getServerGlobalConfig = async () => {
     },
   };
 
-  // In business feature mode, keep the built-in provider as the only default-enabled
-  // provider while preserving provider-specific metadata such as fetch/model-list keys.
-  // Non-business builds keep the upstream defaults.
+  // In business feature mode, keep LobeHub enabled and also enable providers
+  // that already have a platform env key. DB-backed keys are applied later in
+  // aiProvider/aiModel procedures via applyPlatformLlmProviderEnables.
   if (ENABLE_BUSINESS_FEATURES) {
     for (const provider of Object.values(ModelProvider)) {
+      const envKeyName =
+        provider === ModelProvider.Bedrock
+          ? 'AWS_ACCESS_KEY_ID'
+          : provider === ModelProvider.Azure
+            ? 'AZURE_API_KEY'
+            : `${provider.toUpperCase()}_API_KEY`;
+      const hasEnvKey = !!process.env[envKeyName]?.trim();
+
       aiProviderSpecificConfig[provider] = {
         ...aiProviderSpecificConfig[provider],
-        enabled: provider === ModelProvider.LobeHub,
+        enabled: provider === ModelProvider.LobeHub || hasEnvKey,
       };
     }
   }

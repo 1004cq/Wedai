@@ -17,6 +17,7 @@ import { getServerGlobalConfig } from '@/server/globalConfig';
 import { KeyVaultsGateKeeper } from '@/server/modules/KeyVaultsEncrypt';
 import { initModelRuntimeFromDB } from '@/server/modules/ModelRuntime';
 import { getUserScopedAiProviderRuntimeState } from '@/server/services/aiProviderAccess';
+import { applyPlatformLlmProviderEnables } from '@/server/services/platformLlmProviders';
 import { assertByokWritesAllowed } from '@/server/utils/byokPolicy';
 import { type AiProviderDetailItem, type AiProviderRuntimeState } from '@/types/aiProvider';
 import {
@@ -30,6 +31,10 @@ const aiProviderProcedure = wsCompatProcedure.use(serverDatabase).use(async (opt
   const { ctx } = opts;
 
   const { aiProvider } = await getServerGlobalConfig();
+  const platformAiProvider = await applyPlatformLlmProviderEnables(
+    aiProvider as Record<string, ProviderConfig>,
+    ctx.serverDB,
+  );
 
   const gateKeeper = await KeyVaultsGateKeeper.initWithEnvKey();
   return opts.next({
@@ -37,7 +42,7 @@ const aiProviderProcedure = wsCompatProcedure.use(serverDatabase).use(async (opt
       aiInfraRepos: new AiInfraRepos(
         ctx.serverDB,
         ctx.userId,
-        aiProvider as Record<string, ProviderConfig>,
+        platformAiProvider,
         ctx.workspaceId ?? undefined,
       ),
       aiProviderModel: new AiProviderModel(ctx.serverDB, ctx.userId, ctx.workspaceId ?? undefined),
