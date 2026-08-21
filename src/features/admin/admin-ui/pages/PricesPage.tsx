@@ -7,6 +7,7 @@ import { useCallback, useState } from 'react';
 
 import { adminApi } from '../api';
 import { AdminErrorState, AdminForbiddenBanner, AdminPage } from '../components/AdminPage';
+import { AdminScrollSurface } from '../components/AdminScrollSurface';
 import { useAdminAccess } from '../hooks/useAdminAccess';
 import { useAdminQuery } from '../hooks/useAdminQuery';
 import type { AdminModelPrice } from '../types';
@@ -74,7 +75,7 @@ export const PricesPage = () => {
   const creditInput = (
     price: AdminModelPrice,
     field: 'inputCredits' | 'outputCredits',
-    label: string,
+    _label: string,
   ) => (
     <InputNumber
       disabled={!canWrite}
@@ -122,12 +123,7 @@ export const PricesPage = () => {
             >
               保存
             </Button>
-            <Button
-              danger
-              size={'small'}
-              type={'text'}
-              onClick={() => handleArchive(price)}
-            >
+            <Button danger size={'small'} type={'text'} onClick={() => handleArchive(price)}>
               归档
             </Button>
           </Button.Group>
@@ -144,15 +140,17 @@ export const PricesPage = () => {
       {error ? (
         <AdminErrorState error={error} onRetry={reload} />
       ) : (
-        <Table<AdminModelPrice>
-          columns={columns}
-          dataSource={data}
-          loading={isLoading}
-          locale={{ emptyText: <Empty description={'暂无模型价格'} /> }}
-          pagination={false}
-          rowKey={'id'}
-          scroll={{ x: 'max-content' }}
-        />
+        <AdminScrollSurface>
+          <Table<AdminModelPrice>
+            columns={columns}
+            dataSource={data}
+            loading={isLoading}
+            locale={{ emptyText: <Empty description={'暂无模型价格'} /> }}
+            pagination={false}
+            rowKey={'id'}
+            scroll={{ x: 900 }}
+          />
+        </AdminScrollSurface>
       )}
     </AdminPage>
   );

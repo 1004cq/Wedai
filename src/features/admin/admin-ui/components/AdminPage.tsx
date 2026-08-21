@@ -1,8 +1,8 @@
 'use client';
 
 import { Flexbox, Text } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
-import { Alert, Skeleton } from 'antd';
+import { Alert, Button } from '@lobehub/ui/base-ui';
+import { Skeleton } from 'antd';
 import { createStaticStyles, cssVar } from 'antd-style';
 import type { PropsWithChildren, ReactNode } from 'react';
 
@@ -34,15 +34,21 @@ interface AdminPageProps extends PropsWithChildren {
 }
 
 export const AdminPage = ({ actions, children, description, title }: AdminPageProps) => (
-  <Flexbox gap={24} width={'100%'}>
-    <Flexbox horizontal align={'flex-start'} gap={16} justify={'space-between'}>
-      <Flexbox gap={4} style={{ minWidth: 0 }}>
+  <Flexbox gap={24} style={{ maxWidth: '100%', minWidth: 0 }} width={'100%'}>
+    <Flexbox
+      horizontal
+      align={'flex-start'}
+      gap={16}
+      justify={'space-between'}
+      style={{ flexWrap: 'wrap', maxWidth: '100%', minWidth: 0 }}
+    >
+      <Flexbox gap={4} style={{ flex: '1 1 220px', minWidth: 0 }}>
         <Text as={'h1'} className={styles.pageTitle}>
           {title}
         </Text>
         {description && <Text type={'secondary'}>{description}</Text>}
       </Flexbox>
-      {actions}
+      {actions ? <div style={{ flex: '0 1 auto', maxWidth: '100%' }}>{actions}</div> : null}
     </Flexbox>
     {children}
   </Flexbox>

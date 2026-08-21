@@ -7,6 +7,7 @@ import { useCallback, useState } from 'react';
 
 import { adminApi } from '../api';
 import { AdminErrorState, AdminForbiddenBanner, AdminPage } from '../components/AdminPage';
+import { AdminScrollSurface } from '../components/AdminScrollSurface';
 import { useAdminAccess } from '../hooks/useAdminAccess';
 import { useAdminQuery } from '../hooks/useAdminQuery';
 import type { AdminOrderRow, AdminOrderStatus } from '../types';
@@ -64,7 +65,7 @@ export const OrdersPage = () => {
       <Select
         allowClear
         placeholder={'按状态筛选'}
-        style={{ width: 200 }}
+        style={{ maxWidth: '100%', width: screens.md ? 200 : '100%' }}
         value={status}
         options={[
           { label: '待支付', value: 'pending' },
@@ -80,25 +81,27 @@ export const OrdersPage = () => {
       {error ? (
         <AdminErrorState error={error} onRetry={reload} />
       ) : (
-        <Table<AdminOrderRow>
-          columns={columns}
-          dataSource={data?.items}
-          loading={isLoading}
-          locale={{ emptyText: <Empty description={'没有匹配的订单'} /> }}
-          rowKey={'id'}
-          scroll={{ x: 'max-content' }}
-          pagination={{
-            current: page,
-            pageSize,
-            showSizeChanger: !!screens.md,
-            simple: !screens.md,
-            total: data?.total,
-            onChange: (nextPage, nextPageSize) => {
-              setPage(nextPageSize === pageSize ? nextPage : 1);
-              setPageSize(nextPageSize);
-            },
-          }}
-        />
+        <AdminScrollSurface>
+          <Table<AdminOrderRow>
+            columns={columns}
+            dataSource={data?.items}
+            loading={isLoading}
+            locale={{ emptyText: <Empty description={'没有匹配的订单'} /> }}
+            rowKey={'id'}
+            scroll={{ x: 720 }}
+            pagination={{
+              current: page,
+              pageSize,
+              showSizeChanger: !!screens.md,
+              simple: !screens.md,
+              total: data?.total,
+              onChange: (nextPage, nextPageSize) => {
+                setPage(nextPageSize === pageSize ? nextPage : 1);
+                setPageSize(nextPageSize);
+              },
+            }}
+          />
+        </AdminScrollSurface>
       )}
     </AdminPage>
   );
