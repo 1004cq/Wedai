@@ -7,7 +7,7 @@ import { TRPCError } from '@trpc/server';
 export const isByokAllowed = (): boolean => process.env.BYOK_ALLOWED !== 'false';
 
 export const BYOK_WRITES_DISABLED_MESSAGE =
-  'Bring-your-own-key is disabled. Platform model providers are configured by the administrator via server environment variables.';
+  'Bring-your-own-key is disabled. Platform model providers are configured by the administrator in Admin → 模型服务商 (or server environment variables).';
 
 export const PLATFORM_AI_ADMIN_ONLY_MESSAGE =
   'AI provider and service model settings are managed by the administrator.';

@@ -158,6 +158,20 @@ describe('getServerGlobalConfig', () => {
     }
   });
 
+  it('should enable providers that have platform env keys in business mode', async () => {
+    const previous = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'sk-from-env';
+    try {
+      const providerConfig = await loadCapturedProviderConfig(true);
+      expect(providerConfig[ModelProvider.LobeHub].enabled).toBe(true);
+      expect(providerConfig[ModelProvider.OpenAI].enabled).toBe(true);
+      expect(providerConfig[ModelProvider.DeepSeek].enabled).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = previous;
+    }
+  });
+
   it('should keep upstream defaults outside business feature mode', async () => {
     const providerConfig = await loadCapturedProviderConfig(false);
 

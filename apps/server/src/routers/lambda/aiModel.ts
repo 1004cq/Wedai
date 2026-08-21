@@ -21,6 +21,7 @@ import { serverDatabase } from '@/libs/trpc/lambda/middleware';
 import { getServerGlobalConfig } from '@/server/globalConfig';
 import { KeyVaultsGateKeeper } from '@/server/modules/KeyVaultsEncrypt';
 import { getUserScopedAiProviderModelList } from '@/server/services/aiProviderAccess';
+import { applyPlatformLlmProviderEnables } from '@/server/services/platformLlmProviders';
 import { type ProviderConfig } from '@/types/user/settings';
 
 const AI_MODEL_UNIQUE_CONSTRAINT = 'ai_models_id_provider_id_user_id_pk';
@@ -53,15 +54,14 @@ const aiModelProcedure = wsCompatProcedure.use(serverDatabase).use(async (opts) 
 
   const gateKeeper = await KeyVaultsGateKeeper.initWithEnvKey();
   const { aiProvider } = await getServerGlobalConfig();
+  const platformAiProvider = await applyPlatformLlmProviderEnables(
+    aiProvider as Record<string, ProviderConfig>,
+    ctx.serverDB,
+  );
 
   return opts.next({
     ctx: {
-      aiInfraRepos: new AiInfraRepos(
-        ctx.serverDB,
-        ctx.userId,
-        aiProvider as Record<string, ProviderConfig>,
-        wsId,
-      ),
+      aiInfraRepos: new AiInfraRepos(ctx.serverDB, ctx.userId, platformAiProvider, wsId),
       aiModelModel: new AiModelModel(ctx.serverDB, ctx.userId, wsId),
       gateKeeper,
       userModel: new UserModel(ctx.serverDB, ctx.userId),
