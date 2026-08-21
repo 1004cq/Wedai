@@ -38,7 +38,9 @@ services:
       S3_ENABLE_PATH_STYLE: '1'
       S3_ENDPOINT: ${S3_ENDPOINT}
       S3_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY}
-      S3_SET_ACL: '0'
+      # 1 = public object URLs via S3_PUBLIC_DOMAIN (needs nginx proxy to RustFS).
+      # 0 = presigned URLs signed against S3_ENDPOINT (must be browser-reachable).
+      S3_SET_ACL: ${S3_SET_ACL:-1}
       SEARXNG_URL: ${SEARXNG_URL:-}
     restart: unless-stopped
     networks:
@@ -114,7 +116,9 @@ services:
         set -eu
         mc alias set rustfs http://rustfs:9000 "$$RUSTFS_ACCESS_KEY" "$$RUSTFS_SECRET_KEY" >/dev/null
         mc mb "rustfs/$$RUSTFS_LOBE_BUCKET" --ignore-existing >/dev/null
-        mc anonymous set-json /bucket.config.json "rustfs/$$RUSTFS_LOBE_BUCKET" >/dev/null
+        # mc image has no sed — write anonymous GetObject policy for the real bucket name.
+        printf '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::%s/*"]}]}' "$$RUSTFS_LOBE_BUCKET" > /tmp/bucket.config.json
+        mc anonymous set-json /tmp/bucket.config.json "rustfs/$$RUSTFS_LOBE_BUCKET" >/dev/null
     restart: 'no'
     networks:
       - wedai
