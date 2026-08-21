@@ -68,7 +68,7 @@ export const ProvidersPage = () => {
         description={
           '用户侧「设置 → 模型服务商」在 BYOK_ALLOWED=false 时已关闭。' +
           '请在主机 .env.commercial 中设置 OPENAI_API_KEY、ANTHROPIC_API_KEY 等，然后重启 app 容器。' +
-          '本页只显示是否已配置，永不回显密钥明文。'
+          '应用设置里已隐藏「服务模型」入口。本页只显示是否已配置，永不回显密钥明文。'
         }
       />
       {error ? (
