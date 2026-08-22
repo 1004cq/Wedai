@@ -1,0 +1,50 @@
+name: Deploy cq.je
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: [Publish Wedai Image]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: deploy-cq-je
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate deploy secrets
+        run: |
+          test -n "${{ secrets.DEPLOY_SSH_HOST }}" || { echo "Missing DEPLOY_SSH_HOST"; exit 1; }
+          test -n "${{ secrets.DEPLOY_SSH_USER }}" || { echo "Missing DEPLOY_SSH_USER"; exit 1; }
+          test -n "${{ secrets.DEPLOY_SSH_PASSWORD }}" || { echo "Missing DEPLOY_SSH_PASSWORD"; exit 1; }
+
+      - name: Deploy to production
+        env:
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          DEPLOY_SSH_PASSWORD: ${{ secrets.DEPLOY_SSH_PASSWORD }}
+          SMS_PROVIDER: ${{ secrets.SMS_PROVIDER }}
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+          ALIYUN_SMS_VERIFY_SIGN_NAME: ${{ secrets.ALIYUN_SMS_VERIFY_SIGN_NAME }}
+          ALIYUN_SMS_VERIFY_TEMPLATE_CODE: ${{ secrets.ALIYUN_SMS_VERIFY_TEMPLATE_CODE }}
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq sshpass >/dev/null
+          chmod +x deploy/remote-deploy.sh
+          ./deploy/remote-deploy.sh
+
+      - name: Verify signin page
+        run: |
+          curl -fsS "https://cq.je/signin" | grep -q 'index.auth' || exit 1
+          echo "Signin page reachable"
