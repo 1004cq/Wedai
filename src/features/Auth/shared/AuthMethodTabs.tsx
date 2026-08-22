@@ -56,7 +56,7 @@ export const AuthMethodTabs = ({ method, onChange }: AuthMethodTabsProps) => {
         type="button"
         onClick={() => onChange('email')}
       >
-        <Text>{t('betterAuth.method.email')}</Text>
+        <Text>{t('betterAuth.authMethod.email')}</Text>
       </button>
       <button
         className={styles.tab}
@@ -65,7 +65,7 @@ export const AuthMethodTabs = ({ method, onChange }: AuthMethodTabsProps) => {
         type="button"
         onClick={() => onChange('phone')}
       >
-        <Text>{t('betterAuth.method.phone')}</Text>
+        <Text>{t('betterAuth.authMethod.phone')}</Text>
       </button>
     </div>
   );
