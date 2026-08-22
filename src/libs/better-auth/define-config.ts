@@ -357,8 +357,23 @@ export function defineConfig(customOptions: CustomBetterAuthOptions) {
                 message: 'Too many verification code requests. Please try again later.',
               });
             }
-            if (error instanceof Error && error.message === 'SMS_DISABLED') {
-              throw APIError.from('BAD_REQUEST', { message: 'SMS verification is disabled' });
+            if (error instanceof Error) {
+              if (error.message === 'SMS_DISABLED') {
+                throw APIError.from('BAD_REQUEST', { message: 'SMS verification is disabled' });
+              }
+              if (error.message === 'SMS_NOT_CONFIGURED') {
+                throw APIError.from('INTERNAL_SERVER_ERROR', {
+                  message: 'SMS service is not configured',
+                });
+              }
+              if (error.message === 'INVALID_PHONE_NUMBER') {
+                throw APIError.from('BAD_REQUEST', { message: 'Invalid phone number' });
+              }
+              if (error.message === 'SMS_SEND_FAILED') {
+                throw APIError.from('INTERNAL_SERVER_ERROR', {
+                  message: 'Failed to send verification code',
+                });
+              }
             }
             throw error;
           }
