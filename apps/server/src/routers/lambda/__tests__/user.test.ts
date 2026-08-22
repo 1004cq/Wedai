@@ -32,6 +32,26 @@ const mockUnderstandingService = vi.hoisted(() => ({
   start: vi.fn(),
 }));
 const mockCreateUnderstandingService = vi.hoisted(() => vi.fn());
+const dbMocks = vi.hoisted(() => {
+  const selectLimit = vi.fn().mockResolvedValue([{ role: 'user' }]);
+  const serverDB = {
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          limit: selectLimit,
+        })),
+      })),
+    })),
+  };
+
+  return {
+    selectLimit,
+    serverDB,
+    setRole: (role: string | null) => {
+      selectLimit.mockResolvedValue(role === null ? [] : [{ role }]);
+    },
+  };
+});
 
 // Mock modules
 vi.mock('@/server/utils/scheduleAfterResponse', () => ({
@@ -63,7 +83,13 @@ vi.mock('@/business/server/user', () => ({
 }));
 
 vi.mock('@/database/server', () => ({
-  serverDB: {},
+  getServerDB: vi.fn(async () => dbMocks.serverDB),
+  serverDB: dbMocks.serverDB,
+}));
+
+vi.mock('@/database/core/db-adaptor', () => ({
+  getServerDB: vi.fn(async () => dbMocks.serverDB),
+  serverDB: dbMocks.serverDB,
 }));
 
 vi.mock('@/database/models/message');
@@ -96,6 +122,7 @@ describe('userRouter', () => {
   beforeEach(() => {
     mockAfterTasks.length = 0;
     vi.clearAllMocks();
+    dbMocks.setRole('user');
     for (const method of Object.values(mockUnderstandingService)) method.mockReset();
     mockCreateUnderstandingService.mockReset();
     vi.mocked(getReferralStatus).mockResolvedValue(undefined);
@@ -717,6 +744,67 @@ describe('userRouter', () => {
           },
         }),
       );
+    });
+
+    it('strips platform AI fields for non-admins when BYOK is off so onboarding language can save', async () => {
+      const previous = process.env.BYOK_ALLOWED;
+      process.env.BYOK_ALLOWED = 'false';
+      dbMocks.setRole('user');
+
+      const updateSetting = vi.fn().mockResolvedValue({ rowCount: 1 });
+      vi.mocked(UserModel).mockImplementation(
+        () =>
+          ({
+            updateSetting,
+          }) as any,
+      );
+
+      try {
+        await userRouter.createCaller({ ...mockCtx }).updateSettings({
+          defaultAgent: { config: { model: 'gpt-4o', provider: 'openai' } },
+          general: { responseLanguage: 'zh-CN' },
+          languageModel: { openai: { enabled: true } },
+          systemAgent: { topic: { model: 'gpt-4o', provider: 'openai' } },
+        });
+
+        expect(updateSetting).toHaveBeenCalledWith({
+          general: { responseLanguage: 'zh-CN' },
+          keyVaults: null,
+        });
+      } finally {
+        if (previous === undefined) delete process.env.BYOK_ALLOWED;
+        else process.env.BYOK_ALLOWED = previous;
+      }
+    });
+
+    it('keeps platform AI fields for admins when BYOK is off', async () => {
+      const previous = process.env.BYOK_ALLOWED;
+      process.env.BYOK_ALLOWED = 'false';
+      dbMocks.setRole('admin');
+
+      const updateSetting = vi.fn().mockResolvedValue({ rowCount: 1 });
+      vi.mocked(UserModel).mockImplementation(
+        () =>
+          ({
+            updateSetting,
+          }) as any,
+      );
+
+      try {
+        await userRouter.createCaller({ ...mockCtx }).updateSettings({
+          defaultAgent: { config: { model: 'gpt-4o', provider: 'openai' } },
+          general: { responseLanguage: 'zh-CN' },
+        });
+
+        expect(updateSetting).toHaveBeenCalledWith({
+          defaultAgent: { config: { model: 'gpt-4o', provider: 'openai' } },
+          general: { responseLanguage: 'zh-CN' },
+          keyVaults: null,
+        });
+      } finally {
+        if (previous === undefined) delete process.env.BYOK_ALLOWED;
+        else process.env.BYOK_ALLOWED = previous;
+      }
     });
   });
 });
