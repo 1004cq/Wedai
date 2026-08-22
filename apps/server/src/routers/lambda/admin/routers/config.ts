@@ -1,5 +1,5 @@
 /**
- * admin.config — system configuration status + LLM platform secret writes.
+ * admin.config — system configuration status + LLM platform secret writes + SMS settings.
  *
  * SECURITY CONTRACT:
  *  - Secret values are NEVER returned — only boolean `configured` flags
@@ -16,10 +16,12 @@ import {
   type SystemLlmCredentials,
   SystemLlmProviderModel,
 } from '@/database/models/systemLlmProvider';
+import { SystemSmsConfigModel } from '@/database/models/systemSmsConfig';
 import { router } from '@/libs/trpc/lambda';
 import { LLM_PROVIDER_STATUS } from '@/server/const/adminLlmProviders';
 import { KeyVaultsGateKeeper } from '@/server/modules/KeyVaultsEncrypt';
 import { mergeLlmCredentialUpdate } from '@/server/services/platformLlmProviders';
+import { getAdminSmsConfigView, getSmsConfig, isSmsOperational } from '@/server/services/sms';
 
 import { adminProcedure } from '../middleware';
 
@@ -62,6 +64,7 @@ export type BuildAdminConfigStatusOptions = {
     enabled: boolean;
     provider: string;
   }>;
+  smsConfigured?: boolean;
 };
 
 /** Pure builder — unit-tested without adminProcedure / DB. */
@@ -107,7 +110,6 @@ export const buildAdminConfigStatus = (
 
   return {
     stripe: {
-      /** Whether Stripe integration is enabled. */
       enabled: isSet('STRIPE_SECRET_KEY', env) && isSet('STRIPE_WEBHOOK_SECRET', env),
       publishableKeyConfigured: isSet('NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY', env),
       secretKeyConfigured: isSet('STRIPE_SECRET_KEY', env),
@@ -115,17 +117,14 @@ export const buildAdminConfigStatus = (
     },
 
     email: {
-      /** Whether SMTP or Resend is configured for transactional email. */
       configured: isSet('SMTP_HOST', env) || isSet('RESEND_API_KEY', env),
       provider: isSet('RESEND_API_KEY', env) ? 'resend' : isSet('SMTP_HOST', env) ? 'smtp' : null,
-      // Mask the SMTP host (not a secret, but no need to show full value)
       smtpHost: maskId('SMTP_HOST', env),
       fromEmail: maskId('SMTP_FROM', env) ?? maskId('RESEND_FROM', env),
     },
 
     sms: {
-      /** Whether a SMS provider is configured. */
-      configured: false, // Phase 5-4: phone login not yet implemented
+      configured: options.smsConfigured ?? false,
     },
 
     billing: {
@@ -134,10 +133,6 @@ export const buildAdminConfigStatus = (
       signupCreditGrant: Number.parseInt(env.SIGNUP_CREDIT_GRANT ?? '0', 10) || 0,
     },
 
-    /**
-     * Platform LLM keys: env and/or DB. Only `configured` booleans + non-secret
-     * baseURL/region — never secret values.
-     */
     llm: {
       byokAllowed,
       configuredCount: llmProviders.filter((p) => p.configured).length,
@@ -159,11 +154,19 @@ const updateLlmProviderInput = z.object({
   sessionToken: z.string().optional(),
 });
 
+const updateSmsSchema = z.object({
+  accessKeyId: z.string().optional(),
+  accessKeySecret: z.string().optional(),
+  enablePhoneRegister: z.boolean().optional(),
+  enabled: z.boolean().optional(),
+  mock: z.boolean().optional(),
+  provider: z.enum(['aliyun_pnvs', 'mock']).optional(),
+  schemeName: z.string().nullable().optional(),
+  signName: z.string().nullable().optional(),
+  templateCode: z.string().nullable().optional(),
+});
+
 export const adminConfigRouter = router({
-  /**
-   * Returns configuration status for all commercial integrations.
-   * Secret values are replaced with boolean `configured` flags.
-   */
   status: adminProcedure.query(async ({ ctx }) => {
     let llmDbRows: BuildAdminConfigStatusOptions['llmDbRows'];
     try {
@@ -172,14 +175,38 @@ export const adminConfigRouter = router({
     } catch {
       llmDbRows = [];
     }
-    return buildAdminConfigStatus(process.env, { llmDbRows });
+
+    const smsView = await getAdminSmsConfigView();
+
+    return buildAdminConfigStatus(process.env, {
+      llmDbRows,
+      smsConfigured: smsView.configured,
+    });
   }),
 
-  /**
-   * Upsert platform LLM credentials for one provider.
-   * Empty apiKey / secret fields are ignored (do not wipe existing secrets).
-   * Pass clearSecrets=true to remove stored secrets while keeping baseURL/region.
-   */
+  smsSettings: adminProcedure.query(async () => getAdminSmsConfigView()),
+
+  updateSms: adminProcedure.input(updateSmsSchema).mutation(async ({ ctx, input }) => {
+    const model = new SystemSmsConfigModel(ctx.serverDB);
+    await model.upsert({
+      accessKeyId: input.accessKeyId,
+      accessKeySecret: input.accessKeySecret,
+      enablePhoneRegister: input.enablePhoneRegister,
+      enabled: input.enabled,
+      mock: input.mock,
+      provider: input.provider,
+      schemeName: input.schemeName,
+      signName: input.signName,
+      templateCode: input.templateCode,
+    });
+
+    const cfg = await getSmsConfig();
+    return {
+      configured: isSmsOperational(cfg),
+      ...(await getAdminSmsConfigView()),
+    };
+  }),
+
   updateLlmProvider: adminProcedure
     .input(updateLlmProviderInput)
     .mutation(async ({ ctx, input }) => {
@@ -229,7 +256,6 @@ export const adminConfigRouter = router({
         gateKeeper,
       );
 
-      // Never echo secrets — return the same shape as status row.
       const status = buildAdminConfigStatus(process.env, {
         llmDbRows: [
           {

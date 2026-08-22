@@ -35,6 +35,7 @@ export * from './resourcePermission';
 export * from './session';
 export * from './systemBotProvider';
 export * from './systemLlmProvider';
+export * from './systemSmsConfig';
 export * from './task';
 export * from './topic';
 export * from './topicComment';
