@@ -12,6 +12,10 @@ export const BYOK_WRITES_DISABLED_MESSAGE =
 export const PLATFORM_AI_ADMIN_ONLY_MESSAGE =
   'AI provider and service model settings are managed by the administrator.';
 
+export const PLATFORM_AI_SETTING_KEYS = ['defaultAgent', 'languageModel', 'systemAgent'] as const;
+
+export type PlatformAiSettingKey = (typeof PLATFORM_AI_SETTING_KEYS)[number];
+
 /**
  * Rejects mutations that persist user/workspace provider credentials when BYOK is off.
  */
@@ -36,4 +40,22 @@ export const assertPlatformAiSettingsWritable = (role: string | null | undefined
     code: 'FORBIDDEN',
     message: PLATFORM_AI_ADMIN_ONLY_MESSAGE,
   });
+};
+
+export const canWritePlatformAiSettings = (role: string | null | undefined): boolean =>
+  isByokAllowed() || role === 'admin';
+
+/**
+ * Drop platform AI defaults from a settings patch.
+ * Used when BYOK is off and the caller is not an admin, so unrelated fields
+ * (e.g. onboarding `general.responseLanguage`) can still be persisted.
+ */
+export const omitPlatformAiSettings = <T extends Record<string, unknown>>(
+  settings: T,
+): Omit<T, PlatformAiSettingKey> => {
+  const next = { ...settings };
+  for (const key of PLATFORM_AI_SETTING_KEYS) {
+    delete next[key];
+  }
+  return next as Omit<T, PlatformAiSettingKey>;
 };

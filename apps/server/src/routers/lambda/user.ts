@@ -63,8 +63,9 @@ import { understandingProviders } from '@/server/services/understanding/provider
 import { createUnderstandingService } from '@/server/services/understanding/service';
 import {
   assertByokWritesAllowed,
-  assertPlatformAiSettingsWritable,
+  canWritePlatformAiSettings,
   isByokAllowed,
+  omitPlatformAiSettings,
 } from '@/server/utils/byokPolicy';
 import { after } from '@/server/utils/scheduleAfterResponse';
 
@@ -716,12 +717,18 @@ export const userRouter = router({
   }),
 
   updateSettings: userProcedure.input(UserSettingsSchema).mutation(async ({ ctx, input }) => {
-    const { keyVaults, ...res } = input as Partial<UserSettings>;
+    const { keyVaults, ...rest } = input as Partial<UserSettings>;
+    let res = rest;
 
     if (keyVaults) {
       assertByokWritesAllowed();
     }
 
+    // Client `setSettings` re-sends the full diff-from-defaults payload. That
+    // often includes defaultAgent / systemAgent / languageModel even when the
+    // user only changed general settings (e.g. onboarding responseLanguage).
+    // With BYOK off, rejecting the whole mutation traps onboarding in a loop.
+    // Strip platform AI fields for non-admins instead; admins may still write.
     const touchesPlatformAiDefaults = Boolean(
       res.systemAgent || res.defaultAgent || res.languageModel,
     );
@@ -731,7 +738,10 @@ export const userRouter = router({
         .from(users)
         .where(eq(users.id, ctx.userId))
         .limit(1);
-      assertPlatformAiSettingsWritable(row?.role);
+
+      if (!canWritePlatformAiSettings(row?.role)) {
+        res = omitPlatformAiSettings(res as Record<string, unknown>) as typeof res;
+      }
     }
 
     if (ctx.workspaceId && (hasOwnerSettingChange(res) || hasMemberSettingChange(res))) {
