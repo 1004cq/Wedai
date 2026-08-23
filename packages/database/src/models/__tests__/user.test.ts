@@ -218,14 +218,14 @@ describe('UserModel', () => {
 
     it('should normalize empty string phone to null', async () => {
       await userModel.updateUser({
-        phone: '',
+        phoneNumber: '',
       });
 
       const updated = await serverDB.query.users.findFirst({
         where: eq(users.id, userId),
       });
 
-      expect(updated?.phone).toBeNull();
+      expect(updated?.phoneNumber).toBeNull();
     });
 
     it('should normalize empty string username to null', async () => {

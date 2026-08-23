@@ -51,7 +51,10 @@ export const usePhoneAuth = ({ mode }: UsePhoneAuthOptions) => {
   }, [countdown]);
 
   const mapPhoneError = useCallback(
-    (error: { code?: string; message?: string; status?: number }) => {
+    (
+      error: { code?: string; message?: string; status?: number },
+      fallback: 'send' | 'verify' = 'send',
+    ) => {
       if (error.status === 429 || error.code === 'TOO_MANY_REQUESTS') {
         return t('betterAuth.phone.errors.rateLimited');
       }
@@ -68,7 +71,11 @@ export const usePhoneAuth = ({ mode }: UsePhoneAuthOptions) => {
         return t('betterAuth.phone.errors.invalidPhone');
       }
       const translated = error.code ? t(`authError:codes.${error.code}`, { defaultValue: '' }) : '';
-      return translated || error.message || t('betterAuth.phone.errors.sendFailed');
+      const defaultKey =
+        fallback === 'verify'
+          ? 'betterAuth.phone.errors.verifyFailed'
+          : 'betterAuth.phone.errors.sendFailed';
+      return translated || error.message || t(defaultKey);
     },
     [t],
   );
@@ -136,7 +143,7 @@ export const usePhoneAuth = ({ mode }: UsePhoneAuthOptions) => {
       if (error) {
         form.setFields([
           {
-            errors: [mapPhoneError(error)],
+            errors: [mapPhoneError(error, 'verify')],
             name: 'otp',
           },
         ]);

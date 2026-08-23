@@ -269,8 +269,7 @@ export function defineConfig(customOptions: CustomBetterAuthOptions) {
       },
       fields: {
         image: 'avatar',
-        phoneNumber: 'phone',
-        // NOTE: use drizzle filed instead of db field, so use fullName instead of full_name
+        // NOTE: use drizzle field instead of db field, so use fullName instead of full_name
         name: 'fullName',
       },
       modelName: 'users',

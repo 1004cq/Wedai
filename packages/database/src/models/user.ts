@@ -305,14 +305,16 @@ export class UserModel {
    * Normalize unique user fields so empty strings become null, keeping unique constraints safe.
    */
   private static normalizeUniqueUserFields = <
-    T extends { email?: string | null; phone?: string | null; username?: string | null },
+    T extends { email?: string | null; phoneNumber?: string | null; username?: string | null },
   >(
     value: T,
   ) => {
     const normalizedEmail =
       typeof value.email === 'string' && value.email.trim() === '' ? null : value.email;
     const normalizedPhone =
-      typeof value.phone === 'string' && value.phone.trim() === '' ? null : value.phone;
+      typeof value.phoneNumber === 'string' && value.phoneNumber.trim() === ''
+        ? null
+        : value.phoneNumber;
     const normalizedUsername =
       typeof value.username === 'string' && value.username.trim() === ''
         ? null
@@ -321,7 +323,7 @@ export class UserModel {
     return {
       ...value,
       ...(value.email !== undefined ? { email: normalizedEmail } : {}),
-      ...(value.phone !== undefined ? { phone: normalizedPhone } : {}),
+      ...(value.phoneNumber !== undefined ? { phoneNumber: normalizedPhone } : {}),
       ...(value.username !== undefined ? { username: normalizedUsername } : {}),
     };
   };
