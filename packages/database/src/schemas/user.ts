@@ -14,7 +14,8 @@ export const users = pgTable(
     normalizedEmail: text('normalized_email').unique(),
 
     avatar: text('avatar'),
-    phone: text('phone').unique(),
+    /** Better Auth phoneNumber plugin field; DB column remains `phone`. */
+    phoneNumber: text('phone').unique(),
     firstName: text('first_name'),
     lastName: text('last_name'),
     fullName: text('full_name'),
