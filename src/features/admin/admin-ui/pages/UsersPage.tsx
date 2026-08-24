@@ -10,6 +10,7 @@ import { adminApi } from '../api';
 import { createAdjustBalanceModal } from '../components/AdjustBalanceModal';
 import { AdminErrorState, AdminForbiddenBanner, AdminPage } from '../components/AdminPage';
 import { adminMobileListStyles, AdminScrollSurface } from '../components/AdminScrollSurface';
+import { createEditUserProfileModal } from '../components/EditUserProfileModal';
 import { createUserBanModal } from '../components/UserBanModal';
 import { useAdminAccess } from '../hooks/useAdminAccess';
 import { useAdminQuery } from '../hooks/useAdminQuery';
@@ -36,6 +37,11 @@ const UserActions = ({ user, onReload }: { onReload: () => void; user: AdminUser
 
   return (
     <Space wrap size={4}>
+      {can('user:update') && (
+        <Button size={'small'} onClick={() => createEditUserProfileModal(user, onReload)}>
+          编辑资料
+        </Button>
+      )}
       {can('billing:balance:adjust') && (
         <Button size={'small'} onClick={() => createAdjustBalanceModal(user, onReload)}>
           调整余额
@@ -101,12 +107,15 @@ export const UsersPage = () => {
   ];
 
   return (
-    <AdminPage description={'支持邮箱、用户名双通道账号搜索。'} title={'用户管理'}>
+    <AdminPage
+      description={'支持邮箱、用户名、手机号搜索；可编辑资料、调整积分余额、封禁账号。'}
+      title={'用户管理'}
+    >
       <Flex gap={12} style={{ maxWidth: '100%', width: '100%' }} wrap={'wrap'}>
         <Input.Search
           allowClear
           defaultValue={query}
-          placeholder={'搜索邮箱 / 用户名 / 姓名'}
+          placeholder={'搜索邮箱 / 用户名 / 姓名 / 手机号'}
           style={{
             flex: '1 1 240px',
             maxWidth: isCompact ? '100%' : 360,

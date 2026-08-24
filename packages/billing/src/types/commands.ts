@@ -96,8 +96,11 @@ export interface CreditCommand {
   billingAccountId: string;
   /** Amount in credit units to add to available balance. */
   credits: CreditUnits;
-  /** Internal order ID that triggered this credit. */
-  orderId: string;
+  /**
+   * Paid top-up order id. Omit for admin/signup grants — `ledger_entries.order_id`
+   * has a real FK to `orders.id`, so a synthetic id would abort the insert.
+   */
+  orderId?: string;
   idempotencyKey: string;
   reason?: string;
   /** Admin user ID for manual adjustments. */

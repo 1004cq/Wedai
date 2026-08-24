@@ -32,6 +32,29 @@ describe('admin mobile containment markers', () => {
     expect(text).toContain('isCompact');
     expect(text).toContain('adminMobileListStyles.card');
     expect(text).toContain('AdminScrollSurface');
+    expect(text).toContain('编辑资料');
+    expect(text).toContain('createEditUserProfileModal');
+  });
+
+  it('admin users list joins wallets so recharge is visible after reload', () => {
+    const usersRouter = readFileSync(
+      path.resolve(here, '../../../../apps/server/src/routers/lambda/admin/routers/users.ts'),
+      'utf8',
+    );
+    const mapper = readFileSync(path.resolve(here, 'mapUser.ts'), 'utf8');
+    const adjustments = readFileSync(
+      path.resolve(
+        here,
+        '../../../../apps/server/src/routers/lambda/admin/routers/adjustments.ts',
+      ),
+      'utf8',
+    );
+
+    expect(usersRouter).toContain('leftJoin(wallets');
+    expect(usersRouter).toContain('ensureBillingAccount');
+    expect(mapper).toContain('parseCreditBalance(row.available)');
+    expect(adjustments).toContain('buildManualCreditCommand');
+    expect(adjustments).not.toContain('admin-adj-');
   });
 
   it('ProvidersPage is an editable LLM secret surface that never echoes plaintext', () => {

@@ -237,6 +237,26 @@ describe('credit()', () => {
     expect(result.availableAfter).toBe(1000n);
   });
 
+  it('forwards credits without an orderId for admin/signup grants', async () => {
+    mockCredit.mockResolvedValueOnce({ wallet: makeWallet(100n), ledger: { id: 'led_admin' } });
+
+    await svc.credit({
+      billingAccountId: BAC,
+      credits: 100n,
+      idempotencyKey: 'admin:credit:op-1',
+      reason: 'compensation',
+    });
+
+    expect(mockCredit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        billingAccountId: BAC,
+        delta: 100n,
+        idempotencyKey: 'admin:credit:op-1',
+        orderId: undefined,
+      }),
+    );
+  });
+
   it('idempotent: repeated credit with same idempotencyKey returns same entry', async () => {
     const ledger = { id: 'led_idem_credit' };
     mockCredit

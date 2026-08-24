@@ -39,28 +39,22 @@ const AdjustBalanceContent = ({ onSuccess, user }: AdjustBalanceContentProps) =>
 
     setSubmitting(true);
     try {
-      // Fetch billingAccountId for this user first.
-      const detail = await adminApi.getUser(user.id);
-      if (!detail.billingAccountId) {
-        message.error('该用户没有关联的计费账户');
-        return;
-      }
-
+      const account = await adminApi.ensureBillingAccount(user.id);
       const key = idempotencyKey.trim() || `admin-${Date.now()}-${user.id}`;
 
       if (direction === 'credit') {
         const result = await adminApi.creditBalance({
-          billingAccountId: detail.billingAccountId,
+          billingAccountId: account.billingAccountId,
           credits,
           reason,
           idempotencyKey: key,
         });
         message.success(
-          `已为 ${user.nickname} 充入 ${credits.toLocaleString()} 积分，操作后余额：${result.availableAfter}`,
+          `已为 ${user.nickname} 充入 ${credits.toLocaleString('zh-CN')} 积分，操作后余额：${Number(result.availableAfter).toLocaleString('zh-CN')}`,
         );
       } else {
         await adminApi.debitBalance({
-          billingAccountId: detail.billingAccountId,
+          billingAccountId: account.billingAccountId,
           credits,
           reason,
           idempotencyKey: key,

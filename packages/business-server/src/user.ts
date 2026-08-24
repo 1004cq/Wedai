@@ -71,8 +71,8 @@ export async function initNewUserForBusiness(
     billingAccountId: account.id,
     credits: grantAmount,
     // Deterministic idempotency key — safe to replay; only one row ever written.
+    // No synthetic orderId: ledger_entries.order_id FKs to orders.id.
     idempotencyKey: `signup:welcome:${userId}`,
-    orderId: `signup-grant-${userId}`,
     reason: 'welcome_grant',
   });
 }

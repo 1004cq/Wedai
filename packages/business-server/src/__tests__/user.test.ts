@@ -73,6 +73,7 @@ describe('initNewUserForBusiness', () => {
     expect(call.credits).toBe(BigInt(100_000));
     expect(call.idempotencyKey).toBe(`signup:welcome:${userId}`);
     expect(call.reason).toBe('welcome_grant');
+    expect(call.orderId).toBeUndefined();
   });
 
   it('idempotent: same idempotency key on second call (WalletModel dedup)', async () => {

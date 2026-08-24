@@ -31,6 +31,7 @@ export interface AdminUserRow {
   registeredAt: string;
   role: AdminRole;
   status: AdminUserStatus;
+  username?: string;
 }
 
 export interface AdminDashboardMetrics {
@@ -188,4 +189,13 @@ export interface SetUserBanInput {
   banned: boolean;
   reason: string;
   userId: string;
+}
+
+export interface UpdateUserProfileInput {
+  email?: string | null;
+  fullName?: string | null;
+  phone?: string | null;
+  role?: Extract<AdminRole, 'admin' | 'user'>;
+  userId: string;
+  username?: string | null;
 }

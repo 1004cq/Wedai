@@ -13,10 +13,12 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 
 import { BillingCommandService } from '@lobechat/billing';
-import { router } from '@/libs/trpc/lambda';
+
 import { billingAccounts } from '@/database/schemas';
+import { router } from '@/libs/trpc/lambda';
 
 import { adminProcedure } from '../middleware';
+import { buildManualCreditCommand } from './manualCredit';
 
 export const adminAdjustmentsRouter = router({
   /**
@@ -46,14 +48,15 @@ export const adminAdjustmentsRouter = router({
       if (!account) throw new TRPCError({ code: 'NOT_FOUND', message: 'Billing account not found' });
 
       const billingService = new BillingCommandService(serverDB);
-      const result = await billingService.credit({
-        billingAccountId: input.billingAccountId,
-        credits: BigInt(input.credits),
-        orderId: `admin-adj-${input.idempotencyKey}`,
-        idempotencyKey: `admin:credit:${input.idempotencyKey}`,
-        reason: input.reason,
-        operatorUserId: adminId,
-      });
+      const result = await billingService.credit(
+        buildManualCreditCommand({
+          billingAccountId: input.billingAccountId,
+          credits: input.credits,
+          idempotencyKey: input.idempotencyKey,
+          operatorUserId: adminId,
+          reason: input.reason,
+        }),
+      );
 
       return {
         ledgerEntryId: result.ledgerEntryId,

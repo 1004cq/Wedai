@@ -17,6 +17,7 @@
  */
 import { lambdaClient } from '@/libs/trpc/client';
 
+import { mapAdminUserRow } from './mapUser';
 import type {
   AdminModelPrice,
   AdminOrderRow,
@@ -26,6 +27,7 @@ import type {
   SetUserBanInput,
   SmsConfig,
   SmsConfigUpdate,
+  UpdateUserProfileInput,
 } from './types';
 
 // ─── cursor-based → page-based bridge ────────────────────────────────────────
@@ -49,7 +51,7 @@ async function listUsers(query: {
   });
 
   return {
-    items: res.items.map(mapUser),
+    items: res.items.map(mapAdminUserRow),
     nextCursor: res.nextCursor,
     page: query.page,
     pageSize: query.pageSize,
@@ -70,6 +72,25 @@ async function setUserBan(input: SetUserBanInput): Promise<void> {
     banned: input.banned,
     reason: input.reason,
   });
+}
+
+async function ensureBillingAccount(userId: string): Promise<{
+  available: string;
+  billingAccountId: string;
+}> {
+  return lambdaClient.admin.users.ensureBillingAccount.mutate({ userId });
+}
+
+async function updateUserProfile(input: UpdateUserProfileInput): Promise<AdminUserRow> {
+  const row = await lambdaClient.admin.users.updateProfile.mutate({
+    email: input.email,
+    fullName: input.fullName,
+    phoneNumber: input.phone,
+    role: input.role === 'super_admin' ? 'admin' : input.role,
+    userId: input.userId,
+    username: input.username,
+  });
+  return mapAdminUserRow(row);
 }
 
 // ─── Orders ───────────────────────────────────────────────────────────────────
@@ -188,6 +209,7 @@ export const adminApi = {
   archivePrice,
   creditBalance,
   debitBalance,
+  ensureBillingAccount,
   getConfigStatus,
   getOrder,
   getSmsConfig,
@@ -199,34 +221,12 @@ export const adminApi = {
   setUserBan,
   updateLlmProvider,
   updateSmsConfig,
+  updateUserProfile,
   upsertPrice,
 };
 
 // ─── Shape mappers ────────────────────────────────────────────────────────────
-// Map backend Drizzle row shapes to the AdminUserRow / AdminOrderRow UI types.
-
-function mapUser(row: {
-  id: string;
-  email: string | null;
-  fullName: string | null;
-  username: string | null;
-  role: string | null;
-  banned: boolean | null;
-  banReason: string | null;
-  createdAt: Date;
-}): AdminUserRow {
-  return {
-    balanceCredits: 0, // populated lazily by getUser when detail is needed
-    email: row.email ?? undefined,
-    id: row.id,
-    lastActiveAt: row.createdAt.toISOString(),
-    nickname: row.fullName ?? row.username ?? row.email ?? row.id,
-    plan: 'free', // plan not returned by list endpoint
-    registeredAt: row.createdAt.toISOString(),
-    role: (row.role as AdminUserRow['role']) ?? 'user',
-    status: row.banned ? 'banned' : 'active',
-  };
-}
+// Map backend Drizzle row shapes to the AdminOrderRow / AdminModelPrice UI types.
 
 function mapOrder(row: {
   id: string;

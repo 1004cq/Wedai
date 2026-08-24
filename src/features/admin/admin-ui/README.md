@@ -12,7 +12,7 @@ Wedai 商业运营后台的 Web SPA 实现，挂载在 `/admin/*`。当前阶段
 | 路径             | 功能                                         | 读取权限                 | 写入权限                              |
 | ---------------- | -------------------------------------------- | ------------------------ | ------------------------------------- |
 | `/admin`         | 用户、订单、收入与积分总览                   | `admin:dashboard:read`   | —                                     |
-| `/admin/users`   | 邮箱 / 手机号用户查询、余额调整、封禁 / 解封 | `user:read`              | `billing:balance:adjust`、`user:ban`  |
+| `/admin/users`   | 邮箱 / 手机号用户查询、资料编辑、余额调整、封禁 / 解封 | `user:read`              | `user:update`、`billing:balance:adjust`、`user:ban`  |
 | `/admin/orders`  | 订阅和积分包订单、状态筛选                   | `billing:order:read`     | `billing:order:refund` 预留给真实 API |
 | `/admin/prices`  | Token / 按次计费、积分价格与启停             | `billing:price:read`     | `billing:price:write`                 |
 | `/admin/payment` | 支付宝 RSA2、回调与沙箱配置                  | `billing:payment:config` | 同左                                  |
