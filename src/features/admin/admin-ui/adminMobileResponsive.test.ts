@@ -36,6 +36,15 @@ describe('admin mobile containment markers', () => {
     expect(text).toContain('createEditUserProfileModal');
   });
 
+  it('admin credit submit survives an empty optional idempotency key', () => {
+    const modal = readFileSync(path.resolve(here, 'components/AdjustBalanceModal.tsx'), 'utf8');
+    const helper = readFileSync(path.resolve(here, 'resolveAdjustmentIdempotencyKey.ts'), 'utf8');
+
+    expect(modal).toContain('resolveAdjustmentIdempotencyKey');
+    expect(modal).not.toMatch(/idempotencyKey\.trim\(\)/);
+    expect(helper).toContain('idempotencyKey?.trim()');
+  });
+
   it('admin users list joins wallets so recharge is visible after reload', () => {
     const usersRouter = readFileSync(
       path.resolve(here, '../../../../apps/server/src/routers/lambda/admin/routers/users.ts'),

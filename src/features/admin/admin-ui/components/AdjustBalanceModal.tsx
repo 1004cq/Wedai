@@ -6,6 +6,7 @@ import { useState } from 'react';
 
 import { adminApi } from '../api';
 import { useAdminAccess } from '../hooks/useAdminAccess';
+import { resolveAdjustmentIdempotencyKey } from '../resolveAdjustmentIdempotencyKey';
 import type { AdminUserRow } from '../types';
 
 interface AdjustBalanceFormValues {
@@ -40,7 +41,8 @@ const AdjustBalanceContent = ({ onSuccess, user }: AdjustBalanceContentProps) =>
     setSubmitting(true);
     try {
       const account = await adminApi.ensureBillingAccount(user.id);
-      const key = idempotencyKey.trim() || `admin-${Date.now()}-${user.id}`;
+      // Optional field is often undefined when untouched — never call .trim() on it raw.
+      const key = resolveAdjustmentIdempotencyKey(idempotencyKey, user.id);
 
       if (direction === 'credit') {
         const result = await adminApi.creditBalance({
@@ -59,7 +61,9 @@ const AdjustBalanceContent = ({ onSuccess, user }: AdjustBalanceContentProps) =>
           reason,
           idempotencyKey: key,
         });
-        message.success(`已从 ${user.nickname} 扣减 ${credits.toLocaleString()} 积分`);
+        message.success(
+          `已从 ${user.nickname} 扣减 ${credits.toLocaleString('zh-CN')} 积分`,
+        );
       }
 
       onSuccess();
