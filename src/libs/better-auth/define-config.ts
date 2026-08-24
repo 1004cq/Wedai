@@ -134,7 +134,9 @@ export function defineConfig(customOptions: CustomBetterAuthOptions) {
       enabled: !authEnv.AUTH_DISABLE_EMAIL_PASSWORD,
       maxPasswordLength: 64,
       minPasswordLength: 8,
-      requireEmailVerification: authEnv.AUTH_EMAIL_VERIFICATION,
+      // Email/password login must not require a verified inbox. Verification
+      // remains available via AUTH_EMAIL_VERIFICATION for signup reminders only.
+      requireEmailVerification: false,
       revokeSessionsOnPasswordReset: true,
 
       // Compatible with bcrypt password hashes migrated from Clerk; after login, you can re-hash in the backend using BetterAuth's default scrypt.

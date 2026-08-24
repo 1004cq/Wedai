@@ -211,11 +211,6 @@ export const useSignIn = () => {
         {
           onError: (ctx) => {
             console.error('Sign in error:', ctx.error);
-            if (ctx.error.status === 403) {
-              navigate(
-                `/verify-email?email=${encodeURIComponent(email)}&callbackUrl=${encodeURIComponent(callbackUrl)}`,
-              );
-            }
           },
           // callbackUrl targets the main app, outside this auth SPA — full page load required
           onSuccess: () => {
@@ -224,7 +219,7 @@ export const useSignIn = () => {
         },
       );
 
-      if (result.error && result.error.status !== 403) {
+      if (result.error) {
         // Wrong password is the most common sign-in failure. Keep the error
         // pinned inline on the field (persistent, with retry context) rather
         // than a toast that vanishes in 3s (ux Read §1.1 / Same-Page Error).

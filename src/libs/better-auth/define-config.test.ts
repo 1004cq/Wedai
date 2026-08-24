@@ -138,6 +138,20 @@ describe('defineConfig', () => {
     process.env = originalEnv;
   });
 
+  it('should not require email verification for email/password login', async () => {
+    const { defineConfig } = await import('./define-config');
+
+    defineConfig({ plugins: [] });
+
+    expect(mocks.betterAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        emailAndPassword: expect.objectContaining({
+          requireEmailVerification: false,
+        }),
+      }),
+    );
+  });
+
   it('should revoke existing sessions after password reset by default', async () => {
     const { defineConfig } = await import('./define-config');
 

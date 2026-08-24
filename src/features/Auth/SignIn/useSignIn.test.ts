@@ -325,9 +325,9 @@ describe('useSignIn', () => {
       expect(mockMessageError).not.toHaveBeenCalled();
     });
 
-    it('should redirect to verify-email on 403', async () => {
+    it('should show the password error on 403 instead of redirecting to verify-email', async () => {
       mockSignInEmail.mockImplementation(async (_data: any, opts: any) => {
-        opts.onError({ error: { status: 403 } });
+        opts.onError({ error: { message: 'Email not verified', status: 403 } });
         return { error: { message: 'Email not verified', status: 403 } };
       });
 
@@ -346,9 +346,12 @@ describe('useSignIn', () => {
         await result.current.handleSignIn({ password: 'password' });
       });
 
-      expect(mockNavigate).toHaveBeenCalledWith(
-        expect.stringContaining('/verify-email?email=user%40example.com'),
+      expect(mockNavigate).not.toHaveBeenCalledWith(
+        expect.stringContaining('/verify-email'),
       );
+      expect(mockSetFields).toHaveBeenCalledWith([
+        { errors: ['Email not verified'], name: 'password' },
+      ]);
     });
   });
 
