@@ -74,6 +74,8 @@ export * from './session';
 export * from './signal';
 export * from './signalDecision';
 export * from './systemBotProvider';
+export * from './systemLlmProvider';
+export * from './systemSmsConfig';
 export * from './task';
 export * from './taskExternalLink';
 export * from './taskLabel';
