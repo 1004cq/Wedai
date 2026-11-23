@@ -18,10 +18,20 @@ if (process.env.TEST_SERVER_DB === '1') {
 
   afterAll(async () => {
     const { getTestDB } = await import('../src/core/getTestDB');
-    const { environmentInstances, environments, projectEnvironments } =
-      await import('../src/schemas');
+    const {
+      environmentInstances,
+      environments,
+      ledgerEntries,
+      orders,
+      projectEnvironments,
+      usageRecords,
+    } = await import('../src/schemas');
     const db = await getTestDB();
 
+    // Clear billing rows before env teardown so files stay isolated.
+    await db.delete(ledgerEntries);
+    await db.delete(usageRecords);
+    await db.delete(orders);
     await db.delete(projectEnvironments);
     await db.delete(environmentInstances);
     await db.delete(environments);

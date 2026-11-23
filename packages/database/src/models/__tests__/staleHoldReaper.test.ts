@@ -21,9 +21,10 @@ import { DEFAULT_HOLD_TIMEOUT_MINUTES, parseHoldKey, StaleHoldReaper } from '../
 const mockRelease = vi.fn();
 
 vi.mock('../billing', () => ({
-  WalletModel: vi.fn().mockImplementation(() => ({
-    release: mockRelease,
-  })),
+  // Real code uses `new WalletModel(db)` — keep a constructible mock.
+  WalletModel: vi.fn(function WalletModel(this: { release: typeof mockRelease }) {
+    this.release = mockRelease;
+  }),
 }));
 
 // ─── DB builder ───────────────────────────────────────────────────────────────
@@ -32,33 +33,40 @@ vi.mock('../billing', () => ({
  * Minimal DB mock.
  * `selectSequence`: array of result arrays returned by successive .select()
  *  calls (first call = stale holds query, second call = settlement keys query).
+ * Stale-hold query ends with `.limit()`; settlement-key query awaits after
+ * `.where()`, so `where` returns a Promise (optionally with `.limit`).
  */
 function makeDb(selectSequence: unknown[][]) {
   let selectCallCount = 0;
-  const buildChain = () => {
-    const results = selectSequence[selectCallCount++] ?? [];
-    const chain: any = {
-      from: () => chain,
-      where: () => chain,
-      limit: () => Promise.resolve(results),
-    };
-    return chain;
-  };
-  return { select: () => buildChain() } as any;
+  return {
+    select: () => {
+      const results = selectSequence[selectCallCount++] ?? [];
+      const resolved = Object.assign(Promise.resolve(results), {
+        limit: () => Promise.resolve(results),
+      });
+      const chain: any = {
+        from: () => chain,
+        where: () => resolved,
+        limit: () => Promise.resolve(results),
+      };
+      return chain;
+    },
+  } as any;
 }
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
 const past = new Date(Date.now() - (DEFAULT_HOLD_TIMEOUT_MINUTES + 5) * 60 * 1000);
-const recent = new Date(Date.now() - 60 * 1000); // 1 minute ago — within timeout
 
-function makeHoldRow(overrides: Partial<{
-  id: string;
-  billingAccountId: string;
-  delta: bigint;
-  idempotencyKey: string;
-  createdAt: Date;
-}> = {}) {
+function makeHoldRow(
+  overrides: Partial<{
+    id: string;
+    billingAccountId: string;
+    delta: bigint;
+    idempotencyKey: string;
+    createdAt: Date;
+  }> = {},
+) {
   return {
     billingAccountId: 'bac_test',
     createdAt: past,

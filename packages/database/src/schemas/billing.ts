@@ -9,7 +9,17 @@
  *  - Every external-facing operation carries an idempotency key.
  */
 import { sql } from 'drizzle-orm';
-import { bigint, boolean, index, integer, jsonb, pgTable, text, uniqueIndex, varchar } from 'drizzle-orm/pg-core';
+import {
+  bigint,
+  boolean,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  uniqueIndex,
+  varchar,
+} from 'drizzle-orm/pg-core';
 
 import { idGenerator } from '../utils/idGenerator';
 import { createdAt, timestamptz, updatedAt } from './_helpers';
@@ -26,12 +36,7 @@ export type PlanPriceCurrency = string; // ISO 4217, e.g. "CNY", "USD"
 export type PlanPriceBillingInterval = 'one_time' | 'monthly' | 'yearly';
 
 export type SubscriptionStatus =
-  | 'trialing'
-  | 'active'
-  | 'past_due'
-  | 'canceled'
-  | 'unpaid'
-  | 'paused';
+  'trialing' | 'active' | 'past_due' | 'canceled' | 'unpaid' | 'paused';
 
 /** Internal order state machine:  pending → paid | closed | failed */
 export type OrderStatus = 'pending' | 'paid' | 'closed' | 'failed';
@@ -46,7 +51,8 @@ export const ORDER_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
 
 export type PaymentAttemptStatus = 'pending' | 'succeeded' | 'failed' | 'canceled';
 
-export type LedgerEntryKind = 'credit' | 'debit' | 'grant' | 'hold' | 'release' | 'refund' | 'expiry';
+export type LedgerEntryKind =
+  'credit' | 'debit' | 'grant' | 'hold' | 'release' | 'refund' | 'expiry';
 
 export type WebhookEventStatus = 'pending' | 'processed' | 'failed' | 'ignored';
 
@@ -174,7 +180,9 @@ export const plans = pgTable(
     description: text('description'),
     status: varchar('status', { length: 16 }).$type<PlanStatus>().notNull().default('active'),
     /** Monthly token grant included in the plan (integer units). */
-    tokenGrantMonthly: bigint('token_grant_monthly', { mode: 'bigint' }).notNull().default(BigInt(0)),
+    tokenGrantMonthly: bigint('token_grant_monthly', { mode: 'bigint' })
+      .notNull()
+      .default(BigInt(0)),
     /** Feature flags / entitlements stored as structured JSON. */
     features: jsonb('features').$type<Record<string, boolean | number | string>>().default({}),
     sortOrder: integer('sort_order').notNull().default(0),
@@ -237,7 +245,7 @@ export const subscriptions = pgTable(
       .$defaultFn(() => idGenerator('subscriptions'))
       .notNull(),
     billingAccountId: text('billing_account_id')
-      .references(() => billingAccounts.id, { onDelete: 'restrict' })
+      .references(() => billingAccounts.id, { onDelete: 'cascade' })
       .notNull(),
     planId: text('plan_id')
       .references(() => plans.id, { onDelete: 'restrict' })
@@ -287,10 +295,10 @@ export const orders = pgTable(
       .$defaultFn(() => idGenerator('orders'))
       .notNull(),
     billingAccountId: text('billing_account_id')
-      .references(() => billingAccounts.id, { onDelete: 'restrict' })
+      .references(() => billingAccounts.id, { onDelete: 'cascade' })
       .notNull(),
     userId: text('user_id')
-      .references(() => users.id, { onDelete: 'restrict' })
+      .references(() => users.id, { onDelete: 'cascade' })
       .notNull(),
     /** FK to the price snapshot — the server reads this, never trusts client-sent amount. */
     planPriceId: text('plan_price_id')
@@ -305,7 +313,13 @@ export const orders = pgTable(
      * Ensures historical reports remain correct after prices change.
      */
     priceSnapshot: jsonb('price_snapshot')
-      .$type<{ planId: string; planPriceId: string; amountMinor: string; currency: string; billingInterval: string }>()
+      .$type<{
+        planId: string;
+        planPriceId: string;
+        amountMinor: string;
+        currency: string;
+        billingInterval: string;
+      }>()
       .notNull(),
     /** Client-visible order number, e.g. "ORD-20240801-0001". */
     orderNo: varchar('order_no', { length: 64 }).unique().notNull(),
@@ -339,7 +353,7 @@ export const paymentAttempts = pgTable(
       .$defaultFn(() => idGenerator('paymentAttempts'))
       .notNull(),
     orderId: text('order_id')
-      .references(() => orders.id, { onDelete: 'restrict' })
+      .references(() => orders.id, { onDelete: 'cascade' })
       .notNull(),
     /** e.g. "stripe", "alipay", "wechat_pay" */
     provider: varchar('provider', { length: 32 }).notNull(),
@@ -436,7 +450,7 @@ export const ledgerEntries = pgTable(
       .$defaultFn(() => idGenerator('ledgerEntries'))
       .notNull(),
     billingAccountId: text('billing_account_id')
-      .references(() => billingAccounts.id, { onDelete: 'restrict' })
+      .references(() => billingAccounts.id, { onDelete: 'cascade' })
       .notNull(),
     kind: varchar('kind', { length: 16 }).$type<LedgerEntryKind>().notNull(),
     /**
@@ -449,13 +463,13 @@ export const ledgerEntries = pgTable(
     /** Idempotency key for this entry.  Two entries sharing a key are duplicates. */
     idempotencyKey: varchar('idempotency_key', { length: 128 }).notNull(),
     /** Optional reference to the triggering order (e.g. credit top-up). */
-    orderId: text('order_id').references(() => orders.id, { onDelete: 'restrict' }),
+    orderId: text('order_id').references(() => orders.id, { onDelete: 'set null' }),
     /** Optional reference to the triggering usage record (e.g. debit after LLM call). */
     usageRecordId: text('usage_record_id'),
     /** Human-readable or machine-parseable reason code. */
     reason: varchar('reason', { length: 256 }),
     /** Operator user ID for manual adjustments (admin top-up / deduction). */
-    operatorUserId: text('operator_user_id').references(() => users.id, { onDelete: 'restrict' }),
+    operatorUserId: text('operator_user_id').references(() => users.id, { onDelete: 'set null' }),
     createdAt: createdAt(),
   },
   (t) => [
@@ -490,10 +504,10 @@ export const usageRecords = pgTable(
       .$defaultFn(() => idGenerator('usageRecords'))
       .notNull(),
     billingAccountId: text('billing_account_id')
-      .references(() => billingAccounts.id, { onDelete: 'restrict' })
+      .references(() => billingAccounts.id, { onDelete: 'cascade' })
       .notNull(),
     userId: text('user_id')
-      .references(() => users.id, { onDelete: 'restrict' })
+      .references(() => users.id, { onDelete: 'cascade' })
       .notNull(),
     /** Application-level idempotency key — retries share the same key. */
     requestId: varchar('request_id', { length: 128 }).notNull(),
@@ -507,8 +521,11 @@ export const usageRecords = pgTable(
      * Immutable price snapshot at request time.
      * Avoids stale reads if prices change after the request completes.
      */
-    priceSnapshot: jsonb('price_snapshot')
-      .$type<{ unitType: string; pricePerUnit: string; currency: string }>(),
+    priceSnapshot: jsonb('price_snapshot').$type<{
+      unitType: string;
+      pricePerUnit: string;
+      currency: string;
+    }>(),
     /** Prompt tokens consumed (integer). */
     promptTokens: integer('prompt_tokens').notNull().default(0),
     /** Completion tokens consumed (integer). */
@@ -520,7 +537,9 @@ export const usageRecords = pgTable(
     /** 'hold' = pre-reserved, 'settled' = final, 'released' = reversed */
     settlementStatus: varchar('settlement_status', { length: 16 }).notNull().default('hold'),
     /** FK to the ledger entry that settled / released this usage. */
-    ledgerEntryId: text('ledger_entry_id').references(() => ledgerEntries.id, { onDelete: 'restrict' }),
+    ledgerEntryId: text('ledger_entry_id').references(() => ledgerEntries.id, {
+      onDelete: 'set null',
+    }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -570,7 +589,7 @@ export const webhookEvents = pgTable(
     /** Scrubbed provider payload (no secrets or raw card data). */
     payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
     /** Internal order ID resolved from the payload, if applicable. */
-    orderId: text('order_id').references(() => orders.id, { onDelete: 'restrict' }),
+    orderId: text('order_id').references(() => orders.id, { onDelete: 'set null' }),
     /**
      * SHA-256 hex digest of the raw (pre-parse) provider request body.
      * Used to detect same event_id with different payload — which is a

@@ -510,15 +510,20 @@ describe('AgentModel', () => {
         { id: 'normal-agent', title: 'Writer', userId },
       ]);
 
-      const withInbox = await agentModel.queryAgents({ includeInbox: true, keyword: 'lobe' });
+      // Keyword must match the branded inbox display title (Wedai overrides LobeHub).
+      const inboxKeyword = DEFAULT_INBOX_TITLE.slice(0, 4).toLowerCase();
+      const withInbox = await agentModel.queryAgents({
+        includeInbox: true,
+        keyword: inboxKeyword,
+      });
       expect(withInbox.map((agent) => agent.id)).toEqual(['blank-inbox']);
       expect(withInbox[0]?.title).toBe(DEFAULT_INBOX_TITLE);
-      await expect(agentModel.countAgents({ includeInbox: true, keyword: 'lobe' })).resolves.toBe(
-        1,
-      );
+      await expect(
+        agentModel.countAgents({ includeInbox: true, keyword: inboxKeyword }),
+      ).resolves.toBe(1);
 
       // Without the opt-in the inbox stays out even when the keyword matches.
-      await expect(agentModel.queryAgents({ keyword: 'lobe' })).resolves.toEqual([]);
+      await expect(agentModel.queryAgents({ keyword: inboxKeyword })).resolves.toEqual([]);
     });
 
     it('counts the inbox in the shared total when the caller opts in, so pagination stays honest', async () => {

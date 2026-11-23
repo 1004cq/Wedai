@@ -13,6 +13,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { getTestDB } from '../../core/getTestDB';
 import {
+  billingAccounts,
+  ledgerEntries,
+  orders,
+  usageRecords,
+  users,
+  wallets,
+} from '../../schemas';
+import {
   BillingAccountModel,
   OrderModel,
   PlanModel,
@@ -20,7 +28,6 @@ import {
   WalletModel,
   WebhookEventModel,
 } from '../billing';
-import { billingAccounts, ledgerEntries, orders, users, wallets } from '../../schemas';
 
 // ─── fixtures ────────────────────────────────────────────────────────────────
 
@@ -66,7 +73,8 @@ async function seedBillingAccount(userId: string) {
 // ─── setup / teardown ────────────────────────────────────────────────────────
 
 beforeEach(async () => {
-  // Clean in reverse FK order
+  // Clean in reverse FK order (usage → ledger → wallets/orders → accounts → users)
+  await db.delete(usageRecords);
   await db.delete(ledgerEntries);
   await db.delete(wallets);
   await db.delete(orders);
@@ -79,6 +87,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await db.delete(usageRecords);
   await db.delete(ledgerEntries);
   await db.delete(wallets);
   await db.delete(orders);
@@ -127,7 +136,13 @@ describe('OrderModel – state machine', () => {
       planPriceId: priceId,
       currency: 'CNY',
       amountMinor: BigInt(9900),
-      priceSnapshot: { planId, planPriceId: priceId, amountMinor: '9900', currency: 'CNY', billingInterval: 'monthly' },
+      priceSnapshot: {
+        planId,
+        planPriceId: priceId,
+        amountMinor: '9900',
+        currency: 'CNY',
+        billingInterval: 'monthly',
+      },
       orderNo: `ORD-TEST-${Date.now()}`,
       idempotencyKey: `idem-${Date.now()}`,
     });
@@ -142,7 +157,13 @@ describe('OrderModel – state machine', () => {
       planPriceId: priceId,
       currency: 'CNY',
       amountMinor: BigInt(9900),
-      priceSnapshot: { planId, planPriceId: priceId, amountMinor: '9900', currency: 'CNY', billingInterval: 'monthly' },
+      priceSnapshot: {
+        planId,
+        planPriceId: priceId,
+        amountMinor: '9900',
+        currency: 'CNY',
+        billingInterval: 'monthly',
+      },
       orderNo: `ORD-PAID-${Date.now()}`,
       idempotencyKey: `idem-paid-${Date.now()}`,
     });
@@ -159,7 +180,13 @@ describe('OrderModel – state machine', () => {
       planPriceId: priceId,
       currency: 'CNY',
       amountMinor: BigInt(9900),
-      priceSnapshot: { planId, planPriceId: priceId, amountMinor: '9900', currency: 'CNY', billingInterval: 'monthly' },
+      priceSnapshot: {
+        planId,
+        planPriceId: priceId,
+        amountMinor: '9900',
+        currency: 'CNY',
+        billingInterval: 'monthly',
+      },
       orderNo: `ORD-CLOSED-${Date.now()}`,
       idempotencyKey: `idem-closed-${Date.now()}`,
     });
@@ -175,7 +202,13 @@ describe('OrderModel – state machine', () => {
       planPriceId: priceId,
       currency: 'CNY',
       amountMinor: BigInt(9900),
-      priceSnapshot: { planId, planPriceId: priceId, amountMinor: '9900', currency: 'CNY', billingInterval: 'monthly' },
+      priceSnapshot: {
+        planId,
+        planPriceId: priceId,
+        amountMinor: '9900',
+        currency: 'CNY',
+        billingInterval: 'monthly',
+      },
       orderNo: `ORD-TERM-${Date.now()}`,
       idempotencyKey: `idem-term-${Date.now()}`,
     });
@@ -193,7 +226,13 @@ describe('OrderModel – state machine', () => {
       planPriceId: priceId,
       currency: 'CNY',
       amountMinor: BigInt(9900),
-      priceSnapshot: { planId, planPriceId: priceId, amountMinor: '9900', currency: 'CNY', billingInterval: 'monthly' },
+      priceSnapshot: {
+        planId,
+        planPriceId: priceId,
+        amountMinor: '9900',
+        currency: 'CNY',
+        billingInterval: 'monthly',
+      },
       orderNo: `ORD-TC-${Date.now()}`,
       idempotencyKey: `idem-tc-${Date.now()}`,
     });
@@ -211,7 +250,13 @@ describe('OrderModel – state machine', () => {
       planPriceId: priceId,
       currency: 'CNY',
       amountMinor: BigInt(9900),
-      priceSnapshot: { planId, planPriceId: priceId, amountMinor: '9900', currency: 'CNY', billingInterval: 'monthly' },
+      priceSnapshot: {
+        planId,
+        planPriceId: priceId,
+        amountMinor: '9900',
+        currency: 'CNY',
+        billingInterval: 'monthly',
+      },
       orderNo: `ORD-ISO-${Date.now()}`,
       idempotencyKey: `idem-iso-${Date.now()}`,
     });
@@ -229,7 +274,13 @@ describe('OrderModel – state machine', () => {
       planPriceId: priceId,
       currency: 'CNY',
       amountMinor: BigInt(9900),
-      priceSnapshot: { planId, planPriceId: priceId, amountMinor: '9900', currency: 'CNY', billingInterval: 'monthly' },
+      priceSnapshot: {
+        planId,
+        planPriceId: priceId,
+        amountMinor: '9900',
+        currency: 'CNY',
+        billingInterval: 'monthly',
+      },
       orderNo: `ORD-DUP1-${Date.now()}`,
       idempotencyKey: ikey,
     });
@@ -239,7 +290,13 @@ describe('OrderModel – state machine', () => {
         planPriceId: priceId,
         currency: 'CNY',
         amountMinor: BigInt(9900),
-        priceSnapshot: { planId, planPriceId: priceId, amountMinor: '9900', currency: 'CNY', billingInterval: 'monthly' },
+        priceSnapshot: {
+          planId,
+          planPriceId: priceId,
+          amountMinor: '9900',
+          currency: 'CNY',
+          billingInterval: 'monthly',
+        },
         orderNo: `ORD-DUP2-${Date.now()}`,
         idempotencyKey: ikey,
       }),
@@ -269,8 +326,16 @@ describe('WalletModel', () => {
     const acc = await seedBillingAccount(userA);
     const wm = new WalletModel(db);
     const ikey = `credit-idem-${Date.now()}`;
-    const first = await wm.credit({ billingAccountId: acc.id, delta: BigInt(500), idempotencyKey: ikey });
-    const second = await wm.credit({ billingAccountId: acc.id, delta: BigInt(500), idempotencyKey: ikey });
+    const first = await wm.credit({
+      billingAccountId: acc.id,
+      delta: BigInt(500),
+      idempotencyKey: ikey,
+    });
+    const second = await wm.credit({
+      billingAccountId: acc.id,
+      delta: BigInt(500),
+      idempotencyKey: ikey,
+    });
     expect(first.ledger.id).toBe(second.ledger.id);
     // Balance should not double
     const wallet = await wm.findByBillingAccountId(acc.id);
@@ -280,7 +345,11 @@ describe('WalletModel', () => {
   it('holds credits and updates reserved', async () => {
     const acc = await seedBillingAccount(userA);
     const wm = new WalletModel(db);
-    await wm.credit({ billingAccountId: acc.id, delta: BigInt(1000), idempotencyKey: `c-${Date.now()}` });
+    await wm.credit({
+      billingAccountId: acc.id,
+      delta: BigInt(1000),
+      idempotencyKey: `c-${Date.now()}`,
+    });
 
     const { wallet, ledger } = await wm.hold({
       billingAccountId: acc.id,
@@ -296,10 +365,22 @@ describe('WalletModel', () => {
   it('hold is idempotent', async () => {
     const acc = await seedBillingAccount(userA);
     const wm = new WalletModel(db);
-    await wm.credit({ billingAccountId: acc.id, delta: BigInt(1000), idempotencyKey: `c2-${Date.now()}` });
+    await wm.credit({
+      billingAccountId: acc.id,
+      delta: BigInt(1000),
+      idempotencyKey: `c2-${Date.now()}`,
+    });
     const ikey = `hold-idem-${Date.now()}`;
-    const first = await wm.hold({ billingAccountId: acc.id, amount: BigInt(200), idempotencyKey: ikey });
-    const second = await wm.hold({ billingAccountId: acc.id, amount: BigInt(200), idempotencyKey: ikey });
+    const first = await wm.hold({
+      billingAccountId: acc.id,
+      amount: BigInt(200),
+      idempotencyKey: ikey,
+    });
+    const second = await wm.hold({
+      billingAccountId: acc.id,
+      amount: BigInt(200),
+      idempotencyKey: ikey,
+    });
     expect(first.ledger.id).toBe(second.ledger.id);
     const w = await wm.findByBillingAccountId(acc.id);
     expect(w!.reserved).toBe(BigInt(200));
@@ -309,14 +390,22 @@ describe('WalletModel', () => {
     const acc = await seedBillingAccount(userA);
     const wm = new WalletModel(db);
     await expect(
-      wm.hold({ billingAccountId: acc.id, amount: BigInt(1), idempotencyKey: `hold-insuf-${Date.now()}` }),
+      wm.hold({
+        billingAccountId: acc.id,
+        amount: BigInt(1),
+        idempotencyKey: `hold-insuf-${Date.now()}`,
+      }),
     ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
   });
 
   it('hold at exact balance boundary succeeds', async () => {
     const acc = await seedBillingAccount(userA);
     const wm = new WalletModel(db);
-    await wm.credit({ billingAccountId: acc.id, delta: BigInt(100), idempotencyKey: `c3-${Date.now()}` });
+    await wm.credit({
+      billingAccountId: acc.id,
+      delta: BigInt(100),
+      idempotencyKey: `c3-${Date.now()}`,
+    });
     const { wallet } = await wm.hold({
       billingAccountId: acc.id,
       amount: BigInt(100),
@@ -340,7 +429,7 @@ describe('WalletModel', () => {
       debitIdempotencyKey: `debit-${ts}`,
       releaseIdempotencyKey: `release-${ts}`,
     });
-    expect(wallet.available).toBe(BigInt(700));  // 500 remaining + 200 released
+    expect(wallet.available).toBe(BigInt(700)); // 500 remaining + 200 released
     expect(wallet.reserved).toBe(BigInt(0));
     expect(debitEntry.kind).toBe('debit');
     expect(releaseEntry?.kind).toBe('release');
@@ -370,12 +459,24 @@ describe('WalletModel – concurrent hold', () => {
   it('two concurrent holds do not allow overdraft', async () => {
     const acc = await seedBillingAccount(userA);
     const wm = new WalletModel(db);
-    await wm.credit({ billingAccountId: acc.id, delta: BigInt(100), idempotencyKey: `cc-${Date.now()}` });
+    await wm.credit({
+      billingAccountId: acc.id,
+      delta: BigInt(100),
+      idempotencyKey: `cc-${Date.now()}`,
+    });
 
     // Fire two holds for 80 each simultaneously.  At most one should succeed.
     const results = await Promise.allSettled([
-      wm.hold({ billingAccountId: acc.id, amount: BigInt(80), idempotencyKey: `h-c1-${Date.now()}` }),
-      wm.hold({ billingAccountId: acc.id, amount: BigInt(80), idempotencyKey: `h-c2-${Date.now() + 1}` }),
+      wm.hold({
+        billingAccountId: acc.id,
+        amount: BigInt(80),
+        idempotencyKey: `h-c1-${Date.now()}`,
+      }),
+      wm.hold({
+        billingAccountId: acc.id,
+        amount: BigInt(80),
+        idempotencyKey: `h-c2-${Date.now() + 1}`,
+      }),
     ]);
 
     const succeeded = results.filter((r) => r.status === 'fulfilled');
@@ -400,7 +501,11 @@ describe('LedgerEntries – unique idempotency key', () => {
     const ikey = `led-dup-${Date.now()}`;
     await wm.credit({ billingAccountId: acc.id, delta: BigInt(1), idempotencyKey: ikey });
     // A second credit with the same key is returned idempotently (no DB error)
-    const second = await wm.credit({ billingAccountId: acc.id, delta: BigInt(1), idempotencyKey: ikey });
+    const second = await wm.credit({
+      billingAccountId: acc.id,
+      delta: BigInt(1),
+      idempotencyKey: ikey,
+    });
     // Idempotent: same ledger row returned
     const entries = await db
       .select()
