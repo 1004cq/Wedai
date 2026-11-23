@@ -418,7 +418,8 @@ describe('WorkflowCollapse', () => {
     const icons = screen.getAllByTestId('icon');
     const iconNames = icons.map((node) => node.getAttribute('data-icon'));
     expect(iconNames).toContain('Check');
-    expect(iconNames).toContain('TriangleAlert');
+    // lucide-react AlertTriangle reports as TriangleExclamationPoint in data-icon
+    expect(iconNames).toContain('TriangleExclamationPoint');
   });
 
   it('shows red x when all tools fail after completion', () => {

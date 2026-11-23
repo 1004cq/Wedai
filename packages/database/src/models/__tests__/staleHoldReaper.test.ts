@@ -37,10 +37,15 @@ function makeDb(selectSequence: unknown[][]) {
   let selectCallCount = 0;
   const buildChain = () => {
     const results = selectSequence[selectCallCount++] ?? [];
+    // Drizzle chains are thenable: queries ending at `.where()` (no `.limit()`)
+    // must still resolve to the result rows.
+    const resolve = () => Promise.resolve(results);
     const chain: any = {
       from: () => chain,
       where: () => chain,
-      limit: () => Promise.resolve(results),
+      limit: () => resolve(),
+      then: (onFulfilled: (value: unknown) => unknown, onRejected?: (reason: unknown) => unknown) =>
+        resolve().then(onFulfilled, onRejected),
     };
     return chain;
   };

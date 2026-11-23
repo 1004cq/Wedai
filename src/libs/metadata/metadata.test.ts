@@ -1,9 +1,13 @@
 // @vitest-environment node
-import { BRANDING_NAME } from '@lobechat/business-const';
+import { BRANDING_LOGO_URL, BRANDING_NAME } from '@lobechat/business-const';
 import { OG_URL } from '@lobechat/const';
 import { describe, expect, it } from 'vitest';
 
+import { isCustomORG } from '@/const/version';
+
 import { Meta } from './metadata';
+
+const DEFAULT_OG_IMAGE = BRANDING_LOGO_URL ? '/brand/cq-og.png' : OG_URL;
 
 describe('Metadata', () => {
   const meta = new Meta();
@@ -21,12 +25,12 @@ describe('Metadata', () => {
         openGraph: expect.objectContaining({
           title: `Test Title · ${BRANDING_NAME}`,
           description: expect.any(String),
-          images: [{ url: OG_URL, alt: `Test Title · ${BRANDING_NAME}` }],
+          images: [{ url: DEFAULT_OG_IMAGE, alt: `Test Title · ${BRANDING_NAME}` }],
         }),
         twitter: expect.objectContaining({
           title: `Test Title · ${BRANDING_NAME}`,
           description: expect.any(String),
-          images: [OG_URL],
+          images: [DEFAULT_OG_IMAGE],
         }),
       });
     });
@@ -89,7 +93,7 @@ describe('Metadata', () => {
         title: 'Twitter Title',
         description: 'Twitter description',
         images: ['https://twitter-image.com'],
-        site: '@lobehub',
+        site: isCustomORG ? undefined : '@lobehub',
         url: 'https://example.com/twitter',
       });
     });
