@@ -26,7 +26,8 @@ afterEach(() => {
 
 describe('OIDC default clients', () => {
   it('keep the upstream names under default branding', async () => {
-    const names = await loadClientNames();
+    // Wedai overlays BRANDING_NAME; pin LobeHub so this case stays branding-agnostic.
+    const names = await loadClientNames({ BRANDING_NAME: 'LobeHub' });
 
     expect(names['lobehub-desktop']).toBe('LobeHub Desktop');
     expect(names['lobehub-mobile']).toBe('LobeHub Mobile');

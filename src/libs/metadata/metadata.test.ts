@@ -1,10 +1,14 @@
 // @vitest-environment node
 import type * as BusinessConst from '@lobechat/business-const';
-import { BRANDING_NAME } from '@lobechat/business-const';
+import { BRANDING_LOGO_URL, BRANDING_NAME } from '@lobechat/business-const';
 import { OG_URL } from '@lobechat/const';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { isCustomORG } from '@/const/version';
+
 import { Meta } from './metadata';
+
+const DEFAULT_OG_IMAGE = BRANDING_LOGO_URL ? '/brand/cq-og.png' : OG_URL;
 
 describe('Metadata', () => {
   const meta = new Meta();
@@ -22,12 +26,12 @@ describe('Metadata', () => {
         openGraph: expect.objectContaining({
           title: `Test Title · ${BRANDING_NAME}`,
           description: expect.any(String),
-          images: [{ url: OG_URL, alt: `Test Title · ${BRANDING_NAME}` }],
+          images: [{ url: DEFAULT_OG_IMAGE, alt: `Test Title · ${BRANDING_NAME}` }],
         }),
         twitter: expect.objectContaining({
           title: `Test Title · ${BRANDING_NAME}`,
           description: expect.any(String),
-          images: [OG_URL],
+          images: [DEFAULT_OG_IMAGE],
         }),
       });
     });
@@ -90,7 +94,7 @@ describe('Metadata', () => {
         title: 'Twitter Title',
         description: 'Twitter description',
         images: ['https://twitter-image.com'],
-        site: '@lobehub',
+        site: isCustomORG ? undefined : '@lobehub',
         url: 'https://example.com/twitter',
       });
     });
@@ -159,7 +163,10 @@ describe('Metadata default description and branding', () => {
   });
 
   it('keeps the existing wording under default branding', async () => {
-    const result = (await loadMeta()).generate({ title: 'Home', url: 'https://example.com' });
+    // Wedai overlays branding; pin upstream defaults so this case stays branding-agnostic.
+    const result = (
+      await loadMeta({ BRANDING_NAME: 'LobeHub', BRANDING_LOGO_URL: '', ORG_NAME: 'LobeHub' })
+    ).generate({ title: 'Home', url: 'https://example.com' });
 
     expect(result.description).toContain(
       'LobeChat offers you the best ChatGPT, OLLaMA, Gemini, Claude WebUI user experience',

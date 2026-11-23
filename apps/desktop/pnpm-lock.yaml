@@ -115,6 +115,9 @@ importers:
       '@lobechat/tool-runtime':
         specifier: workspace:*
         version: link:../../packages/tool-runtime
+      '@lobechat/types':
+        specifier: workspace:*
+        version: link:../../packages/types
       '@lobechat/utils':
         specifier: workspace:*
         version: link:../../packages/utils
@@ -122,6 +125,9 @@ importers:
         specifier: ^1.27.0
         version: 1.27.0(@types/react@19.3.0)(immer@11.1.18)(supports-color@9.4.0)(typescript@6.0.3)(use-sync-external-store@1.7.0(react@19.2.7))(ws@8.22.0)(zod@4.6.5)
       '@modelcontextprotocol/client':
+        specifier: ~2.4.0
+        version: 2.4.0
+      '@modelcontextprotocol/server':
         specifier: ~2.4.0
         version: 2.4.0
       '@sentry/electron':
@@ -148,6 +154,9 @@ importers:
       '@vanilla-extract/vite-plugin':
         specifier: ^5.2.6
         version: 5.2.6(@types/node@24.19.1)(babel-plugin-macros@3.1.0)(esbuild@0.28.2)(jiti@2.7.0)(supports-color@9.4.0)(tsx@4.23.15)(vite@8.3.2(@types/node@24.19.1)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))(yaml@2.9.1)
+      buffer.js:
+        specifier: npm:buffer@^6.0.3
+        version: buffer@6.0.3
       consola:
         specifier: ^3.4.2
         version: 3.4.2
@@ -277,6 +286,10 @@ importers:
         version: 2.5.0
 
   ../../packages/agent-gateway-client:
+    dependencies:
+      '@lobechat/types':
+        specifier: workspace:*
+        version: link:../types
     devDependencies:
       vitest:
         specifier: 5.0.3
@@ -330,6 +343,9 @@ importers:
       '@lobehub/ui':
         specifier: ^6.0.4
         version: 6.0.4(@lobehub/fluent-emoji@5.0.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@lobehub/icons@6.0.0)(@shikijs/themes@4.5.0)(@types/mdast@4.0.4)(@types/react@19.3.0)(date-fns@4.4.0)(micromark-util-types@2.0.3)(micromark@4.0.3(supports-color@9.4.0))(motion@14.2.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(supports-color@9.4.0)
+      es-toolkit:
+        specifier: ^1.50.0
+        version: 1.52.0
       query-string:
         specifier: ^9.4.1
         version: 9.5.1
@@ -752,6 +768,9 @@ importers:
       brotli-wasm:
         specifier: ^3.0.1
         version: 3.0.1
+      buffer.js:
+        specifier: npm:buffer@^6.0.3
+        version: buffer@6.0.3
       chroma-js:
         specifier: ^3.3.0
         version: 3.3.0

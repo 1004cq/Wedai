@@ -233,6 +233,8 @@ export const TRPC_NAMESPACE_API_KEY_RULES: Record<string, TrpcNamespaceScopeRule
   aiProvider: rw('model:read', 'model:write'),
   // keys must not mint or manage keys
   apiKey: 'blocked',
+  // commercial admin console (users / orders / ledger / pricing) — never via API key
+  admin: 'blocked',
   asr: { any: 'model:invoke' },
   // `auth.getScope` only reports which scope the presented credential runs
   // under, so any key — however narrow — can tell where its calls land

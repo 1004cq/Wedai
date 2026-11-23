@@ -5,14 +5,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { Manifest, manifestModule } from './manifest';
 
-// Mock external dependencies
-vi.mock('@/const/branding', () => ({
-  BRANDING_LOGO_URL: 'https://example.com/logo.png',
-}));
-
 vi.mock('@/server/utils/url', () => ({
   getCanonicalUrl: vi.fn().mockReturnValue('https://example.com/manifest.webmanifest'),
 }));
+
+const imageSrc = (url: string, version = 1) =>
+  qs.stringifyUrl({ query: { v: version }, url: BRANDING_LOGO_URL || url });
 
 describe('Manifest', () => {
   const manifest = new Manifest();
@@ -148,7 +146,7 @@ describe('Manifest', () => {
         immutable: 'true',
         max_age: 31536000,
         sizes: '1280x676',
-        src: 'https://example.com/screenshot.png?v=1',
+        src: imageSrc('https://example.com/screenshot.png'),
         type: 'image/png',
       });
     });

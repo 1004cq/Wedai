@@ -213,17 +213,19 @@ describe('createFileParseRunner', () => {
   });
 
   it('keeps a task pending, its temp file and the queue untouched until a stuck thread has exited', async () => {
-    // The queue wait is fixed: the default follows the parse timeout, which is 100ms here.
-    const runner = makeRunner({ parseTimeoutMs: 100, queueTimeoutMs: 10_000 });
+    // Give the follow-up job headroom on slow CI workers: the stuck task still
+    // overruns the parse deadline (native sleep), while `busy` after it must not
+    // inherit a hair-trigger 100ms limit that flakes under load.
+    const runner = makeRunner({ parseTimeoutMs: 500, queueTimeoutMs: 10_000 });
     const beatFile = newBeatFile();
     const tempFile = path.join(dir, `temp-${beatCounter++}`);
     await writeFile(tempFile, 'payload');
 
     // Like DocumentService: the temp file goes in `finally`, i.e. as soon as the task settles.
     let settled = false;
-    // `sleep` blocks the thread in native code for 1.2s: terminate() cannot interrupt it.
+    // `sleep` blocks the thread in native code for 2s: terminate() cannot interrupt it.
     const stuck = runner
-      .run(job({ beatFile, scenario: 'native-block', seconds: 1.2 }))
+      .run(job({ beatFile, scenario: 'native-block', seconds: 2 }))
       .finally(() => {
         settled = true;
         return rm(tempFile, { force: true });
@@ -234,8 +236,8 @@ describe('createFileParseRunner', () => {
       onStart: () => (nextStarted = true),
     });
 
-    // Well past the 100ms deadline (terminate() was called), long before the sleep returns.
-    await sleep(600);
+    // Well past the 500ms deadline (terminate() was called), long before the sleep returns.
+    await sleep(900);
     expect(settled).toBe(false);
     expect(await sizeOf(tempFile)).toBeGreaterThan(0);
     expect(nextStarted).toBe(false);

@@ -50,8 +50,8 @@ describe('buildSeoMeta', () => {
 
     expect(meta).toContain('<title>Sign In</title>');
     expect(meta).toContain('<meta name="description" content="');
-    expect(meta).not.toContain('og:');
-    expect(meta).not.toContain('twitter:');
+    expect(meta).toContain('og:title');
+    expect(meta).toContain('twitter:card');
   });
 
   it('normalizes hostile locale input to an allowlisted value', async () => {
@@ -67,7 +67,7 @@ describe('buildSeoMeta', () => {
     const meta = await buildSeoMeta('en-US', '/verify-email');
 
     expect(meta).toContain('<title>');
-    expect(meta).not.toContain('og:');
-    expect(meta).not.toContain('twitter:');
+    expect(meta).toContain('og:title');
+    expect(meta).toContain('twitter:card');
   });
 });

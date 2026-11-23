@@ -722,6 +722,10 @@ describe('HomeRepository', () => {
     });
 
     it('should find the inbox agent by its default name only when asked, ignoring case and spacing', async () => {
+      const { DEFAULT_INBOX_TITLE } = await import('@lobechat/const');
+      const inboxKeyword = DEFAULT_INBOX_TITLE.slice(0, 4);
+      const spaced = DEFAULT_INBOX_TITLE.replaceAll(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+
       await clientDB.insert(Schema.agents).values({
         id: 'search-inbox',
         slug: 'inbox',
@@ -729,17 +733,17 @@ describe('HomeRepository', () => {
         virtual: true,
       });
 
-      expect((await homeRepo.searchAgents('LobeAI')).map((a) => a.id)).not.toContain(
+      expect((await homeRepo.searchAgents(DEFAULT_INBOX_TITLE)).map((a) => a.id)).not.toContain(
         'search-inbox',
       );
 
-      for (const keyword of ['LobeAI', 'lobe ai', 'Lobe']) {
+      for (const keyword of [DEFAULT_INBOX_TITLE, spaced, inboxKeyword]) {
         const result = await homeRepo.searchAgents(keyword, true);
         expect(result.map((a) => a.id)).toContain('search-inbox');
       }
 
-      const [inbox] = await homeRepo.searchAgents('LobeAI', true);
-      expect(inbox).toMatchObject({ slug: 'inbox', title: 'Lobe AI' });
+      const [inbox] = await homeRepo.searchAgents(DEFAULT_INBOX_TITLE, true);
+      expect(inbox).toMatchObject({ slug: 'inbox', title: DEFAULT_INBOX_TITLE });
       expect((await homeRepo.searchAgents('Searchable', true)).map((a) => a.id)).not.toContain(
         'search-inbox',
       );

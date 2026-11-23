@@ -4,7 +4,7 @@ import qs from 'query-string';
 
 import { DEFAULT_LANG } from '@/const/locale';
 import { OG_URL } from '@/const/url';
-import { isCustomORG } from '@/const/version';
+import { isCustomBranding, isCustomORG } from '@/const/version';
 import { type Locales } from '@/locales/resources';
 import { locales } from '@/locales/resources';
 import { getCanonicalUrl } from '@/server/utils/url';
@@ -14,7 +14,9 @@ const DEFAULT_OG_IMAGE = BRANDING_LOGO_URL ? '/brand/cq-og.png' : OG_URL;
 
 export class Meta {
   public generate({
-    description = `${BRANDING_NAME} offers you the best ChatGPT, OLLaMA, Gemini, and Claude WebUI experience`,
+    description = isCustomBranding
+      ? `${BRANDING_NAME} offers you the best ChatGPT, OLLaMA, Gemini, Claude WebUI user experience`
+      : 'LobeChat offers you the best ChatGPT, OLLaMA, Gemini, Claude WebUI user experience',
     title,
     image = DEFAULT_OG_IMAGE,
     url,

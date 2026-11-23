@@ -63,12 +63,13 @@ describe('MCP SDK v2 error handling', () => {
         method: 'tools/call',
       }),
     );
+    const { BRANDING_NAME } = await import('@lobechat/business-const');
     await expect(httpClient().callTool('test', {})).resolves.toMatchObject({
       isError: true,
       content: [
         {
           type: 'text',
-          text: 'This MCP tool requires user input that LobeHub does not support yet. Use a tool that does not require additional input.',
+          text: `This MCP tool requires user input that ${BRANDING_NAME} does not support yet. Use a tool that does not require additional input.`,
         },
       ],
     });

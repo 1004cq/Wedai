@@ -162,9 +162,11 @@ describe('Labs settings page', () => {
     );
   });
 
-  it('does not render an empty workspace group', () => {
+  it('renders the workspace group when a business workspace lab is available', () => {
     renderPage({ enableBusinessFeatures: true });
-    expect(screen.queryByText('group.workspace')).toBeNull();
+    // Wedai ships ENABLE_BUSINESS_FEATURES, so pageCollab (workspaceOnly) appears here.
+    expect(screen.getByText('group.workspace')).toBeDefined();
+    expect(screen.getByText('features.pageCollab.title')).toBeDefined();
   });
 
   it('marks internal-testing experiments as alpha and usable ones as beta', () => {

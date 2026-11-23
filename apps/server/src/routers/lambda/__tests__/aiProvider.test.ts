@@ -156,9 +156,9 @@ describe('aiProviderRouter', () => {
       const result = await caller.checkProviderConnectivity({ id: 'ollama' });
 
       // The type alone does not tell a CLI user what to do; the reason does.
+      const { BRANDING_NAME } = await import('@lobechat/business-const');
       expect(result).toEqual({
-        error:
-          "ClientLlmExecutorUnavailable: ollama runs on the user's device, and no open LobeHub tab is attached to this request to run it.",
+        error: `ClientLlmExecutorUnavailable: ollama runs on the user's device, and no open ${BRANDING_NAME} tab is attached to this request to run it.`,
         model: 'qwen3:1.7b',
         ok: false,
       });
