@@ -360,10 +360,15 @@ export class ServerLLMTransport implements LLMTransport {
         attempt: input.attempt,
         callId,
       });
-      const execution = await this.runAttemptWithRuntime(input, relayRuntime, {
-        ...this.ctx,
-        streamManager: tagRelayChunks(this.ctx.streamManager, callId),
-      });
+      const execution = await this.runAttemptWithRuntime(
+        input,
+        relayRuntime,
+        {
+          ...this.ctx,
+          streamManager: tagRelayChunks(this.ctx.streamManager, callId),
+        },
+        { clientSite: true },
+      );
       execution.output.executionSite = 'client';
       if (relayRuntime.result.usageEstimated) execution.output.usageEstimated = true;
 
@@ -379,7 +384,7 @@ export class ServerLLMTransport implements LLMTransport {
     payload: LLMStreamPayload,
     handlers?: Parameters<LLMTransport['stream']>[1],
   ): Promise<LLMStreamResult> {
-    const { runtime, state } = await this.createStreamRuntime(payload.provider);
+    const { clientSite, runtime, state } = await this.createStreamRuntime(payload.provider);
     // `stream()` only serves context compression. Deployment-catalog providers
     // (Azure, Volcengine Ark, Spark) address the request model by the card's
     // `config.deploymentName` — the same mapping `runAttemptWithRuntime`
@@ -463,6 +468,7 @@ export class ServerLLMTransport implements LLMTransport {
         handlers?.onFinish?.(result);
         return result;
       },
+      clientSite ? { userHasProviderKey: true } : undefined,
     );
   }
 
@@ -481,6 +487,7 @@ export class ServerLLMTransport implements LLMTransport {
     if (site.site === 'client') {
       this.relayStreamCount += 1;
       return {
+        clientSite: true as const,
         runtime: this.createRelayRuntime(provider, site, {
           attempt: 1,
           callId: `${buildLlmRelayCallId(this.ctx.operationId, this.ctx.stepIndex, this.relayGeneration, 1)}:stream${this.relayStreamCount}`,
@@ -489,7 +496,11 @@ export class ServerLLMTransport implements LLMTransport {
       };
     }
 
-    return { runtime: await this.createModelRuntime(provider), state };
+    return {
+      clientSite: false as const,
+      runtime: await this.createModelRuntime(provider),
+      state,
+    };
   }
 
   /**
@@ -688,6 +699,7 @@ export class ServerLLMTransport implements LLMTransport {
     input: LLMAttemptInput,
     modelRuntime: Pick<ModelRuntime, 'chat' | 'handleChatStreamError'>,
     ctx: RuntimeExecutorContext = this.ctx,
+    options?: { clientSite?: boolean },
   ): Promise<LLMAttemptExecution> {
     const resolved = input.context.resolvedTools;
     if (!resolved) throw new Error('Resolved tools are required for a server LLM attempt');
@@ -787,6 +799,7 @@ export class ServerLLMTransport implements LLMTransport {
           const output = attempt.snapshot();
           return { usage: (output as any).usage };
         },
+        options?.clientSite ? { userHasProviderKey: true } : undefined,
       );
       return { ok: true, output: attempt.snapshot() };
     } catch (error) {

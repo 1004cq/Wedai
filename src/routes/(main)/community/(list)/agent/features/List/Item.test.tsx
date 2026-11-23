@@ -89,6 +89,6 @@ describe('AssistantItem', () => {
 
     fireEvent.click(screen.getByTestId('assistant-item'));
 
-    expect(mocks.navigate).toHaveBeenCalledWith('/community/group_agent/jailbreak-mode');
+    expect(mocks.navigate).toHaveBeenCalledWith('/marketplace/group_agent/jailbreak-mode');
   });
 });

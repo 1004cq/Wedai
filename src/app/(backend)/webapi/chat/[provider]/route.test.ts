@@ -90,11 +90,17 @@ afterEach(() => {
 describe('POST handler', () => {
   describe('one-shot relay', () => {
     it('answers ClientLlmExecutorUnavailable for a device-only provider with no tab attached', async () => {
-      resolveProviderRelay.mockResolvedValue({ runtimeProvider: 'ollama' });
+      // oneShot resolves relay inside initModelRuntimeForRequest; without a
+      // request-scoped tab it throws ClientLlmExecutorUnavailable up front.
+      initModelRuntimeForRequest.mockRejectedValue({
+        error: { context: 'no_client_request', reason: 'no_executor' },
+        errorType: 'ClientLlmExecutorUnavailable',
+        provider: 'ollama',
+      });
 
       const response = await POST(request, { params: Promise.resolve({ provider: 'ollama' }) });
 
-      expect(initModelRuntimeForRequest).not.toHaveBeenCalled();
+      expect(initModelRuntimeForRequest).toHaveBeenCalled();
       expect(await response.json()).toMatchObject({
         body: {
           error: { context: 'no_client_request', reason: 'no_executor' },
@@ -212,9 +218,7 @@ describe('POST handler', () => {
       const response = await POST(request, { params: mockParams });
 
       expect(response.status).toBe(500);
-      expect(chargeAfterChat).toHaveBeenCalledWith(
-        expect.objectContaining({ success: false }),
-      );
+      expect(chargeAfterChat).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
     });
 
     it('answers a structured error when the response body fails before its first byte', async () => {

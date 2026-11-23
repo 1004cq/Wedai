@@ -85,6 +85,14 @@ export async function withAgentBilling<
   promptTokenEstimate: number,
   maxCompletionTokens: number,
   call: () => Promise<T>,
+  options?: {
+    /**
+     * When set, skip the ModelRuntime probe used for BYOK detection.
+     * Client-site LLM relay already runs on the user's device — treat as BYOK
+     * so we neither charge platform credits nor init a server-side runtime.
+     */
+    userHasProviderKey?: boolean;
+  },
 ): Promise<T> {
   if (!ctx.userId || !ctx.serverDB) {
     // No billing context available (e.g. system/eval runs).
@@ -95,22 +103,26 @@ export async function withAgentBilling<
 
   // Detect BYOK: prefer a user-supplied endpoint/key so the user pays the provider directly.
   // ModelRuntime no longer exposes `baseURL` publicly — inspect the underlying runtime.
-  let userHasProviderKey = false;
-  try {
-    const modelRuntime = await initModelRuntimeFromDB(
-      ctx.serverDB,
-      ctx.userId,
-      provider,
-      ctx.workspaceId,
-    );
-    const runtimeWithBase = modelRuntime as unknown as {
-      _runtime?: { baseURL?: string };
-      baseURL?: string;
-    };
-    userHasProviderKey =
-      runtimeWithBase.baseURL !== undefined || runtimeWithBase._runtime?.baseURL !== undefined;
-  } catch {
-    // Can't detect key — default to platform billing.
+  // Callers that already know (client-site relay) pass `userHasProviderKey` to avoid
+  // probing a server runtime that must not be used for that attempt.
+  let userHasProviderKey = options?.userHasProviderKey ?? false;
+  if (options?.userHasProviderKey === undefined) {
+    try {
+      const modelRuntime = await initModelRuntimeFromDB(
+        ctx.serverDB,
+        ctx.userId,
+        provider,
+        ctx.workspaceId,
+      );
+      const runtimeWithBase = modelRuntime as unknown as {
+        _runtime?: { baseURL?: string };
+        baseURL?: string;
+      };
+      userHasProviderKey =
+        runtimeWithBase.baseURL !== undefined || runtimeWithBase._runtime?.baseURL !== undefined;
+    } catch {
+      // Can't detect key — default to platform billing.
+    }
   }
 
   let billingContext: Awaited<ReturnType<typeof chargeBeforeChat>>;

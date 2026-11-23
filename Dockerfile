@@ -67,8 +67,10 @@ COPY package.json pnpm-workspace.yaml ./
 COPY .npmrc ./
 COPY packages ./packages
 COPY patches ./patches
-# bring in desktop workspace manifest so pnpm can resolve it
+# workspace manifests must exist before pnpm i so --filter can resolve them
 COPY apps/desktop/src/main/package.json ./apps/desktop/src/main/package.json
+COPY apps/share/package.json ./apps/share/package.json
+COPY apps/workbench/package.json ./apps/workbench/package.json
 
 # BuildKit cache mounts keep pnpm/npm downloads across rebuilds without copying credentials into layers.
 RUN --mount=type=cache,id=wedai-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \

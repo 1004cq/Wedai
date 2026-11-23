@@ -233,6 +233,7 @@ export const sharedMainAreaChildren: RouteObject[] = [
                 ),
               'Mobile > Discover > Detail > Group Agent',
             ),
+            handle: { meta: communityDetailRouteMeta.groupAgent },
             path: 'group_agent/:slug',
           },
           {
@@ -271,17 +272,6 @@ export const sharedMainAreaChildren: RouteObject[] = [
             ),
             handle: { meta: communityDetailRouteMeta.skill },
             path: 'skill/:slug',
-          },
-          {
-            element: dynamicElement(
-              () =>
-                import('@/routes/(main)/community/(detail)/group_agent').then(
-                  (m) => m.MobileGroupAgentDetailPage,
-                ),
-              'Mobile > Discover > Detail > Group Agent',
-            ),
-            handle: { meta: communityDetailRouteMeta.groupAgent },
-            path: 'group_agent/:slug',
           },
           {
             element: dynamicElement(
