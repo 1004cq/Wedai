@@ -44,6 +44,8 @@ vi.mock('antd-style', () => ({
     neonDot: 'neonDot',
     neonDotWrapper: 'neonDotWrapper',
   }),
+  css: (strings: TemplateStringsArray | string) =>
+    typeof strings === 'string' ? strings : (strings[0] ?? ''),
   cssVar: {
     colorInfo: '#00f',
     colorTextDescription: '#999',
