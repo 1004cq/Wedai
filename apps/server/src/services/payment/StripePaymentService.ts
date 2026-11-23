@@ -29,18 +29,18 @@ function getStripe(): Stripe {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface CheckoutSessionParams {
+  /** Absolute URL that Stripe redirects to on cancel. */
+  cancelUrl: string;
   /** Internal order ID used as idempotency key and metadata. */
   orderId: string;
   /** Internal order number shown to the user. */
   orderNo: string;
   /** Price snapshot read from the server (never trusted from the client). */
   priceSnapshot: PriceSnapshot;
-  /** Absolute URL that Stripe redirects to on cancel. */
-  cancelUrl: string;
-  /** Absolute URL that Stripe redirects to on success. */
-  successUrl: string;
   /** Stripe customer ID, if the user has one. */
   stripeCustomerId?: string;
+  /** Absolute URL that Stripe redirects to on success. */
+  successUrl: string;
 }
 
 export interface CheckoutSessionResult {
