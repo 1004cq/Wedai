@@ -127,6 +127,7 @@ jobs:
     needs: check-duplicate-run
     if: needs.check-duplicate-run.outputs.should_skip != 'true'
     strategy:
+      fail-fast: false
       matrix:
         shard: [1, 2]
     name: Test App (shard ${{ matrix.shard }}/2)
@@ -277,6 +278,7 @@ jobs:
     needs: check-duplicate-run
     if: needs.check-duplicate-run.outputs.should_skip != 'true'
     strategy:
+      fail-fast: false
       matrix:
         shard: [1, 2]
     name: Test Server (shard ${{ matrix.shard }}/2)
@@ -369,8 +371,11 @@ jobs:
         env:
           POSTGRES_PASSWORD: postgres
         options: >-
-          --health-cmd pg_isready --health-interval 10s --health-timeout 5s  --health-retries 5
-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+          --health-start-period 20s
 
         ports:
           - 5432:5432
@@ -393,6 +398,32 @@ jobs:
 
       - name: Install deps
         run: pnpm i
+
+      # ParadeDB can still be in recovery after pg_isready; wait until writable.
+      - name: Wait for Postgres writable
+        working-directory: packages/database
+        run: |
+          node <<'NODE'
+          const { Client } = require('pg');
+          const url = 'postgresql://postgres:postgres@localhost:5432/postgres';
+          (async () => {
+            for (let i = 1; i <= 30; i++) {
+              const client = new Client({ connectionString: url });
+              try {
+                await client.connect();
+                await client.query('SELECT 1');
+                await client.end();
+                console.log(`Postgres ready after ${i} attempt(s)`);
+                process.exit(0);
+              } catch {
+                try { await client.end(); } catch {}
+                await new Promise((r) => setTimeout(r, 2000));
+              }
+            }
+            console.error('Postgres did not become writable in time');
+            process.exit(1);
+          })();
+          NODE
 
       # Wedai: monorepo-wide lint removed from this job (base-ui import debt unrelated to DB).
       - name: Test Coverage

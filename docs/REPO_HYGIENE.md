@@ -45,6 +45,10 @@ done
 
 生产链路：`Test CI` → `Publish Wedai Image` → `Deploy cq.je`。
 
+矩阵 job（App / Server）使用 `fail-fast: false`，避免单 shard 偶发失败取消另一半。Database job 在 ParadeDB 就绪后额外等待可写，并对 `57P03 recovery mode` 重试 migrate。
+
+已知偶发（与本仓 hygiene 无关，另开排查）：部分 `aiAgent` 集成测试在无 Redis/QStash 时超时；E2E 约 2/84 场景偶发超时或像素断言漂移。
+
 ## 3. 商业环境变量（必查）
 
 | 变量 | 说明 |
