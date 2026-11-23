@@ -1,8 +1,7 @@
 'use client';
 
 import { BRANDING_NAME } from '@lobechat/business-const';
-import { Center, cx, Flexbox } from '@lobehub/ui';
-import { Divider } from 'antd';
+import { Center, cx, Divider, Flexbox } from '@lobehub/ui';
 import { type FC, type PropsWithChildren } from 'react';
 
 import { ProductLogo } from '@/components/Branding';
@@ -32,8 +31,8 @@ const AuthContainer: FC<PropsWithChildren> = ({ children }) => {
         </Center>
         <Flexbox horizontal align={'center'} justify={'space-between'} padding={16} width={'100%'}>
           <Flexbox horizontal align={'center'}>
-            <AuthLangButton size={18} />
-            <Divider className={styles.divider} orientation={'vertical'} />
+            <AuthLangButton />
+            <Divider orientation={'vertical'} style={{ height: 24, marginInline: 8 }} />
             <AuthThemeButton size={18} />
           </Flexbox>
           <AuthFooterLinks />

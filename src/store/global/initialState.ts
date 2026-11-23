@@ -96,6 +96,8 @@ export enum SettingsTabs {
   Labs = 'labs',
   LLM = 'llm',
   Memory = 'memory',
+  /** @deprecated Prefer marketplace app routes; kept for Wedai settings deep links. */
+  Messenger = 'messenger',
   Notification = 'notification',
   OAuthApps = 'oauth-apps',
   // business

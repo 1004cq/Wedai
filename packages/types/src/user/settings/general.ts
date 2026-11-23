@@ -60,6 +60,12 @@ export interface UserGeneralConfig {
   fontSize: number;
   highlighterTheme?: HighlighterProps['theme'];
   interfaceDensity?: InterfaceDensity;
+  /**
+   * Retired Advanced Tools switch. Kept optional so existing user settings and
+   * Wedai developer-menu gating still type-check; prefer `showMessageUsage` for
+   * new usage-row defaults.
+   */
+  isDevMode?: boolean;
   isLiteMode: boolean;
   mermaidTheme?: MermaidProps['theme'];
   neutralColor?: NeutralColors;

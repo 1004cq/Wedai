@@ -355,23 +355,32 @@ export function defineConfig(customOptions: CustomBetterAuthOptions) {
           } catch (error) {
             if (error instanceof SmsRateLimitError) {
               throw APIError.from('TOO_MANY_REQUESTS', {
+                code: 'SMS_RATE_LIMITED',
                 message: 'Too many verification code requests. Please try again later.',
               });
             }
             if (error instanceof Error) {
               if (error.message === 'SMS_DISABLED') {
-                throw APIError.from('BAD_REQUEST', { message: 'SMS verification is disabled' });
+                throw APIError.from('BAD_REQUEST', {
+                  code: 'SMS_DISABLED',
+                  message: 'SMS verification is disabled',
+                });
               }
               if (error.message === 'SMS_NOT_CONFIGURED') {
                 throw APIError.from('INTERNAL_SERVER_ERROR', {
+                  code: 'SMS_NOT_CONFIGURED',
                   message: 'SMS service is not configured',
                 });
               }
               if (error.message === 'INVALID_PHONE_NUMBER') {
-                throw APIError.from('BAD_REQUEST', { message: 'Invalid phone number' });
+                throw APIError.from('BAD_REQUEST', {
+                  code: 'INVALID_PHONE_NUMBER',
+                  message: 'Invalid phone number',
+                });
               }
               if (error.message === 'SMS_SEND_FAILED') {
                 throw APIError.from('INTERNAL_SERVER_ERROR', {
+                  code: 'SMS_SEND_FAILED',
                   message: 'Failed to send verification code',
                 });
               }

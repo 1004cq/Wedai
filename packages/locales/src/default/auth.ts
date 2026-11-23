@@ -539,4 +539,8 @@ export default {
   'usage.welcome.model': 'Model',
   'usage.welcome.provider': 'Provider',
   'usage.welcome.user': 'User',
+  'betterAuth.errors.usernameNotRegistered': 'This username is not registered',
+  'betterAuth.signin.forgotPasswordError': 'Failed to send password reset link',
+  'betterAuth.signin.magicLinkError': 'Failed to send sign-in link, please try again later',
+  'betterAuth.signin.socialError': 'Social sign in failed, please try again',
 };

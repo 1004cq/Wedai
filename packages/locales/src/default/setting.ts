@@ -5609,4 +5609,11 @@ When I am ___, I need ___
   'workspace.auditLog.actions.budget.model_policy_updated': 'Model tier rule updated',
   'workspace.billingPage.credits.balance.creditBalance': 'Credit package',
   'workspace.billingPage.credits.packages.remaining': 'Remaining',
+  'group.developer': 'Developer',
+  'group.other': 'Other',
+  'group.system': 'System',
+  'permission.generalAccess.label': 'Member Permissions',
+  'settingCommon.devMode.desc': 'Show developer-oriented tools and diagnostics in Settings.',
+  'settingCommon.devMode.title': 'Developer Mode',
+  'tools.activation.action.pin': 'Pin',
 };

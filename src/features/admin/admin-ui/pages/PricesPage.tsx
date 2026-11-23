@@ -2,7 +2,7 @@
 
 import { Button, Switch } from '@lobehub/ui';
 import type { TableColumnsType } from 'antd';
-import { App, Empty, InputNumber, Table } from 'antd';
+import { App, Empty, Flex, InputNumber, Table } from 'antd';
 import { useCallback, useState } from 'react';
 
 import { adminApi } from '../api';
@@ -113,7 +113,7 @@ export const PricesPage = () => {
       fixed: 'right',
       render: (_, price) =>
         canWrite ? (
-          <Button.Group>
+          <Flex gap={8}>
             <Button
               disabled={!drafts[price.id]}
               loading={savingId === price.id}
@@ -126,7 +126,7 @@ export const PricesPage = () => {
             <Button danger size={'small'} type={'text'} onClick={() => handleArchive(price)}>
               归档
             </Button>
-          </Button.Group>
+          </Flex>
         ) : null,
       title: '操作',
     },
