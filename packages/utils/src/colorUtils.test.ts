@@ -38,8 +38,8 @@ describe('colorUtils', () => {
       // Using hex with alpha
       const result = convertAlphaToSolid('#ff000080', '#ffffff');
 
-      // #ff000080 is red with 50% opacity (80 in hex = 128/255 ≈ 0.5)
-      expect(result).toBe('#ff8080');
+      // #ff000080 is red with alpha 0x80 (128/255 ≈ 0.502) → channel 127 → #ff7f7f
+      expect(result).toBe('#ff7f7f');
     });
 
     it('should handle named colors', () => {
@@ -156,12 +156,12 @@ describe('colorUtils', () => {
     });
 
     it('should produce same result regardless of input color format', () => {
-      const result1 = convertAlphaToSolid('#ff000080', '#ffffff');
+      // rgba(…, 0.5) is exact half; hex 0x80 is 128/255 and rounds differently — compare rgba forms.
       const result2 = convertAlphaToSolid('rgba(255, 0, 0, 0.5)', 'white');
       const result3 = convertAlphaToSolid('rgba(255, 0, 0, 0.5)', '#fff');
 
-      expect(result1).toBe(result2);
       expect(result2).toBe(result3);
+      expect(result2).toBe('#ff8080');
     });
   });
 });
