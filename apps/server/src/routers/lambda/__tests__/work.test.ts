@@ -4,7 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // serverDatabase middleware calls getServerDB(); stub it (the WorkModel mock
 // below ignores the db handle anyway).
 vi.mock('@/database/core/db-adaptor', () => ({
-  getServerDB: vi.fn(() => ({})),
+  getServerDB: vi.fn(function () {
+    return {};
+  }),
 }));
 
 // RBAC gate → instead of enforcing a real permission, throw a sentinel that
@@ -13,25 +15,31 @@ vi.mock('@/database/core/db-adaptor', () => ({
 // through surfaces as `GATE:<code>`, so the test asserts procedure → permission
 // mapping rather than just the set of codes requested at module load.
 vi.mock('@/business/server/trpc-middlewares/rbacPermission', () => ({
-  withScopedPermission: vi.fn((code: string) => () => {
-    throw new Error(`GATE:${code}`);
+  withScopedPermission: vi.fn(function (code: string) {
+    return () => {
+      throw new Error(`GATE:${code}`);
+    };
   }),
 }));
 
 const mockDeleteTaskWork = vi.fn();
+const mockDeleteWork = vi.fn();
 const mockRegisterTask = vi.fn();
 const mockRegisterDocument = vi.fn();
 const mockHandleSkillToolResult = vi.fn();
 const mockListByConversation = vi.fn();
 
 vi.mock('@/database/models/work', () => ({
-  WorkModel: vi.fn(() => ({
-    deleteTaskWork: mockDeleteTaskWork,
-    handleSkillToolResult: mockHandleSkillToolResult,
-    listByConversation: mockListByConversation,
-    registerDocument: mockRegisterDocument,
-    registerTask: mockRegisterTask,
-  })),
+  WorkModel: vi.fn(function () {
+    return {
+      deleteTaskWork: mockDeleteTaskWork,
+      deleteWork: mockDeleteWork,
+      handleSkillToolResult: mockHandleSkillToolResult,
+      listByConversation: mockListByConversation,
+      registerDocument: mockRegisterDocument,
+      registerTask: mockRegisterTask,
+    };
+  }),
 }));
 
 // Imported after the mocks above are registered.
@@ -83,9 +91,31 @@ describe('workRouter — per-procedure write permission gates', () => {
     expect(mockHandleSkillToolResult).not.toHaveBeenCalled();
   });
 
+  it('deleteWork gates on agent:update (workspace write, like other Work mutations)', async () => {
+    await expect(createCaller().deleteWork({ id: 'work-1' })).rejects.toThrow('GATE:agent:update');
+    expect(mockDeleteWork).not.toHaveBeenCalled();
+  });
+
   it('read-only list procedures stay ungated', async () => {
     mockListByConversation.mockResolvedValue([]);
     await expect(createCaller().listByConversation({})).resolves.toEqual([]);
     expect(mockListByConversation).toHaveBeenCalledTimes(1);
+  });
+
+  it('the topic PR link and dismiss endpoints gate on topic:update', async () => {
+    await expect(
+      createCaller().linkTopicPullRequest({
+        source: 'manual',
+        topicId: 't1',
+        url: 'https://github.com/a/b/pull/1',
+      }),
+    ).rejects.toThrow('GATE:topic:update');
+    await expect(
+      createCaller().setTopicPullRequestDismissed({
+        dismissed: true,
+        identifier: 'a/b#1',
+        topicId: 't1',
+      }),
+    ).rejects.toThrow('GATE:topic:update');
   });
 });

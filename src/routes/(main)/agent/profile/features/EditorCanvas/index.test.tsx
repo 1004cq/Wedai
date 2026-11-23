@@ -128,7 +128,8 @@ vi.mock('@/components/InfoTooltip', () => ({
   ),
 }));
 
-vi.mock('@lobehub/ui/base-ui', () => ({
+vi.mock('@lobehub/ui', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   toast: {
     error: (...args: unknown[]) => messageError(...args),
   },
@@ -177,10 +178,6 @@ vi.mock('./TypoBar', () => ({
 
 vi.mock('./useSlashItems', () => ({
   useSlashItems: () => [],
-}));
-
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
 }));
 
 describe('Agent profile EditorCanvas', () => {
@@ -354,7 +351,7 @@ describe('Agent profile EditorCanvas', () => {
   it('does not bubble mode-switch clicks to the click-to-focus wrapper', () => {
     // The profile page wraps the canvas in a click-to-focus area; a bubbled
     // toggle click would focus the editor and scroll to the caret at the
-    // document end. See LOBE-12593.
+    // document end.
     const onWrapperClick = vi.fn();
     render(
       <div onClick={onWrapperClick}>
@@ -369,12 +366,25 @@ describe('Agent profile EditorCanvas', () => {
     expect(onWrapperClick).not.toHaveBeenCalled();
   });
 
-  it('moves the prompt description into the title tooltip', () => {
+  it('keeps editor controls without repeating the instruction page heading and help', () => {
     render(<EditorCanvas />);
 
+    expect(screen.queryByText('settingAgent.prompt.title')).not.toBeInTheDocument();
     expect(screen.queryByText('settingAgent.prompt.desc')).not.toBeInTheDocument();
-    expect(screen.getByTestId('prompt-description-tooltip')).toHaveAccessibleName(
-      'settingAgent.prompt.desc',
+    expect(screen.queryByTestId('prompt-description-tooltip')).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'settingAgent.prompt.mode.visual' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'settingAgent.prompt.mode.source' }),
+    ).toBeInTheDocument();
+    const inputSurface = screen.getByTestId('profile-editor').closest('[data-variant="outlined"]');
+    expect(inputSurface).toBeInTheDocument();
+    expect(inputSurface).not.toContainElement(
+      screen.getByRole('button', { name: 'settingAgent.prompt.mode.visual' }),
+    );
+    expect(inputSurface).not.toContainElement(
+      screen.getByRole('button', { name: 'settingAgent.prompt.mode.source' }),
     );
   });
 

@@ -1,45 +1,49 @@
-import { Flexbox, Text } from '@lobehub/ui';
-import { createStaticStyles } from 'antd-style';
+import { createStaticStyles, cx, Flexbox, Text } from '@lobehub/ui';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useUserStore } from '@/store/user';
 import { authSelectors, userProfileSelectors } from '@/store/user/slices/auth/selectors';
+import { densityVars } from '@/styles/densityVars';
 
 import AgentSelect from './AgentSelect';
+import { getGreetingKey } from './greeting';
 
 const styles = createStaticStyles(({ css }) => ({
-  // The measure comes from the layout (`--home-greeting-measure`), which derives
-  // it from the container width: it has to clear the portrait's bubble, and it
-  // must not depend on the rail, or collapsing would re-wrap the headline and
-  // shove the composer and the whole task list down by a line.
+  root: css`
+    /* Unbroken names must stay inside the start-aligned header's text lane. */
+    max-width: 100%;
+  `,
   greeting: css`
     overflow: hidden;
     display: -webkit-box;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
 
-    max-width: var(--home-greeting-measure, none);
     margin: 0;
 
     font-size: 22px;
     line-height: 1.4;
     letter-spacing: -0.01em;
+
+    html[data-density='compact'] & {
+      font-size: 20px;
+    }
   `,
-  toolbar: css`
-    width: 100%;
-    min-width: 0;
-    min-height: 48px;
+  /* The nav header floats over the scroll area, so the page padding alone would
+     tuck the switcher right under it; clear the header by one section gap. */
+  dashboard: css`
+    padding-block-start: calc(
+      ${densityVars.headerHeight} + ${densityVars.sectionGap} - ${densityVars.pagePaddingBlockStart}
+    );
   `,
 }));
 
-const getGreetingKey = (hour: number): 'afternoon' | 'evening' | 'morning' => {
-  if (hour < 12) return 'morning';
-  if (hour < 18) return 'afternoon';
-  return 'evening';
-};
+interface HomeHeaderProps {
+  centered?: boolean;
+}
 
-const HomeHeader = memo(() => {
+const HomeHeader = memo<HomeHeaderProps>(({ centered }) => {
   const { t } = useTranslation('home');
   const displayName = useUserStore(userProfileSelectors.displayUserName);
   const isLogin = useUserStore(authSelectors.isLogin);
@@ -50,10 +54,11 @@ const HomeHeader = memo(() => {
     : t(`dashboard.greeting.${greetingKey}Guest`);
 
   return (
-    <Flexbox gap={16} justify={'center'}>
-      <Flexbox horizontal align={'center'} className={styles.toolbar} gap={16}>
-        <AgentSelect />
-      </Flexbox>
+    // The switcher names who speaks and the greeting answers right below it, so
+    // the pair reads as one block. The minimal layout's lift math (MINIMAL_LIFT)
+    // counts on these heights.
+    <Flexbox className={cx(styles.root, !centered && styles.dashboard)} gap={8} justify={'center'}>
+      <AgentSelect />
       <Text as={'h1'} className={styles.greeting} weight={600}>
         {greeting}
       </Text>

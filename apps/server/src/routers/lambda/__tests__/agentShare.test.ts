@@ -1,0 +1,847 @@
+// @vitest-environment node
+import type * as BusinessConst from '@lobechat/business-const';
+import { TRPCError } from '@trpc/server';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { createContextInner } from '@/libs/trpc/lambda/context';
+
+/** Rows the router's Agent-owner lookup (`select … from agents`) returns. */
+const mockAgentOwnerRows = vi.fn(async () => [{ userId: 'user-1' }]);
+vi.mock('@/database/core/db-adaptor', () => ({
+  getServerDB: vi.fn(function () {
+    return {
+      select: () => ({ from: () => ({ where: () => ({ limit: () => mockAgentOwnerRows() }) }) }),
+    };
+  }),
+}));
+
+// `assertAgentShareCreationEnabled` (`_helpers/agentShareFeatureGate.ts`) runs
+// for real in this suite — only its own two dependencies are mocked
+// (`mockGetFeatureFlagsState` below, and this mutable business-const object)
+// — so the router tests exercise the actual gate, not a stand-in.
+const mocks = vi.hoisted(() => ({
+  businessConst: { ENABLE_BUSINESS_FEATURES: true },
+}));
+vi.mock('@lobechat/business-const', async () => {
+  const actual = await vi.importActual<typeof BusinessConst>('@lobechat/business-const');
+  return {
+    ...actual,
+    // `packages/utils/src/apiKey.ts` reads this dynamically (`import * as
+    // businessConst`), pulled in transitively via the unmocked
+    // `createContextInner` -> `ApiKeyModel` chain below. `actual` here
+    // resolves to the cloud override, which omits this key entirely (see
+    // that file's own doc comment), so vitest's mock-export validation has
+    // no own property to find unless it is listed explicitly.
+    API_KEY_PREFIX: (actual as Record<string, unknown>).API_KEY_PREFIX,
+    // A getter (not a static spread) so per-test mutation of
+    // `mocks.businessConst.ENABLE_BUSINESS_FEATURES` is observed by every
+    // subsequent read, including inside the already-imported gate helper.
+    get ENABLE_BUSINESS_FEATURES() {
+      return mocks.businessConst.ENABLE_BUSINESS_FEATURES;
+    },
+  };
+});
+
+const mockAssertShareModelAllowed = vi.fn();
+vi.mock('@/server/services/agent', () => ({
+  AgentService: vi.fn(function () {
+    return {
+      prepareShareModel: mockAssertShareModelAllowed,
+      withShareModelLock: (_id: string, action: (service: unknown, shares: unknown) => unknown) =>
+        action(
+          { prepareShareModel: mockAssertShareModelAllowed },
+          { create: mockCreate, updateVisibility: mockUpdateVisibility },
+        ),
+    };
+  }),
+}));
+
+const mockCreate = vi.fn();
+const mockFindByShareId = vi.fn();
+const mockForceDisableWorkspaceShare = vi.fn();
+const mockGetByAgentId = vi.fn();
+const mockListWorkspaceSharesForAudit = vi.fn();
+const mockUpdateConfig = vi.fn();
+const mockUpdateSlug = vi.fn();
+const mockUpdateVisibility = vi.fn();
+const mockListEligibleWorks = vi.fn();
+
+vi.mock('@/database/models/agentShare', () => ({
+  AgentShareModel: Object.assign(
+    vi.fn(function () {
+      return {
+        create: mockCreate,
+        getByAgentId: mockGetByAgentId,
+        updateConfig: mockUpdateConfig,
+        updateSlug: mockUpdateSlug,
+        updateVisibility: mockUpdateVisibility,
+      };
+    }),
+    {
+      findByShareId: mockFindByShareId,
+      forceDisableWorkspaceShare: mockForceDisableWorkspaceShare,
+      listWorkspaceSharesForAudit: mockListWorkspaceSharesForAudit,
+    },
+  ),
+}));
+
+vi.mock('@/database/models/agentShareProfile', () => ({
+  AgentShareProfileModel: vi.fn(function () {
+    return { listEligibleWorks: mockListEligibleWorks };
+  }),
+}));
+
+const mockCountShareVisitors = vi.fn();
+vi.mock('@/database/models/topic', () => ({
+  TopicModel: vi.fn(function () {
+    return { countShareVisitors: mockCountShareVisitors };
+  }),
+}));
+
+const mockCountAgentShareUsage = vi.fn();
+vi.mock('@/database/models/file', () => ({
+  FileModel: vi.fn(function () {
+    return { countAgentShareUsage: mockCountAgentShareUsage };
+  }),
+}));
+
+const mockGetAgentShareMonthlySpend = vi.fn();
+vi.mock('@/business/server/agent-share/spendGate', () => ({
+  getAgentShareMonthlySpend: (...args: unknown[]) => mockGetAgentShareMonthlySpend(...args),
+}));
+
+const mockFilterAddressBookPeople = vi.fn();
+const mockListAddressBookPeople = vi.fn();
+const mockFindUser = vi.fn();
+vi.mock('@/business/server/contact/addressBook', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  getAddressBook: vi.fn(() => ({
+    filterAddressBookPeople: mockFilterAddressBookPeople,
+    findUser: mockFindUser,
+    listAddressBookPeople: mockListAddressBookPeople,
+  })),
+}));
+
+const mockGetFeatureFlagsState = vi.fn();
+vi.mock('@/server/featureFlags', () => ({
+  getServerFeatureFlagsStateFromRuntimeConfig: (...args: unknown[]) =>
+    mockGetFeatureFlagsState(...args),
+}));
+
+const mockGetAgentConfigById = vi.fn();
+vi.mock('@/database/models/agent', () => ({
+  AgentModel: vi.fn(function () {
+    return { getAgentConfigById: mockGetAgentConfigById };
+  }),
+}));
+
+const mockFindAllAgentSkills = vi.fn(async () => ({ data: [], total: 0 }));
+vi.mock('@/database/models/agentSkill', () => ({
+  AgentSkillModel: vi.fn(function () {
+    return { findAll: mockFindAllAgentSkills };
+  }),
+}));
+
+const mockGetAgentSkills = vi.fn(async () => []);
+vi.mock('@/server/services/agentDocuments', () => ({
+  AgentDocumentsService: vi.fn(function () {
+    return { getAgentSkills: mockGetAgentSkills };
+  }),
+}));
+
+const mockGetUserSettings = vi.fn(async () => ({}));
+vi.mock('@/database/models/user', () => ({
+  UserModel: vi.fn(function () {
+    return { getUserSettings: mockGetUserSettings };
+  }),
+}));
+
+vi.mock('@/server/services/userSkill', () => ({
+  UserSkillService: vi.fn(function () {
+    return { listCatalog: async () => [] };
+  }),
+}));
+
+const { agentShareConfigPatchSchema, agentShareConfigSchema, agentShareRouter } =
+  await import('../agentShare');
+
+describe('share profile configuration', () => {
+  it('accepts independent demo cases and an ordered selection of works', () => {
+    const config = {
+      demoCases: [{ description: 'Find a minimal fix', prompt: 'Help me debug this error' }],
+      featuredWorkIds: ['work-first', 'work-second'],
+    };
+    expect(agentShareConfigPatchSchema.parse(config)).toEqual(config);
+  });
+
+  it('allows clearing profile content without changing other settings', () => {
+    expect(agentShareConfigPatchSchema.parse({ demoCases: [], featuredWorkIds: [] })).toEqual({
+      demoCases: [],
+      featuredWorkIds: [],
+    });
+  });
+
+  it.each([
+    { demoCases: [{ description: 'Empty task', prompt: ' ' }] },
+    { demoCases: [{ description: 'Description', prompt: 'Task', openingQuestion: 'Other' }] },
+    { featuredWorkIds: ['same', 'same'] },
+    { featuredWorkIds: [''] },
+  ])('rejects invalid profile content: %j', (config) => {
+    expect(agentShareConfigPatchSchema.safeParse(config).success).toBe(false);
+  });
+});
+
+const share = {
+  agentId: 'agent-1',
+  id: 'share-1',
+  shareConfig: { maxMessagesPerVisitor: 100 },
+  visibility: 'private',
+};
+
+describe('agentShareRouter', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAssertShareModelAllowed.mockReset().mockResolvedValue(undefined);
+    mocks.businessConst.ENABLE_BUSINESS_FEATURES = true;
+    mockCreate.mockResolvedValue(share);
+    mockFindByShareId.mockResolvedValue({
+      ...share,
+      ownerId: 'user-1',
+      workspaceId: null,
+    });
+    mockForceDisableWorkspaceShare.mockResolvedValue({
+      agentId: 'agent-1',
+      shareId: '00000000-0000-4000-8000-000000000001',
+      visibility: 'private',
+    });
+    mockGetByAgentId.mockResolvedValue(share);
+    mockListWorkspaceSharesForAudit.mockResolvedValue([]);
+    mockUpdateConfig.mockResolvedValue(share);
+    mockUpdateSlug.mockResolvedValue({
+      ...share,
+      shareConfig: { ...share.shareConfig, slug: 'my-slug' },
+    });
+    mockUpdateVisibility.mockResolvedValue(share);
+    mockListEligibleWorks.mockResolvedValue({ hasMore: false, items: [] });
+    mockCountShareVisitors.mockResolvedValue({ topicCount: 7, visitorCount: 3 });
+    mockCountAgentShareUsage.mockResolvedValue(0);
+    mockGetAgentShareMonthlySpend.mockResolvedValue(null);
+    mockGetFeatureFlagsState.mockResolvedValue({ enableAgentShare: true });
+  });
+
+  it('requires authentication for share management', async () => {
+    const caller = agentShareRouter.createCaller(await createContextInner());
+
+    await expect(caller.getShareStatus({ agentId: 'agent-1' })).rejects.toMatchObject({
+      code: 'UNAUTHORIZED',
+    });
+    expect(mockGetByAgentId).not.toHaveBeenCalled();
+  });
+
+  it('enables a private share by default', async () => {
+    const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+    await expect(caller.enableShare({ agentId: 'agent-1' })).resolves.toEqual(share);
+    expect(mockCreate).toHaveBeenCalledWith('agent-1', undefined);
+  });
+
+  it('enables a share with an explicit visibility', async () => {
+    const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+    await caller.enableShare({ agentId: 'agent-1', visibility: 'link' });
+    expect(mockCreate).toHaveBeenCalledWith('agent-1', 'link');
+  });
+
+  describe('enableCardShare', () => {
+    it.each([
+      ['creates a missing share as card-only', { ...share, visibility: 'card' }, 0],
+      ['resumes a paused share as card-only', { ...share, visibility: 'private' }, 1],
+    ])('%s', async (_label, existing, updates) => {
+      mockCreate.mockResolvedValue(existing);
+      const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+      await caller.enableCardShare({ agentId: 'agent-1' });
+
+      expect(mockAssertShareModelAllowed).toHaveBeenCalled();
+      expect(mockCreate).toHaveBeenCalledWith('agent-1', 'card');
+      expect(mockUpdateVisibility).toHaveBeenCalledTimes(updates);
+      if (updates) expect(mockUpdateVisibility).toHaveBeenCalledWith('agent-1', 'card');
+    });
+
+    it('leaves a live link share as it is', async () => {
+      mockCreate.mockResolvedValue({ ...share, visibility: 'link' });
+      const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+      await expect(caller.enableCardShare({ agentId: 'agent-1' })).resolves.toMatchObject({
+        visibility: 'link',
+      });
+      expect(mockUpdateVisibility).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each(['enableShare', 'updateVisibility'] as const)(
+    'rejects unsupported providers through %s before publishing',
+    async (method) => {
+      mockAssertShareModelAllowed.mockRejectedValue(
+        new TRPCError({ code: 'BAD_REQUEST', message: 'Unsupported share provider' }),
+      );
+      const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+      await expect(
+        caller[method]({ agentId: 'agent-1', visibility: 'link' }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(mockCreate).not.toHaveBeenCalled();
+      expect(mockUpdateVisibility).not.toHaveBeenCalled();
+    },
+  );
+
+  it('allows disabling a share with an unsupported provider', async () => {
+    mockAssertShareModelAllowed.mockRejectedValue(new Error('Unsupported share provider'));
+    const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+    await expect(
+      caller.updateVisibility({ agentId: 'agent-1', visibility: 'private' }),
+    ).resolves.toEqual(share);
+  });
+
+  it('returns null when a personal agent has no share', async () => {
+    mockGetByAgentId.mockResolvedValue(null);
+    const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+    await expect(caller.getShareStatus({ agentId: 'agent-1' })).resolves.toBeNull();
+  });
+
+  it('requires Workspace context for administrator audit operations', async () => {
+    const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'admin-1' }));
+
+    await expect(caller.getWorkspaceShareAudit({})).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockListWorkspaceSharesForAudit).not.toHaveBeenCalled();
+  });
+
+  it('returns the Workspace share audit projection and force-disables by share id', async () => {
+    const caller = agentShareRouter.createCaller(
+      await createContextInner({ userId: 'admin-1', workspaceId: 'workspace-1' }),
+    );
+    const shareId = '00000000-0000-4000-8000-000000000001';
+
+    await caller.getWorkspaceShareAudit({ limit: 25, offset: 50 });
+    await caller.forceDisableWorkspaceShare({ shareId });
+
+    expect(mockListWorkspaceSharesForAudit).toHaveBeenCalledWith(expect.anything(), 'workspace-1', {
+      limit: 25,
+      offset: 50,
+    });
+    expect(mockForceDisableWorkspaceShare).toHaveBeenCalledWith(
+      expect.anything(),
+      'workspace-1',
+      shareId,
+      expect.objectContaining({ authorizeMutation: expect.any(Function) }),
+    );
+  });
+
+  it('lists paged owner candidates and carries selected ids for older pages', async () => {
+    const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+    const page = { hasMore: true, items: [{ id: 'older-work' }] };
+    mockListEligibleWorks.mockResolvedValue(page);
+
+    await expect(
+      caller.listEligibleWorks({
+        agentId: 'agent-1',
+        includeWorkIds: ['older-work'],
+        limit: 30,
+        offset: 30,
+      }),
+    ).resolves.toEqual(page);
+    expect(mockListEligibleWorks).toHaveBeenCalledWith('agent-1', {
+      includeWorkIds: ['older-work'],
+      limit: 30,
+      offset: 30,
+    });
+  });
+
+  it('rejects an unauthenticated or non-owner candidate request', async () => {
+    const anonymousCaller = agentShareRouter.createCaller(await createContextInner());
+    await expect(
+      anonymousCaller.listEligibleWorks({ agentId: 'agent-1', includeWorkIds: [] }),
+    ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+
+    mockGetByAgentId.mockResolvedValue(null);
+    const visitorCaller = agentShareRouter.createCaller(
+      await createContextInner({ userId: 'visitor-user' }),
+    );
+    await expect(
+      visitorCaller.listEligibleWorks({ agentId: 'agent-1', includeWorkIds: [] }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(mockListEligibleWorks).not.toHaveBeenCalled();
+  });
+
+  it('rejects duplicate selected ids before querying the model', async () => {
+    const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+    await expect(
+      caller.listEligibleWorks({
+        agentId: 'agent-1',
+        includeWorkIds: ['same-work', 'same-work'],
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockListEligibleWorks).not.toHaveBeenCalled();
+  });
+
+  it('forwards an atomic share configuration patch', async () => {
+    const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+    const config = { maxMessagesPerVisitor: 10 };
+
+    await caller.updateShareConfig({ agentId: 'agent-1', config });
+
+    expect(mockUpdateConfig).toHaveBeenCalledWith('agent-1', config);
+  });
+
+  it('rejects an empty share configuration patch', () => {
+    expect(agentShareConfigPatchSchema.safeParse({}).success).toBe(false);
+  });
+
+  it('requires a positive integer message limit', async () => {
+    const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+    await expect(
+      caller.updateShareConfig({
+        agentId: 'agent-1',
+        config: { maxMessagesPerVisitor: 0 },
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller.updateShareConfig({
+        agentId: 'agent-1',
+        config: { maxMessagesPerVisitor: 1.5 },
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockUpdateConfig).not.toHaveBeenCalled();
+  });
+
+  describe('execution environment grant', () => {
+    const bob = { avatar: null, fullName: 'Bob', id: 'user-bob', username: 'bob' };
+
+    beforeEach(() => {
+      mockAgentOwnerRows.mockResolvedValue([{ userId: 'user-1' }]);
+      mockGetFeatureFlagsState.mockResolvedValue({ enableAgentShare: true, enableChannels: true });
+    });
+
+    it('grants only people in the address book', async () => {
+      const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+      mockFilterAddressBookPeople.mockResolvedValue(['user-bob']);
+
+      await expect(
+        caller.updateShareConfig({
+          agentId: 'agent-1',
+          config: { deviceAccess: 'allowlist', deviceAllowUserIds: ['user-bob', 'stranger'] },
+        }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(mockUpdateConfig).not.toHaveBeenCalled();
+
+      const config = { deviceAccess: 'allowlist' as const, deviceAllowUserIds: ['user-bob'] };
+      await caller.updateShareConfig({ agentId: 'agent-1', config });
+      expect(mockUpdateConfig).toHaveBeenCalledWith('agent-1', config);
+    });
+
+    it('stores an address-book-wide grant without a list', async () => {
+      const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+      await caller.updateShareConfig({ agentId: 'agent-1', config: { deviceAccess: 'contacts' } });
+      expect(mockUpdateConfig).toHaveBeenCalledWith('agent-1', { deviceAccess: 'contacts' });
+    });
+
+    // The runtime grants nothing while contacts are off, so a grant must not be
+    // stored then either (it would also come alive when they turn on).
+    it('refuses a grant while contacts are off for the Agent owner', async () => {
+      const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+      mockGetFeatureFlagsState.mockResolvedValue({ enableAgentShare: true, enableChannels: false });
+      mockFilterAddressBookPeople.mockResolvedValue(['user-bob']);
+
+      await expect(
+        caller.updateShareConfig({
+          agentId: 'agent-1',
+          config: { deviceAccess: 'allowlist', deviceAllowUserIds: ['user-bob'] },
+        }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(
+        caller.updateShareConfig({ agentId: 'agent-1', config: { deviceAccess: 'allowlist' } }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(
+        caller.updateShareConfig({ agentId: 'agent-1', config: { deviceAccess: 'contacts' } }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mockUpdateConfig).not.toHaveBeenCalled();
+
+      await expect(caller.listDeviceGrantablePeople({ agentId: 'agent-1' })).resolves.toMatchObject(
+        { enabled: false, people: [] },
+      );
+      expect(mockListAddressBookPeople).not.toHaveBeenCalled();
+    });
+
+    // A workspace manager other than the owner must see and save the same
+    // people the run accepts: the runtime keys the book by the Agent owner.
+    it('keys the address book by the Agent owner, not the calling manager', async () => {
+      const { getAddressBook } = await import('@/business/server/contact/addressBook');
+      const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+      mockAgentOwnerRows.mockResolvedValue([{ userId: 'owner-9' }]);
+      mockListAddressBookPeople.mockResolvedValue([]);
+
+      await caller.listDeviceGrantablePeople({ agentId: 'agent-1' });
+
+      expect(getAddressBook).toHaveBeenCalledWith(expect.anything(), 'owner-9', undefined);
+      expect(mockGetFeatureFlagsState).toHaveBeenCalledWith('owner-9');
+    });
+
+    it('lists the address book and the granted people who left it', async () => {
+      const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+      const carol = { avatar: null, fullName: 'Carol', id: 'user-carol', username: 'carol' };
+      mockGetByAgentId.mockResolvedValue({
+        ...share,
+        shareConfig: { ...share.shareConfig, deviceAllowUserIds: ['user-bob', 'user-carol'] },
+      });
+      mockListAddressBookPeople.mockResolvedValue([bob]);
+      mockFindUser.mockResolvedValue(carol);
+      mockGetFeatureFlagsState.mockResolvedValue({ enableAgentShare: true, enableChannels: true });
+
+      await expect(caller.listDeviceGrantablePeople({ agentId: 'agent-1' })).resolves.toEqual({
+        enabled: true,
+        people: [bob],
+        unlisted: [carol],
+      });
+      expect(mockFindUser).toHaveBeenCalledWith('user-carol');
+    });
+  });
+
+  it('accepts a toolset-level grant and a per-API scoped grant in toolGrants', async () => {
+    const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+    const config = {
+      toolGrants: [
+        { identifier: 'calculator' },
+        { apis: ['analyzeMedia'], identifier: 'lobe-agent' },
+      ],
+    };
+
+    await caller.updateShareConfig({ agentId: 'agent-1', config });
+
+    expect(mockUpdateConfig).toHaveBeenCalledWith('agent-1', config);
+  });
+
+  it('rejects a malformed toolGrants entry', async () => {
+    const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+    // Empty identifier.
+    await expect(
+      caller.updateShareConfig({
+        agentId: 'agent-1',
+        config: { toolGrants: [{ identifier: '' }] },
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    // Empty `apis` array — a tool with no granted API must be absent instead.
+    await expect(
+      caller.updateShareConfig({
+        agentId: 'agent-1',
+        config: { toolGrants: [{ apis: [], identifier: 'lobe-agent' }] },
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    // Unknown key.
+    await expect(
+      caller.updateShareConfig({
+        agentId: 'agent-1',
+        config: { toolGrants: [{ apiName: 'analyzeMedia', identifier: 'lobe-agent' } as any] },
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockUpdateConfig).not.toHaveBeenCalled();
+  });
+
+  it('rejects duplicate identifiers and duplicate api names in toolGrants', async () => {
+    const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+    await expect(
+      caller.updateShareConfig({
+        agentId: 'agent-1',
+        config: { toolGrants: [{ identifier: 'calculator' }, { identifier: 'calculator' }] },
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller.updateShareConfig({
+        agentId: 'agent-1',
+        config: {
+          toolGrants: [{ apis: ['analyzeMedia', 'analyzeMedia'], identifier: 'lobe-agent' }],
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockUpdateConfig).not.toHaveBeenCalled();
+  });
+
+  it('does not expose dropped v1 config fields in the config API', () => {
+    expect(
+      agentShareConfigSchema.safeParse({
+        filePermissionConfig: { agentFiles: 'read' },
+        maxMessagesPerVisitor: 5,
+      }).success,
+    ).toBe(false);
+    expect(
+      agentShareConfigSchema.safeParse({
+        guestEnabled: true,
+        maxMessagesPerVisitor: 5,
+      }).success,
+    ).toBe(false);
+  });
+
+  // Disabling is a pause, not a revocation: it flips the row to `private` and
+  // never deletes it, so the share id and slug (i.e. the link already handed
+  // out) survive and re-enabling republishes the same url.
+  it('disables an existing share by making it private, keeping the row', async () => {
+    const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+    await caller.updateVisibility({ agentId: 'agent-1', visibility: 'link' });
+    const disabled = await caller.disableShare({ agentId: 'agent-1' });
+
+    expect(mockUpdateVisibility).toHaveBeenNthCalledWith(1, 'agent-1', 'link');
+    expect(mockUpdateVisibility).toHaveBeenNthCalledWith(2, 'agent-1', 'private');
+    expect(disabled.id).toBe('share-1');
+  });
+
+  it('updates the custom slug', async () => {
+    const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+    const result = await caller.updateSlug({ agentId: 'agent-1', slug: 'my-slug' });
+
+    expect(mockUpdateSlug).toHaveBeenCalledWith('agent-1', 'my-slug');
+    expect(result.shareConfig).toMatchObject({ slug: 'my-slug' });
+  });
+
+  it('lower-cases and trims the slug input before forwarding it', async () => {
+    const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+    await caller.updateSlug({ agentId: 'agent-1', slug: '  My-Slug  ' });
+
+    expect(mockUpdateSlug).toHaveBeenCalledWith('agent-1', 'my-slug');
+  });
+
+  it('rejects an obviously too-short slug before reaching the model', async () => {
+    const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+    await expect(caller.updateSlug({ agentId: 'agent-1', slug: 'ab' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockUpdateSlug).not.toHaveBeenCalled();
+  });
+
+  it('propagates a slug conflict as CONFLICT', async () => {
+    mockUpdateSlug.mockRejectedValue(
+      new TRPCError({ code: 'CONFLICT', message: 'SHARE_SLUG_TAKEN' }),
+    );
+    const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+    await expect(
+      caller.updateSlug({ agentId: 'agent-1', slug: 'taken-slug' }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+  });
+
+  it('returns NOT_FOUND when an existing share is required', async () => {
+    mockUpdateConfig.mockResolvedValue(null);
+    mockUpdateVisibility.mockResolvedValue(null);
+    mockUpdateSlug.mockResolvedValue(null);
+    const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+    await expect(caller.disableShare({ agentId: 'agent-1' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    await expect(
+      caller.updateShareConfig({
+        agentId: 'agent-1',
+        config: { maxMessagesPerVisitor: 5 },
+      }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(
+      caller.updateVisibility({ agentId: 'agent-1', visibility: 'private' }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(caller.updateSlug({ agentId: 'agent-1', slug: 'my-slug' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+  });
+
+  describe('publish capability', () => {
+    it('rejects enabling a share on a deployment without business features, even when the flag is on', async () => {
+      mocks.businessConst.ENABLE_BUSINESS_FEATURES = false;
+      mockGetFeatureFlagsState.mockResolvedValue({ enableAgentShare: true });
+      const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+      await expect(caller.enableShare({ agentId: 'agent-1' })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      // The compile-time gate short-circuits before the flag is even read.
+      expect(mockGetFeatureFlagsState).not.toHaveBeenCalled();
+      expect(mockCreate).not.toHaveBeenCalled();
+    });
+
+    it('rejects enabling a share when the capability is off for this user', async () => {
+      mockGetFeatureFlagsState.mockResolvedValue({ enableAgentShare: false });
+      const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+      await expect(caller.enableShare({ agentId: 'agent-1' })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(mockGetFeatureFlagsState).toHaveBeenCalledWith('user-1');
+      expect(mockCreate).not.toHaveBeenCalled();
+    });
+
+    it('rejects publishing an existing share when the capability is off', async () => {
+      mockGetFeatureFlagsState.mockResolvedValue({ enableAgentShare: false });
+      const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+      await expect(
+        caller.updateVisibility({ agentId: 'agent-1', visibility: 'link' }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mockUpdateVisibility).not.toHaveBeenCalled();
+    });
+
+    it('still lets a user unpublish, read and manage a share when the capability is off', async () => {
+      mockGetFeatureFlagsState.mockResolvedValue({ enableAgentShare: false });
+      const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+      await caller.updateVisibility({ agentId: 'agent-1', visibility: 'private' });
+      await caller.disableShare({ agentId: 'agent-1' });
+      await caller.getShareStatus({ agentId: 'agent-1' });
+      await caller.updateShareConfig({ agentId: 'agent-1', config: { maxMessagesPerVisitor: 3 } });
+
+      expect(mockUpdateVisibility).toHaveBeenCalledWith('agent-1', 'private');
+      expect(mockUpdateVisibility).toHaveBeenCalledTimes(2);
+    });
+
+    // Fails closed: an unconfigured flag is treated the same as `false`, not
+    // as "open" — a deployment must explicitly opt a user in.
+    it('rejects publishing when the capability is unconfigured', async () => {
+      mockGetFeatureFlagsState.mockResolvedValue({});
+      const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+      await expect(caller.enableShare({ agentId: 'agent-1' })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(mockCreate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getShareStats', () => {
+    it('returns visitor aggregates and the configured cap for the owner', async () => {
+      mockGetByAgentId.mockResolvedValue({
+        ...share,
+        shareConfig: { ...share.shareConfig, monthlySpendLimit: 10 },
+        userViewCount: 42,
+      });
+      mockGetAgentShareMonthlySpend.mockResolvedValue(2.5);
+      mockCountAgentShareUsage.mockResolvedValue(3 * 1024 * 1024);
+      const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+      await expect(caller.getShareStats({ agentId: 'agent-1' })).resolves.toEqual({
+        fileStorageUsed: 3 * 1024 * 1024,
+        // Cap missing from a share saved before the field existed → default.
+        maxFileStorage: 512 * 1024 * 1024,
+        monthlySpend: 2.5,
+        monthlySpendLimit: 10,
+        topicCount: 7,
+        userViewCount: 42,
+        visitorCount: 3,
+      });
+      expect(mockCountShareVisitors).toHaveBeenCalledWith({ agentId: 'agent-1' });
+      // Keyed by the share INSTANCE, not the agent: a share that was turned
+      // off and re-created must not inherit the old instance's bytes.
+      expect(mockCountAgentShareUsage).toHaveBeenCalledWith('share-1');
+      expect(mockGetAgentShareMonthlySpend).toHaveBeenCalledWith({
+        agentId: 'agent-1',
+        ownerUserId: 'user-1',
+        shareId: 'share-1',
+        workspaceId: undefined,
+      });
+    });
+
+    it('reports the configured upload cap when the owner has set one', async () => {
+      mockGetByAgentId.mockResolvedValue({
+        ...share,
+        shareConfig: { ...share.shareConfig, maxFileStorage: 0 },
+      });
+      const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+      const stats = await caller.getShareStats({ agentId: 'agent-1' });
+
+      expect(stats.maxFileStorage).toBe(0);
+    });
+
+    it('reports unknown spend as null rather than zero', async () => {
+      const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+
+      const stats = await caller.getShareStats({ agentId: 'agent-1' });
+
+      expect(stats.monthlySpend).toBeNull();
+    });
+
+    it('refuses stats for an agent the caller does not own', async () => {
+      // `getByAgentId` is ownership-scoped, so a non-owner resolves to null.
+      mockGetByAgentId.mockResolvedValue(null);
+      const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-2' }));
+
+      await expect(caller.getShareStats({ agentId: 'agent-1' })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      });
+      expect(mockCountShareVisitors).not.toHaveBeenCalled();
+      expect(mockGetAgentShareMonthlySpend).not.toHaveBeenCalled();
+    });
+
+    it('requires authentication', async () => {
+      const caller = agentShareRouter.createCaller(await createContextInner());
+
+      await expect(caller.getShareStats({ agentId: 'agent-1' })).rejects.toMatchObject({
+        code: 'UNAUTHORIZED',
+      });
+    });
+  });
+
+  describe('listGrantableSkills', () => {
+    beforeEach(() => {
+      mockGetByAgentId.mockResolvedValue({
+        agentId: 'agent-1',
+        id: 'share-1',
+        shareConfig: {},
+      });
+      mockFindAllAgentSkills.mockResolvedValue({ data: [], total: 0 });
+      mockGetAgentSkills.mockResolvedValue([]);
+      mockGetUserSettings.mockResolvedValue({});
+    });
+
+    it('includes implicit builtin skills for legacy agents and honors legacy library uninstalls', async () => {
+      mockGetAgentConfigById.mockResolvedValue({
+        chatConfig: {},
+        createdAt: new Date('2026-11-01T00:00:00Z'),
+        plugins: [],
+      });
+      mockGetUserSettings.mockResolvedValue({
+        tool: { uninstalledBuiltinTools: ['lobe-artifacts'] },
+      });
+
+      const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+      const skills = await caller.listGrantableSkills({ agentId: 'agent-1' });
+      const ids = skills.map((s) => s.identifier);
+
+      expect(ids).toContain('lobehub');
+      expect(ids).not.toContain('lobe-artifacts');
+    });
+
+    it('omits implicit builtin skills for post-opt-in agents unless explicitly enabled', async () => {
+      mockGetAgentConfigById.mockResolvedValue({
+        chatConfig: {},
+        createdAt: new Date('2026-11-20T00:00:00Z'),
+        plugins: [{ builtinOverride: true, identifier: 'lobe-artifacts', mode: 'auto' }],
+      });
+      mockGetUserSettings.mockResolvedValue({
+        tool: { uninstalledBuiltinTools: ['lobe-artifacts'] },
+      });
+
+      const caller = agentShareRouter.createCaller(await createContextInner({ userId: 'user-1' }));
+      const skills = await caller.listGrantableSkills({ agentId: 'agent-1' });
+      const ids = skills.map((s) => s.identifier);
+
+      expect(ids).toContain('lobe-artifacts');
+      expect(ids).not.toContain('lobehub');
+    });
+  });
+});

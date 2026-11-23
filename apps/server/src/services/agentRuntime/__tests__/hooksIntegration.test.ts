@@ -9,57 +9,82 @@
  * This catches payload format regressions that unit tests miss because
  * they mock the dispatch layer.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AgentRuntimeService } from '../AgentRuntimeService';
+import { stubRunningDurableOperation } from '../AgentRuntimeService/__tests__/testUtils';
 import { hookDispatcher } from '../hooks';
 import type { AgentHookEvent } from '../hooks/types';
 
 // ── Mocks ──────────────────────────────────────────
 vi.mock('@/envs/app', () => ({ appEnv: { APP_URL: 'http://localhost:3010' } }));
 vi.mock('@/database/models/message', () => ({
-  MessageModel: vi.fn().mockImplementation(() => ({})),
+  MessageModel: vi.fn().mockImplementation(function () {
+    return {};
+  }),
 }));
 vi.mock('@/server/modules/AgentRuntime', () => ({
-  AgentRuntimeCoordinator: vi.fn().mockImplementation(() => ({
-    createAgentOperation: vi.fn(),
-    getOperationMetadata: vi.fn(),
-    loadAgentState: vi.fn(),
-    releaseStepLock: vi.fn().mockResolvedValue(undefined),
-    saveAgentState: vi.fn(),
-    saveStepResult: vi.fn(),
-    tryClaimStep: vi.fn().mockResolvedValue(true),
-  })),
-  createStreamEventManager: vi.fn(() => ({
-    cleanupOperation: vi.fn(),
-    publishAgentRuntimeEnd: vi.fn(),
-    publishAgentRuntimeInit: vi.fn(),
-    publishStreamEvent: vi.fn(),
-  })),
+  AgentRuntimeCoordinator: vi.fn().mockImplementation(function () {
+    return {
+      createAgentOperation: vi.fn(),
+      getOperationMetadata: vi.fn(),
+      isInterrupted: vi.fn().mockResolvedValue(false),
+      hasQueuedMessages: vi.fn().mockResolvedValue(false),
+      loadAgentState: vi.fn(),
+      loadAgentStatus: vi.fn().mockResolvedValue(null),
+      releaseStepLock: vi.fn().mockResolvedValue(undefined),
+      saveAgentState: vi.fn(),
+      saveStepResult: vi.fn(),
+      tryClaimStep: vi.fn().mockResolvedValue(true),
+      refreshStepLock: vi.fn().mockResolvedValue(true),
+    };
+  }),
+  createStreamEventManager: vi.fn(function () {
+    return {
+      cleanupOperation: vi.fn(),
+      publishAgentRuntimeEnd: vi.fn(),
+      publishAgentRuntimeInit: vi.fn(),
+      publishStreamEvent: vi.fn(),
+    };
+  }),
 }));
 vi.mock('@/server/modules/AgentRuntime/RuntimeExecutors', () => ({
-  createRuntimeExecutors: vi.fn(() => ({})),
+  createRuntimeExecutors: vi.fn(function () {
+    return {};
+  }),
 }));
 vi.mock('@/server/services/mcp', () => ({ mcpService: {} }));
 vi.mock('@/server/services/queue', () => ({
-  QueueService: vi.fn().mockImplementation(() => ({
-    getImpl: vi.fn(() => ({})),
-    scheduleMessage: vi.fn(),
-  })),
+  QueueService: vi.fn().mockImplementation(function () {
+    return {
+      getImpl: vi.fn(function () {
+        return {};
+      }),
+      scheduleMessage: vi.fn(),
+    };
+  }),
 }));
 vi.mock('@/server/services/queue/impls', () => ({
   LocalQueueServiceImpl: class {},
   isQueueAgentRuntimeEnabled: vi.fn().mockReturnValue(false),
 }));
 vi.mock('@/server/services/toolExecution', () => ({
-  ToolExecutionService: vi.fn().mockImplementation(() => ({})),
+  ToolExecutionService: vi.fn().mockImplementation(function () {
+    return {};
+  }),
 }));
 vi.mock('@/server/services/toolExecution/builtin', () => ({
-  BuiltinToolsExecutor: vi.fn().mockImplementation(() => ({})),
+  BuiltinToolsExecutor: vi.fn().mockImplementation(function () {
+    return {};
+  }),
 }));
 vi.mock('@lobechat/builtin-tools/dynamicInterventionAudits', () => ({
   dynamicInterventionAudits: [],
 }));
+
+beforeEach(() => {
+  stubRunningDurableOperation();
+});
 
 describe('Hooks integration — afterStep event carries step presentation data', () => {
   const createService = () => new AgentRuntimeService({} as any, 'user-1', { queueService: null });
@@ -73,8 +98,10 @@ describe('Hooks integration — afterStep event carries step presentation data',
       createdAt: new Date().toISOString(),
       lastModified: new Date().toISOString(),
       messages: [{ content: 'Hello', role: 'user' }],
-      metadata: {
-        _hooks: [{ id: 'bot-step', type: 'afterStep', webhook: { url: '/test' } }],
+      host: {
+        hooks: [{ id: 'bot-step', type: 'afterStep', webhook: { url: '/test' } }],
+      },
+      origin: {
         agentId: 'agent-1',
         userId: 'user-1',
       },
@@ -95,8 +122,10 @@ describe('Hooks integration — afterStep event carries step presentation data',
           { content: 'Hello', role: 'user' },
           { content: 'Let me search for that.', role: 'assistant' },
         ],
-        metadata: {
-          _hooks: [{ id: 'bot-step', type: 'afterStep', webhook: { url: '/test' } }],
+        host: {
+          hooks: [{ id: 'bot-step', type: 'afterStep', webhook: { url: '/test' } }],
+        },
+        origin: {
           agentId: 'agent-1',
           topicId: 'topic-1',
           userId: 'user-1',
@@ -175,8 +204,12 @@ describe('Hooks integration — afterStep event carries step presentation data',
       lastModified: new Date().toISOString(),
       messages: [],
       metadata: {
-        _hooks: [{ id: 'bot-step', type: 'afterStep', webhook: { url: '/test' } }],
         _stepTracking: { lastLLMContent: 'previous content', totalToolCalls: 1 },
+      },
+      host: {
+        hooks: [{ id: 'bot-step', type: 'afterStep', webhook: { url: '/test' } }],
+      },
+      origin: {
         agentId: 'agent-1',
         userId: 'user-1',
       },
@@ -192,8 +225,12 @@ describe('Hooks integration — afterStep event carries step presentation data',
         createdAt: new Date().toISOString(),
         messages: [],
         metadata: {
-          _hooks: [{ id: 'bot-step', type: 'afterStep', webhook: { url: '/test' } }],
           _stepTracking: { lastLLMContent: 'previous content', totalToolCalls: 1 },
+        },
+        host: {
+          hooks: [{ id: 'bot-step', type: 'afterStep', webhook: { url: '/test' } }],
+        },
+        origin: {
           agentId: 'agent-1',
           userId: 'user-1',
         },
@@ -265,7 +302,7 @@ describe('Hooks integration — onComplete event for early-terminal states', () 
         { content: 'Hello', role: 'user' },
         { content: 'I was working on it...', role: 'assistant' },
       ],
-      metadata: { agentId: 'agent-1', userId: 'user-1' },
+      origin: { agentId: 'agent-1', userId: 'user-1' },
       status: 'interrupted',
       stepCount: 3,
       usage: { llm: { apiCalls: 2, tokens: { total: 500 } }, tools: { totalCalls: 1 } },
@@ -307,8 +344,10 @@ describe('Hooks integration — afterStep event is compatible with renderStepPro
       createdAt: new Date().toISOString(),
       lastModified: new Date().toISOString(),
       messages: [],
-      metadata: {
-        _hooks: [{ id: 'bot-step', type: 'afterStep', webhook: { url: '/test' } }],
+      host: {
+        hooks: [{ id: 'bot-step', type: 'afterStep', webhook: { url: '/test' } }],
+      },
+      origin: {
         agentId: 'agent-1',
         userId: 'user-1',
       },
@@ -322,8 +361,10 @@ describe('Hooks integration — afterStep event is compatible with renderStepPro
       newState: {
         createdAt: new Date().toISOString(),
         messages: [{ content: 'Result', role: 'assistant' }],
-        metadata: {
-          _hooks: [{ id: 'bot-step', type: 'afterStep', webhook: { url: '/test' } }],
+        host: {
+          hooks: [{ id: 'bot-step', type: 'afterStep', webhook: { url: '/test' } }],
+        },
+        origin: {
           agentId: 'agent-1',
           userId: 'user-1',
         },

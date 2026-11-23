@@ -1,0 +1,176 @@
+import type { AcceptanceCommentItem } from '@lobechat/types';
+import { Avatar, Button, Flexbox, Icon, Spin, Text } from '@lobehub/ui';
+import * as stylex from '@stylexjs/stylex';
+import { BadgeCheck, GitCommitHorizontal, Info, MessagesSquare, RefreshCw } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+
+import { useActivityTime } from '@/hooks/useActivityTime';
+import { sx } from '@/styles/sx';
+
+import { useAcceptanceScope } from '../AcceptanceScope';
+import AccessRequestEntry from '../Comments/AccessRequestEntry';
+import CommentContent from '../Comments/CommentContent';
+import { buildDiscussionTimeline } from '../Comments/discussionTimeline';
+import { styles } from '../Comments/styles';
+import { groupCommentThreads } from '../Comments/threads';
+import TimelineEvent from '../Comments/TimelineEvent';
+import { useAcceptanceCommentList } from '../Comments/useAcceptanceCommentList';
+import QuietState from '../QuietState';
+import { useAcceptanceBundle } from '../useAcceptanceBundle';
+
+export const ReadComment = ({
+  comment,
+  nameOverride,
+  threaded = true,
+}: {
+  comment: AcceptanceCommentItem;
+  nameOverride?: string;
+  threaded?: boolean;
+}) => {
+  const { t } = useTranslation('verify');
+  const time = useActivityTime(comment.createdAt);
+  const name = comment.author.fullName || comment.author.username || '—';
+
+  return (
+    <Flexbox
+      {...sx(styles.box, {
+        marginInlineStart: threaded && comment.parentCommentId ? 24 : 0,
+      })}
+    >
+      <Flexbox
+        horizontal
+        align={'center'}
+        gap={8}
+        wrap={'wrap'}
+        {...stylex.props(styles.boxHeader)}
+      >
+        <Avatar avatar={comment.author.avatar || name.slice(0, 1)} size={20} />
+        <Text weight={600}>{nameOverride ?? name}</Text>
+        <Text fontSize={12} title={time.title} type={'secondary'}>
+          {time.text}
+        </Text>
+        {comment.resolvedAt && <Text fontSize={12}>{t('acceptance.comments.resolved')}</Text>}
+      </Flexbox>
+      <div {...stylex.props(styles.body)}>
+        <CommentContent comment={comment} />
+        {comment.reactions.length > 0 && (
+          <Flexbox horizontal gap={8} style={{ paddingBlockStart: 8 }} wrap={'wrap'}>
+            {comment.reactions.map((reaction) => (
+              <span key={reaction.emoji}>
+                {reaction.emoji} {reaction.count}
+              </span>
+            ))}
+          </Flexbox>
+        )}
+      </div>
+    </Flexbox>
+  );
+};
+
+const ReadDiscussion = () => {
+  const { t } = useTranslation('verify');
+  const { acceptanceId } = useAcceptanceScope();
+  const { data: bundle } = useAcceptanceBundle(acceptanceId);
+  const { data, error, isLoading, mutate } = useAcceptanceCommentList(acceptanceId);
+
+  if (!data && isLoading) return <Spin size="middle" />;
+  if (!data && error)
+    return (
+      <QuietState
+        icon={Info}
+        title={t('acceptance.comments.loadFailedTitle')}
+        tone={'warning'}
+        action={
+          <Button icon={<Icon icon={RefreshCw} />} onClick={() => void mutate()}>
+            {t('report.actions.retry')}
+          </Button>
+        }
+      />
+    );
+
+  const items = data?.items ?? [];
+  const timeline = buildDiscussionTimeline({
+    approvals: items.filter((item) => item.kind === 'approval'),
+    items,
+    rounds: (bundle?.rounds ?? []).map(({ run }) => ({
+      createdAt: run.createdAt,
+      id: run.id,
+      roundIndex: run.roundIndex,
+    })),
+    threads: groupCommentThreads(items),
+  });
+  if (timeline.length === 0)
+    return <QuietState icon={MessagesSquare} title={t('acceptance.comments.emptyTitle')} />;
+
+  return (
+    <Flexbox gap={16}>
+      {timeline.map((entry) => {
+        if (entry.kind === 'round') {
+          const proposal = entry.proposal;
+          return proposal ? (
+            <ReadComment
+              comment={proposal}
+              key={`round-${entry.roundIndex}`}
+              threaded={false}
+              nameOverride={t('acceptance.comments.roundCompletedBy', {
+                name: proposal.author.fullName || proposal.author.username || '—',
+                round: entry.roundIndex,
+              })}
+            />
+          ) : (
+            <TimelineEvent
+              at={entry.at}
+              icon={GitCommitHorizontal}
+              key={`round-${entry.roundIndex}`}
+              text={t('acceptance.comments.roundLanded', { round: entry.roundIndex })}
+            />
+          );
+        }
+        if (entry.kind === 'approval') {
+          const who = t(
+            entry.approval.contextRoundIndex === null
+              ? 'acceptance.comments.approvedBy'
+              : 'acceptance.comments.approvedByAtRound',
+            {
+              name: entry.approval.author.fullName || entry.approval.author.username || '—',
+              round: entry.approval.contextRoundIndex ?? 0,
+            },
+          );
+          const said = entry.approval.content.trim();
+          return (
+            <TimelineEvent
+              at={entry.at}
+              icon={BadgeCheck}
+              key={entry.approval.id}
+              text={said ? `${who} · ${said}` : who}
+            />
+          );
+        }
+        if (entry.kind === 'accessRequest')
+          return (
+            <AccessRequestEntry
+              at={entry.at}
+              canManage={false}
+              key={entry.request.id}
+              request={entry.request}
+            />
+          );
+        // A circled note reads as its thread; the picture it points at stays on
+        // the check section of this report.
+        if (entry.kind === 'region')
+          return (
+            <Flexbox gap={8} key={entry.thread.root.id}>
+              {[entry.thread.root, ...entry.thread.replies].map((comment) => (
+                <ReadComment comment={comment} key={comment.id} />
+              ))}
+            </Flexbox>
+          );
+        // Send-backs are only built from the checks, which this report does not pass.
+        if (entry.kind !== 'message') return null;
+        return <ReadComment comment={entry.comment} key={entry.comment.id} threaded={false} />;
+      })}
+    </Flexbox>
+  );
+};
+
+export default ReadDiscussion;

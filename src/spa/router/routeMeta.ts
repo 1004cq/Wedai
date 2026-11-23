@@ -8,8 +8,25 @@ export interface StaticRouteMeta {
   titleKey?: string;
 }
 
+export type RouteAvatarKind = 'agent' | 'workspace';
+
 export interface DynamicRouteMeta {
-  avatar?: string;
+  /**
+   * `null` means the entity loaded and has no avatar, which clears a cached
+   * one; `undefined` means it is not known yet, which keeps the cache.
+   */
+  avatar?: string | null;
+  /**
+   * The entity whose avatar this is, when its fallback differs from the
+   * initials one. A workspace draws the bauhaus mark seeded from its title; an
+   * agent draws the character generated from `avatarSeed` (its id).
+   */
+  avatarKind?: RouteAvatarKind;
+  /**
+   * Id a generated avatar is seeded from, for an entity that draws one when it
+   * has no image of its own (a project). Unset keeps the initials fallback.
+   */
+  avatarSeed?: string;
   backgroundColor?: string;
   title?: string;
 }
@@ -21,8 +38,15 @@ export interface DynamicRouteMetaProps {
   params: RouteMetaParams;
 }
 
+export type RouteSkeletonChrome = 'page' | 'body';
+
+export interface RouteSkeletonProps {
+  chrome?: RouteSkeletonChrome;
+}
+
 export interface RouteMeta extends StaticRouteMeta {
   DynamicMeta?: ComponentType<DynamicRouteMetaProps>;
+  Skeleton?: ComponentType<RouteSkeletonProps>;
 }
 
 export interface RouteHandle {
@@ -31,10 +55,20 @@ export interface RouteHandle {
 
 export interface ResolvedRouteMeta {
   avatar?: string;
+  avatarKind?: RouteAvatarKind;
+  avatarSeed?: string;
   backgroundColor?: string;
   icon?: LucideIcon;
   title: string;
 }
+
+/**
+ * For a route whose surface is mounted outside the router outlet, or that
+ * paints fast enough that any placeholder is pure flicker. Declared rather than
+ * omitted: an absent `Skeleton` makes `RouteLoading` render nothing, so the
+ * chunk wait is a blank pane.
+ */
+export const NoRouteSkeleton = () => null;
 
 export const routeMeta = (meta: RouteMeta): RouteMeta => meta;
 

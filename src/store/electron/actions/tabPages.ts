@@ -7,6 +7,7 @@ import {
   PERSONAL_TAB_SCOPE,
   resolveTabScope,
   type TabScope,
+  tabScopeHomeUrl,
   tabScopeKey,
 } from '@/features/Electron/titlebar/TabBar/scope';
 import { getTabPages, saveTabPages } from '@/features/Electron/titlebar/TabBar/storage';
@@ -19,12 +20,53 @@ import { type ElectronStore } from '../store';
 
 const generateTabId = (): string => `tab_${nanoid(8)}`;
 
+const CLOSED_TAB_GROUPS_LIMIT = 20;
+
 // ======== Types ======== //
+
+/** A tab as it was when closed, enough to put it back where it stood. */
+export interface ClosedTab {
+  cached?: DynamicRouteMeta;
+  /**
+   * Set when this was the last tab: the generated home tab that replaced it. Reopening
+   * takes that placeholder's place while it is still the only, untouched tab.
+   */
+  fallbackHomeTabId?: string;
+  index: number;
+  pinned?: boolean;
+  url: string;
+  wasActive: boolean;
+}
 
 export interface TabPagesState {
   activeTabId: string | null;
   activeTabScope: TabScope;
+  /**
+   * Tabs closed this session, per scope, newest last. One close — a single tab or a bulk
+   * "close others / left / right" — is one group, and one reopen brings the group back.
+   * Memory only: the open tabs themselves already survive a restart.
+   */
+  closedTabBuckets: Record<string, ClosedTab[][]>;
+  splitView: SplitViewState | null;
   tabs: TabItem[];
+}
+
+export interface SplitViewState {
+  /**
+   * The tab `duplicatedTabId` was copied from. Recorded at split time because
+   * panes can be replaced afterwards — deriving the source from "the other
+   * pane" later would point at whatever tab happens to sit there.
+   */
+  duplicatedFromTabId?: string;
+  /**
+   * Tab created by copying the active tab when it was split against itself.
+   * It only exists to mirror its source side-by-side and is removed as soon as
+   * it leaves the split, so no stray duplicate tab survives the session.
+   */
+  duplicatedTabId?: string;
+  primaryTabId: string;
+  ratio: number;
+  secondaryTabId: string;
 }
 
 // ======== Initial State ======== //
@@ -32,6 +74,8 @@ export interface TabPagesState {
 export const tabPagesInitialState: TabPagesState = {
   activeTabScope: PERSONAL_TAB_SCOPE,
   activeTabId: null,
+  closedTabBuckets: {},
+  splitView: null,
   tabs: [],
 };
 
@@ -52,10 +96,43 @@ export class TabPagesActionImpl {
   }
 
   activateTab = (id: string): void => {
-    const { tabs } = this.#get();
+    const { activeTabId, splitView, tabs } = this.#get();
     if (!tabs.some((t) => t.id === id)) return;
 
-    this.#set({ activeTabId: id, tabs: this.#touch(tabs, id) }, false, 'activateTab');
+    const cleaned = this.#dropDisplacedDuplicate(
+      splitView,
+      this.#replaceFocusedPane(splitView, activeTabId, id),
+      tabs,
+      id,
+    );
+
+    this.#set(
+      {
+        activeTabId: cleaned.activeTabId,
+        splitView: cleaned.splitView,
+        tabs: this.#touch(cleaned.tabs, cleaned.activeTabId),
+      },
+      false,
+      'activateTab',
+    );
+    this.#persist();
+  };
+
+  switchTab = (id: string): void => {
+    const { splitView, tabs } = this.#get();
+    if (!tabs.some((t) => t.id === id)) return;
+
+    const cleaned = this.#dropDisplacedDuplicate(splitView, null, tabs, id);
+
+    this.#set(
+      {
+        activeTabId: cleaned.activeTabId,
+        splitView: null,
+        tabs: this.#touch(cleaned.tabs, cleaned.activeTabId),
+      },
+      false,
+      'switchTab',
+    );
     this.#persist();
   };
 
@@ -66,12 +143,7 @@ export class TabPagesActionImpl {
 
     if (existing) {
       if (activate) {
-        this.#set(
-          { activeTabId: existing.id, tabs: this.#touch(tabs, existing.id) },
-          false,
-          'activateExistingTab',
-        );
-        this.#persist();
+        this.activateTab(existing.id);
       }
       return existing.id;
     }
@@ -90,30 +162,151 @@ export class TabPagesActionImpl {
     return tabs.find((t) => t.id === activeTabId) ?? null;
   };
 
+  closeSplitView = (): void => {
+    const { activeTabId, splitView, tabs } = this.#get();
+    if (!splitView) return;
+
+    const cleaned = this.#dropDisplacedDuplicate(splitView, null, tabs, activeTabId);
+
+    this.#set(
+      {
+        activeTabId: cleaned.activeTabId,
+        splitView: null,
+        // #touch keeps the promoted source tab's keep-alive recency fresh — see #touch.
+        tabs: this.#touch(cleaned.tabs, cleaned.activeTabId),
+      },
+      false,
+      'closeSplitView',
+    );
+    this.#persist();
+  };
+
+  focusTabPane = (id: string): void => {
+    const { splitView, tabs } = this.#get();
+    if (!splitView) return;
+    if (id !== splitView.primaryTabId && id !== splitView.secondaryTabId) return;
+
+    this.#set({ activeTabId: id, tabs: this.#touch(tabs, id) }, false, 'focusTabPane');
+    this.#persist();
+  };
+
+  openTabInSplitView = (id: string): string | null => {
+    const { activeTabId, splitView, tabs } = this.#get();
+    const target = tabs.find((tab) => tab.id === id);
+    if (!target || !activeTabId) return null;
+
+    const primaryTabId = splitView?.primaryTabId ?? activeTabId;
+    if (splitView?.secondaryTabId === id) {
+      this.focusTabPane(id);
+      return id;
+    }
+
+    const now = Date.now();
+    const shouldDuplicate = id === primaryTabId;
+    const secondaryTabId = shouldDuplicate ? generateTabId() : id;
+    const nextTabs = shouldDuplicate
+      ? [
+          ...tabs,
+          {
+            ...target,
+            id: secondaryTabId,
+            lastVisited: now,
+            pinned: false,
+          },
+        ]
+      : this.#touch(tabs, id);
+
+    const nextSplitView: SplitViewState = {
+      duplicatedFromTabId: shouldDuplicate ? id : undefined,
+      duplicatedTabId: shouldDuplicate ? secondaryTabId : undefined,
+      primaryTabId,
+      ratio: splitView?.ratio ?? 0.5,
+      secondaryTabId,
+    };
+    const cleaned = this.#dropDisplacedDuplicate(
+      splitView,
+      nextSplitView,
+      nextTabs,
+      secondaryTabId,
+    );
+
+    this.#set(
+      {
+        activeTabId: cleaned.activeTabId,
+        splitView: cleaned.splitView,
+        tabs: cleaned.tabs,
+      },
+      false,
+      'openTabInSplitView',
+    );
+    this.#persist();
+    return secondaryTabId;
+  };
+
+  setSplitRatio = (ratio: number): void => {
+    const { splitView } = this.#get();
+    if (!splitView) return;
+
+    const nextRatio = Math.min(0.75, Math.max(0.25, ratio));
+    if (nextRatio === splitView.ratio) return;
+    this.#set({ splitView: { ...splitView, ratio: nextRatio } }, false, 'setSplitRatio');
+  };
+
   loadTabs = (url = '/'): void => {
     this.#loadScope(resolveTabScope(url), true);
   };
 
   removeTab = (id: string): string | null => {
-    const { tabs, activeTabId } = this.#get();
+    const { activeTabScope, tabs, activeTabId } = this.#get();
     const index = tabs.findIndex((t) => t.id === id);
     if (index < 0) return null;
 
     const newTabs = tabs.filter((t) => t.id !== id);
+    const homeUrl = tabScopeHomeUrl(activeTabScope);
+    // A lone home tab only makes way for an identical fresh one, so there is nothing to undo.
+    const closed = newTabs.length === 0 && isSameTabTarget(tabs[index], homeUrl) ? [] : [index];
+
+    // With no tab left TabHost has nothing to render, so the last close lands on a fresh
+    // home tab instead — a new id, because a live router is never re-pointed at a new url.
+    if (newTabs.length === 0) {
+      const home: TabItem = {
+        id: generateTabId(),
+        lastVisited: Date.now(),
+        url: homeUrl,
+      };
+      this.#set(
+        {
+          activeTabId: home.id,
+          closedTabBuckets: this.#rememberClosed(closed, home.id),
+          splitView: null,
+          tabs: [home],
+        },
+        false,
+        'removeTab',
+      );
+      this.#persist();
+      return home.id;
+    }
 
     let newActiveId = activeTabId;
     if (activeTabId === id) {
-      if (newTabs.length === 0) {
-        newActiveId = null;
-      } else if (index >= newTabs.length) {
+      if (index >= newTabs.length) {
         newActiveId = newTabs.at(-1)!.id;
       } else {
         newActiveId = newTabs[index].id;
       }
     }
 
+    const reconciled = this.#reconcileSplitView(newTabs, newActiveId);
+    newActiveId = reconciled.activeTabId;
+
     this.#set(
-      { activeTabId: newActiveId, tabs: this.#touch(newTabs, newActiveId) },
+      {
+        activeTabId: newActiveId,
+        closedTabBuckets: this.#rememberClosed(closed),
+        splitView: reconciled.splitView,
+        tabs: this.#touch(reconciled.tabs, newActiveId),
+      },
       false,
       'removeTab',
     );
@@ -145,19 +338,89 @@ export class TabPagesActionImpl {
     this.#closeExcept((_, i) => i <= index, id, 'closeRightTabs');
   };
 
-  reorderTabs = (fromIndex: number, toIndex: number): void => {
+  /**
+   * Undo the latest close in the active scope (Cmd/Ctrl+Shift+T): its tabs return to their
+   * old positions with their cached titles, and the one that was focused takes focus — or
+   * the last one restored. A page that is open again is switched to, not duplicated. Only
+   * the url comes back; the closed tab's router, history and in-page state are gone.
+   */
+  reopenClosedTab = (): string | null => {
+    const { activeTabScope, closedTabBuckets, tabs } = this.#get();
+    const key = tabScopeKey(activeTabScope);
+    const groups = closedTabBuckets[key] ?? [];
+    const group = groups.at(-1);
+    if (!group) return null;
+
+    // Undoing a last-tab close drops the home tab generated for it, unless the user has
+    // since navigated it or opened another tab beside it.
+    const fallbackHomeTabId = group.find((closed) => closed.fallbackHomeTabId)?.fallbackHomeTabId;
+    const isUntouchedFallback =
+      !!fallbackHomeTabId &&
+      tabs.length === 1 &&
+      tabs[0].id === fallbackHomeTabId &&
+      isSameTabTarget(tabs[0], tabScopeHomeUrl(activeTabScope));
+
+    // Only tabs open before this reopen count as "already open", and each stands in for one
+    // closed tab: a bulk close can take two tabs on the same page (addNewTab allows that),
+    // and as many tabs on that page as were closed must be open afterwards.
+    const openBefore = isUntouchedFallback ? [] : tabs;
+    const matched = new Set<string>();
+    let nextTabs = openBefore;
+    let focusId = '';
+    const hadActive = group.some((closed) => closed.wasActive);
+    const now = Date.now();
+
+    for (const closed of group.toSorted((a, b) => a.index - b.index)) {
+      const existing = openBefore.find((t) => !matched.has(t.id) && isSameTabTarget(t, closed.url));
+      if (existing) matched.add(existing.id);
+      const id = existing?.id ?? generateTabId();
+
+      if (!existing) {
+        const restored: TabItem = { cached: closed.cached, id, lastVisited: now, url: closed.url };
+        if (closed.pinned) restored.pinned = true;
+
+        // Array order must equal render order (see #setPinned), so the old index is
+        // clamped into the tab's own run.
+        const pinnedCount = nextTabs.filter((t) => t.pinned).length;
+        const position = closed.pinned
+          ? Math.min(closed.index, pinnedCount)
+          : Math.min(Math.max(closed.index, pinnedCount), nextTabs.length);
+        nextTabs = [...nextTabs.slice(0, position), restored, ...nextTabs.slice(position)];
+      }
+
+      if (closed.wasActive || !hadActive) focusId = id;
+    }
+
+    this.#set(
+      { closedTabBuckets: { ...closedTabBuckets, [key]: groups.slice(0, -1) }, tabs: nextTabs },
+      false,
+      'reopenClosedTab',
+    );
+    // activateTab owns split-pane replacement, the keep-alive touch and persistence.
+    this.activateTab(focusId);
+    return focusId;
+  };
+
+  moveTab = (id: string, toIndex: number, pinned: boolean): void => {
     const { tabs } = this.#get();
-    if (fromIndex < 0 || fromIndex >= tabs.length) return;
-    if (toIndex < 0 || toIndex >= tabs.length) return;
-    // Pinned tabs form a run at the head of the list; a drag across that boundary would
-    // interleave the two groups and desync array order from render order.
-    if (!!tabs[fromIndex].pinned !== !!tabs[toIndex].pinned) return;
+    const index = tabs.findIndex((t) => t.id === id);
+    if (index < 0) return;
 
-    const newTabs = [...tabs];
-    const [moved] = newTabs.splice(fromIndex, 1);
-    newTabs.splice(toIndex, 0, moved);
+    const rest = tabs.filter((_, i) => i !== index);
+    const pinnedCount = rest.filter((t) => t.pinned).length;
+    // Pinned tabs form a run at the head of the list; clamping into the dragged tab's own
+    // run keeps array order equal to render order.
+    const position = pinned
+      ? Math.min(Math.max(toIndex, 0), pinnedCount)
+      : Math.min(Math.max(toIndex, pinnedCount), rest.length);
+    if (position === index && !!tabs[index].pinned === pinned) return;
 
-    this.#set({ tabs: newTabs }, false, 'reorderTabs');
+    const moved: TabItem = { ...tabs[index], pinned };
+    this.#set(
+      { tabs: [...rest.slice(0, position), moved, ...rest.slice(position)] },
+      false,
+      'moveTab',
+    );
     this.#persist();
   };
 
@@ -238,6 +501,7 @@ export class TabPagesActionImpl {
 
     this.#set({ tabs: newTabs }, false, 'updateTabCache');
     this.#persist();
+    this.#get().updateRecentPageCache(tabs[index].url, cached);
   };
 
   // Pinning is a retention promise, so a bulk close only ever narrows the unpinned run —
@@ -249,12 +513,25 @@ export class TabPagesActionImpl {
     action: string,
   ): void => {
     const { tabs, activeTabId } = this.#get();
-    const newTabs = tabs.filter((tab, index) => tab.pinned || keep(tab, index));
+    const kept = tabs.map((tab, index) => !!tab.pinned || keep(tab, index));
+    const newTabs = tabs.filter((_, index) => kept[index]);
     if (newTabs.length === tabs.length) return;
 
-    const newActiveId = newTabs.some((t) => t.id === activeTabId) ? activeTabId : targetId;
+    const preferredActiveId = newTabs.some((t) => t.id === activeTabId) ? activeTabId : targetId;
+    const reconciled = this.#reconcileSplitView(newTabs, preferredActiveId);
 
-    this.#set({ activeTabId: newActiveId, tabs: this.#touch(newTabs, newActiveId) }, false, action);
+    this.#set(
+      {
+        activeTabId: reconciled.activeTabId,
+        closedTabBuckets: this.#rememberClosed(
+          kept.flatMap((isKept, index) => (isKept ? [] : [index])),
+        ),
+        splitView: reconciled.splitView,
+        tabs: this.#touch(reconciled.tabs, reconciled.activeTabId),
+      },
+      false,
+      action,
+    );
     this.#persist();
   };
 
@@ -279,6 +556,34 @@ export class TabPagesActionImpl {
     this.#persist();
   };
 
+  // Snapshot the tabs at `indices` (positions in the current list) as one closed group of
+  // the active scope. The copy a self-split made only mirrors its source, so it is skipped.
+  #rememberClosed = (
+    indices: number[],
+    fallbackHomeTabId?: string,
+  ): Record<string, ClosedTab[][]> => {
+    const { activeTabId, activeTabScope, closedTabBuckets, splitView, tabs } = this.#get();
+    const group: ClosedTab[] = indices
+      .filter((index) => tabs[index] && tabs[index].id !== splitView?.duplicatedTabId)
+      .map((index) => {
+        const tab = tabs[index];
+        const closed: ClosedTab = {
+          index,
+          url: tab.url,
+          wasActive: tab.id === activeTabId,
+        };
+        if (tab.cached) closed.cached = tab.cached;
+        if (tab.pinned) closed.pinned = true;
+        if (fallbackHomeTabId) closed.fallbackHomeTabId = fallbackHomeTabId;
+        return closed;
+      });
+    if (group.length === 0) return closedTabBuckets;
+
+    const key = tabScopeKey(activeTabScope);
+    const groups = [...(closedTabBuckets[key] ?? []), group].slice(-CLOSED_TAB_GROUPS_LIMIT);
+    return { ...closedTabBuckets, [key]: groups };
+  };
+
   // Every path that makes a tab active must refresh its `lastVisited`: TabHost
   // ranks keep-alive routers by that timestamp, so a tab activated without a
   // navigation would stay at its stale recency and get its router disposed (and
@@ -293,8 +598,81 @@ export class TabPagesActionImpl {
     return newTabs;
   };
 
+  #replaceFocusedPane = (
+    splitView: SplitViewState | null,
+    activeTabId: string | null,
+    nextTabId: string,
+  ): SplitViewState | null => {
+    if (!splitView) return null;
+    if (nextTabId === splitView.primaryTabId || nextTabId === splitView.secondaryTabId) {
+      return splitView;
+    }
+
+    return activeTabId === splitView.secondaryTabId
+      ? { ...splitView, secondaryTabId: nextTabId }
+      : { ...splitView, primaryTabId: nextTabId };
+  };
+
+  // A duplicated pane that leaves the split (the split collapses or another tab takes
+  // its pane) must not survive as a stray second tab for the same page: closing or
+  // revisiting the leftover forces a hidden→visible remount of a pane the user never
+  // saw leave. Drop the copy and hand focus back to its source tab instead.
+  #dropDisplacedDuplicate = (
+    prevSplitView: SplitViewState | null,
+    nextSplitView: SplitViewState | null,
+    tabs: TabItem[],
+    activeTabId: string | null,
+  ): Pick<TabPagesState, 'activeTabId' | 'splitView' | 'tabs'> => {
+    const duplicatedTabId = prevSplitView?.duplicatedTabId;
+    const keep = { activeTabId, splitView: nextSplitView, tabs };
+    if (!prevSplitView || !duplicatedTabId) return keep;
+
+    const stillInPane =
+      nextSplitView &&
+      (nextSplitView.primaryTabId === duplicatedTabId ||
+        nextSplitView.secondaryTabId === duplicatedTabId);
+    if (stillInPane) return keep;
+
+    const sourceTabId = prevSplitView.duplicatedFromTabId;
+    // The source tab already closed, so the copy is the page's only remaining tab.
+    if (!sourceTabId || !tabs.some((tab) => tab.id === sourceTabId)) return keep;
+
+    return {
+      activeTabId: activeTabId === duplicatedTabId ? sourceTabId : activeTabId,
+      splitView: nextSplitView
+        ? { ...nextSplitView, duplicatedFromTabId: undefined, duplicatedTabId: undefined }
+        : null,
+      tabs: tabs.filter((tab) => tab.id !== duplicatedTabId),
+    };
+  };
+
+  #reconcileSplitView = (
+    tabs: TabItem[],
+    preferredActiveId: string | null,
+  ): Pick<TabPagesState, 'activeTabId' | 'splitView' | 'tabs'> => {
+    const { splitView } = this.#get();
+    if (!splitView) return { activeTabId: preferredActiveId, splitView: null, tabs };
+
+    const tabIds = new Set(tabs.map((tab) => tab.id));
+    const hasPrimary = tabIds.has(splitView.primaryTabId);
+    const hasSecondary = tabIds.has(splitView.secondaryTabId);
+    if (hasPrimary && hasSecondary) return { activeTabId: preferredActiveId, splitView, tabs };
+
+    const remainingPaneId = hasPrimary
+      ? splitView.primaryTabId
+      : hasSecondary
+        ? splitView.secondaryTabId
+        : null;
+    return this.#dropDisplacedDuplicate(
+      splitView,
+      null,
+      tabs,
+      remainingPaneId ?? preferredActiveId,
+    );
+  };
+
   #createTab = (url: string, cached: DynamicRouteMeta | undefined, activate: boolean): string => {
-    const { tabs, activeTabId } = this.#get();
+    const { tabs, activeTabId, splitView } = this.#get();
     const id = generateTabId();
     const newTab: TabItem = {
       cached,
@@ -303,8 +681,22 @@ export class TabPagesActionImpl {
       url,
     };
 
+    const withNew = [...tabs, newTab];
+    const cleaned = activate
+      ? this.#dropDisplacedDuplicate(
+          splitView,
+          this.#replaceFocusedPane(splitView, activeTabId, id),
+          withNew,
+          id,
+        )
+      : { activeTabId, splitView, tabs: withNew };
+
     this.#set(
-      { activeTabId: activate ? id : activeTabId, tabs: [...tabs, newTab] },
+      {
+        activeTabId: activate ? id : activeTabId,
+        splitView: cleaned.splitView,
+        tabs: cleaned.tabs,
+      },
       false,
       'addTab',
     );
@@ -341,7 +733,7 @@ export class TabPagesActionImpl {
     if (!force && tabScopeKey(activeTabScope) === tabScopeKey(scope)) return;
 
     const { tabs, activeTabId } = getTabPages(scope);
-    this.#set({ activeTabId, activeTabScope: scope, tabs }, false, 'loadTabs');
+    this.#set({ activeTabId, activeTabScope: scope, splitView: null, tabs }, false, 'loadTabs');
   };
 }
 

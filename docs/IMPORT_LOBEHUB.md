@@ -1,8 +1,9 @@
 # 与官方 LobeHub 同步
 
-## 当前状态（2026-08-02 起）
+## 当前状态（2026-11-24 同步中）
 
-- 官方基线已导入：`lobehub/lobehub` `canary`
+- 官方基线：`lobehub/lobehub` `canary`（约 v2.3.4+）
+- 同步分支：`cursor/sync-upstream-202611-e3f0` → PR 合入 `main`
 - 工作分支：`main`
 - 建议配置：`upstream = https://github.com/lobehub/lobehub.git`
 - 商业文件以独立提交叠加；**不要改** `packages/agent-runtime`、`packages/model-runtime` 与 `LICENSE` 主体

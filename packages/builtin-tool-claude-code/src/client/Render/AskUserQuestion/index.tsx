@@ -7,10 +7,11 @@ import {
   resolveAskUserAnswers,
 } from '@lobechat/shared-tool-ui/ask-user';
 import type { BuiltinRenderProps } from '@lobechat/types';
-import { memo } from 'react';
+import { type ComponentProps, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { AskUserQuestionArgs } from '../../../types';
+import PermissionRequestResult from '../PermissionRequest';
 
 /**
  * Claude Code host for the shared completed AskUserQuestion result.
@@ -22,7 +23,7 @@ import type { AskUserQuestionArgs } from '../../../types';
 const AskUserQuestion = memo<
   BuiltinRenderProps<AskUserQuestionArgs, AskUserQuestionResultState, string>
 >(({ args, content, pluginError, pluginState }) => {
-  const { t } = useTranslation('plugin');
+  const { t } = useTranslation(['plugin', 'tool']);
 
   return (
     <AskUserQuestionResult
@@ -30,8 +31,10 @@ const AskUserQuestion = memo<
       isError={!!pluginError}
       questions={normalizeAskUserQuestions(args)}
       labels={{
-        noAnswer: t('builtins.lobe-claude-code.askUserQuestion.noAnswer'),
-        notAnswered: t('builtins.lobe-claude-code.askUserQuestion.notAnswered'),
+        noAnswer: t('plugin:builtins.lobe-claude-code.askUserQuestion.noAnswer'),
+        notAnswered: t('plugin:builtins.lobe-claude-code.askUserQuestion.notAnswered'),
+        recommendedTag: t('tool:claudeCode.askUserQuestion.recommendedTag'),
+        supplement: t('tool:claudeCode.askUserQuestion.supplement.enter'),
       }}
     />
   );
@@ -39,4 +42,23 @@ const AskUserQuestion = memo<
 
 AskUserQuestion.displayName = 'CCAskUserQuestion';
 
-export default AskUserQuestion;
+/**
+ * Claude Code's permission requests ride the same
+ * AskUserQuestion-shaped card every review surface understands; their extra
+ * `claudeCodePermission` detail gets the dedicated result instead.
+ */
+const AskUserQuestionOrPermission = memo<
+  BuiltinRenderProps<AskUserQuestionArgs, AskUserQuestionResultState, string>
+>((props) =>
+  (props.args as { claudeCodePermission?: unknown } | undefined)?.claudeCodePermission ? (
+    <PermissionRequestResult
+      {...(props as unknown as ComponentProps<typeof PermissionRequestResult>)}
+    />
+  ) : (
+    <AskUserQuestion {...props} />
+  ),
+);
+
+AskUserQuestionOrPermission.displayName = 'CCAskUserQuestionOrPermission';
+
+export default AskUserQuestionOrPermission;

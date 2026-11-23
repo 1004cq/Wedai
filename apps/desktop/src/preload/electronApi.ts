@@ -1,7 +1,8 @@
 import { electronAPI } from '@electron-toolkit/preload';
-import type { ScreenCaptureSession } from '@lobechat/electron-client-ipc';
+import type { RendererMemoryInfo, ScreenCaptureSession } from '@lobechat/electron-client-ipc';
 import { contextBridge, ipcRenderer } from 'electron';
 
+import { readExposeStoresArg } from '~common/remoteDebugging';
 import { readSystemLanguageArg } from '~common/systemLanguage';
 
 import { invoke } from './invoke';
@@ -32,6 +33,24 @@ export const setupElectronApi = () => {
 
   contextBridge.exposeInMainWorld('electronAPI', {
     getDesktopBootstrapIdentity: () => ipcRenderer.sendSync('desktop:get-bootstrap-identity'),
+    getRendererMemoryInfo: async (): Promise<RendererMemoryInfo> => {
+      const memory = await process.getProcessMemoryInfo();
+      const heap = process.getHeapStatistics();
+      const blink = process.getBlinkMemoryInfo();
+
+      return {
+        blink: { allocatedBytes: blink.allocated * 1024, totalBytes: blink.total * 1024 },
+        heap: {
+          limitBytes: heap.heapSizeLimit * 1024,
+          mallocedBytes: heap.mallocedMemory * 1024,
+          physicalBytes: heap.totalPhysicalSize * 1024,
+          totalBytes: heap.totalHeapSize * 1024,
+          usedBytes: heap.usedHeapSize * 1024,
+        },
+        privateBytes: memory.private * 1024,
+        sharedBytes: memory.shared * 1024,
+      };
+    },
     invoke,
     onScreenCaptureSession: (listener: (session: ScreenCaptureSession) => void) => {
       screenCaptureSessionListeners.add(listener);
@@ -55,6 +74,7 @@ export const setupElectronApi = () => {
     chromeVersion: process.versions.chrome,
     darwinMajorVersion,
     electronVersion: process.versions.electron,
+    exposeStores: readExposeStoresArg(process.argv),
     isMacTahoe: process.platform === 'darwin' && darwinMajorVersion >= 25,
     nodeVersion: process.versions.node,
     platform: process.platform,

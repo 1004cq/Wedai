@@ -1,24 +1,40 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { DiscoverService } from '@/server/services/discover';
+
 import { agentBuilderRuntime } from '../agentBuilder';
 
 const {
   mockCreatePlugin,
   mockFindById,
+  mockGetMcpManifest,
+  mockInstallMarketplaceConnector,
+  mockQueryPlugins,
+  mockResolveConnectors,
+  mockUpdatePlugin,
+  mockExistsById,
   mockGetAgentConfigById,
   mockGetAiProviderList,
   mockGetAiProviderModelList,
   mockGetHiddenBuiltinModelsForUser,
   mockUpdateAgent,
+  mockServiceUpdateConfig,
   mockUpdateConfig,
 } = vi.hoisted(() => ({
   mockCreatePlugin: vi.fn(),
   mockFindById: vi.fn(),
+  mockGetMcpManifest: vi.fn(),
+  mockInstallMarketplaceConnector: vi.fn(),
+  mockQueryPlugins: vi.fn(),
+  mockResolveConnectors: vi.fn(),
+  mockUpdatePlugin: vi.fn(),
+  mockExistsById: vi.fn(),
   mockGetAgentConfigById: vi.fn(),
   mockGetAiProviderList: vi.fn(),
   mockGetAiProviderModelList: vi.fn(),
   mockGetHiddenBuiltinModelsForUser: vi.fn(),
   mockUpdateAgent: vi.fn(),
+  mockServiceUpdateConfig: vi.fn(),
   mockUpdateConfig: vi.fn(),
 }));
 
@@ -27,30 +43,58 @@ vi.mock('@/business/server/aiProvider', () => ({
   getModelRedirects: vi.fn(async () => ({})),
 }));
 
+vi.mock('@/server/services/agent', () => ({
+  AgentService: vi.fn(function () {
+    return { updateAgentConfig: mockServiceUpdateConfig };
+  }),
+}));
+
 vi.mock('@/database/models/agent', () => ({
-  AgentModel: vi.fn(() => ({
-    getAgentConfigById: mockGetAgentConfigById,
-    update: mockUpdateAgent,
-    updateConfig: mockUpdateConfig,
-  })),
+  AgentModel: vi.fn(function () {
+    return {
+      existsById: mockExistsById,
+      getAgentConfigById: mockGetAgentConfigById,
+      update: mockUpdateAgent,
+      updateConfig: mockUpdateConfig,
+    };
+  }),
 }));
 
 vi.mock('@/database/models/plugin', () => ({
-  PluginModel: vi.fn(() => ({
-    create: mockCreatePlugin,
-    findById: mockFindById,
-  })),
+  PluginModel: vi.fn(function () {
+    return {
+      create: mockCreatePlugin,
+      findById: mockFindById,
+      query: mockQueryPlugins,
+      update: mockUpdatePlugin,
+    };
+  }),
+}));
+
+vi.mock('@/database/models/connector', () => ({
+  ConnectorModel: vi.fn(function () {
+    return { queryAvailableForAgent: mockResolveConnectors, resolveAll: mockResolveConnectors };
+  }),
+}));
+
+vi.mock('@/server/services/connector/marketplaceInstall', () => ({
+  installMarketplaceMcpConnector: mockInstallMarketplaceConnector,
 }));
 
 vi.mock('@/database/repositories/aiInfra', () => ({
-  AiInfraRepos: vi.fn(() => ({
-    getAiProviderList: mockGetAiProviderList,
-    getAiProviderModelList: mockGetAiProviderModelList,
-  })),
+  AiInfraRepos: vi.fn(function () {
+    return {
+      getAiProviderList: mockGetAiProviderList,
+      getAiProviderModelList: mockGetAiProviderModelList,
+    };
+  }),
 }));
 
 vi.mock('@/server/services/discover', () => ({
-  DiscoverService: vi.fn(() => ({})),
+  DiscoverService: vi.fn(function () {
+    // The market's detail of an MCP it does not host
+    return { getMcpDetail: async () => ({}), getMcpManifest: mockGetMcpManifest };
+  }),
 }));
 
 const createRuntime = () =>
@@ -61,10 +105,38 @@ const createRuntime = () =>
     userId: 'user-1',
   });
 
+const createWorkspaceRuntime = () =>
+  agentBuilderRuntime.factory({
+    editingAgentId: 'agent-1',
+    serverDB: {} as never,
+    toolManifestMap: {},
+    userId: 'user-1',
+    workspaceId: 'workspace-1',
+  });
+
 describe('agentBuilderRuntime', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockExistsById.mockResolvedValue(true);
+    mockServiceUpdateConfig.mockImplementation((...args) => mockUpdateConfig(...args));
     mockGetHiddenBuiltinModelsForUser.mockResolvedValue(undefined);
+    mockResolveConnectors.mockResolvedValue([]);
+    mockQueryPlugins.mockResolvedValue([]);
+    mockFindById.mockResolvedValue(undefined);
+    mockGetMcpManifest.mockRejectedValue(new Error('not in marketplace'));
+    mockInstallMarketplaceConnector.mockResolvedValue({ status: 'installed' });
+  });
+
+  it('does not persist a model change rejected by the shared-agent policy', async () => {
+    mockGetAgentConfigById.mockResolvedValue({ id: 'agent-1', provider: 'lobehub' });
+    mockServiceUpdateConfig.mockRejectedValueOnce(new Error('Shared agent provider is restricted'));
+    const result = await createRuntime().updateConfig(
+      { config: { model: 'gpt-4o', provider: 'openai' } },
+      { editingAgentId: 'agent-1', toolManifestMap: {} },
+    );
+    expect(result.success).toBe(false);
+    expect(result.content).toContain('Shared agent provider is restricted');
+    expect(mockUpdateConfig).not.toHaveBeenCalled();
   });
 
   describe('getAvailableModels', () => {
@@ -107,8 +179,9 @@ describe('agentBuilderRuntime', () => {
   });
 
   describe('updateConfig - togglePlugin', () => {
-    it('appends a new pinned entry when enabling an absent identifier', async () => {
+    it('appends a new auto entry when enabling an absent identifier', async () => {
       mockGetAgentConfigById.mockResolvedValue({ id: 'agent-1', plugins: ['plugin-a'] });
+      mockFindById.mockResolvedValue({ identifier: 'plugin-b', manifest: { api: [] } });
 
       const runtime = createRuntime();
       const result = await runtime.updateConfig(
@@ -119,15 +192,16 @@ describe('agentBuilderRuntime', () => {
       expect(result.success).toBe(true);
       expect(result.state).toMatchObject({ agentId: 'agent-1' });
       expect(mockUpdateConfig).toHaveBeenCalledWith('agent-1', {
-        plugins: ['plugin-a', { identifier: 'plugin-b', mode: 'pinned' }],
+        plugins: ['plugin-a', { identifier: 'plugin-b', mode: 'auto' }],
       });
     });
 
-    it('flips an existing disabled object entry back to pinned in place, without duplicating it', async () => {
+    it('flips an existing disabled object entry back to auto in place, without duplicating it', async () => {
       mockGetAgentConfigById.mockResolvedValue({
         id: 'agent-1',
         plugins: ['plugin-a', { identifier: 'plugin-b', mode: 'disabled' }],
       });
+      mockFindById.mockResolvedValue({ identifier: 'plugin-b', manifest: { api: [] } });
 
       const runtime = createRuntime();
       const result = await runtime.updateConfig(
@@ -138,11 +212,11 @@ describe('agentBuilderRuntime', () => {
       expect(result.success).toBe(true);
       expect(result.state).toMatchObject({ agentId: 'agent-1' });
       expect(mockUpdateConfig).toHaveBeenCalledWith('agent-1', {
-        plugins: ['plugin-a', { identifier: 'plugin-b', mode: 'pinned' }],
+        plugins: ['plugin-a', { identifier: 'plugin-b', mode: 'auto' }],
       });
     });
 
-    it('disabling (enabled: false) reverts the entry to auto, removing it from the array', async () => {
+    it('disabling (enabled: false) writes an explicit disabled entry so the tool stays off in Agent mode', async () => {
       mockGetAgentConfigById.mockResolvedValue({
         id: 'agent-1',
         plugins: ['plugin-a', 'plugin-b'],
@@ -156,7 +230,94 @@ describe('agentBuilderRuntime', () => {
 
       expect(result.success).toBe(true);
       expect(result.state).toMatchObject({ agentId: 'agent-1' });
-      expect(mockUpdateConfig).toHaveBeenCalledWith('agent-1', { plugins: ['plugin-a'] });
+      expect(mockUpdateConfig).toHaveBeenCalledWith('agent-1', {
+        plugins: ['plugin-a', { identifier: 'plugin-b', mode: 'disabled' }],
+      });
+    });
+
+    // Vent msg_3TSVUmdD8G68gRPPKH: `tg_mcp` was reported enabled while the
+    // user's connector is `tg-mcp`, so the agent pinned an id that loads nothing.
+    it('refuses to enable an id that resolves to nothing and suggests the near match', async () => {
+      mockGetAgentConfigById.mockResolvedValue({ id: 'agent-1', plugins: ['lobe-message'] });
+      mockResolveConnectors.mockResolvedValue([
+        { identifier: 'tg-mcp', isEnabled: true, status: 'connected' },
+      ]);
+
+      const runtime = createRuntime();
+      const result = await runtime.updateConfig(
+        {
+          meta: { title: 'Telegram Analyst' },
+          togglePlugin: { enabled: true, pluginId: 'tg_mcp' },
+        } as never,
+        { editingAgentId: 'agent-1', toolManifestMap: {} },
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatchObject({ type: 'PluginNotFound' });
+      expect(result.content).toContain('"tg-mcp"');
+      expect(mockResolveConnectors).toHaveBeenCalledWith('agent-1');
+      expect(mockUpdateConfig).not.toHaveBeenCalled();
+      expect(mockUpdateAgent).not.toHaveBeenCalled();
+    });
+
+    it('enables a user connector by its exact identifier', async () => {
+      mockGetAgentConfigById.mockResolvedValue({ id: 'agent-1', plugins: [] });
+      mockResolveConnectors.mockResolvedValue([
+        { identifier: 'tg-mcp', isEnabled: true, status: 'connected' },
+      ]);
+
+      const result = await createRuntime().updateConfig(
+        { togglePlugin: { enabled: true, pluginId: 'tg-mcp' } },
+        { editingAgentId: 'agent-1', toolManifestMap: {} },
+      );
+
+      expect(result.success).toBe(true);
+      expect(mockUpdateConfig).toHaveBeenCalledWith('agent-1', {
+        plugins: [{ identifier: 'tg-mcp', mode: 'auto' }],
+      });
+    });
+
+    it('refuses a connector that exists but is not connected', async () => {
+      mockGetAgentConfigById.mockResolvedValue({ id: 'agent-1', plugins: [] });
+      mockResolveConnectors.mockResolvedValue([
+        { identifier: 'gmail', isEnabled: true, status: 'disconnected' },
+      ]);
+
+      const result = await createRuntime().updateConfig(
+        { togglePlugin: { enabled: true, pluginId: 'gmail' } },
+        { editingAgentId: 'agent-1', toolManifestMap: {} },
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatchObject({ type: 'PluginNotConnected' });
+      expect(mockUpdateConfig).not.toHaveBeenCalled();
+    });
+
+    it('refuses an official catalog integration the user never connected', async () => {
+      mockGetAgentConfigById.mockResolvedValue({ id: 'agent-1', plugins: [] });
+
+      const result = await createRuntime().updateConfig(
+        { togglePlugin: { enabled: true, pluginId: 'gmail' } },
+        { editingAgentId: 'agent-1', toolManifestMap: {} },
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatchObject({ type: 'PluginNotConnected' });
+      expect(mockUpdateConfig).not.toHaveBeenCalled();
+    });
+
+    it('still disables an id that no longer resolves, so stale entries can be turned off', async () => {
+      mockGetAgentConfigById.mockResolvedValue({ id: 'agent-1', plugins: ['tg_mcp'] });
+
+      const result = await createRuntime().updateConfig(
+        { togglePlugin: { enabled: false, pluginId: 'tg_mcp' } },
+        { editingAgentId: 'agent-1', toolManifestMap: {} },
+      );
+
+      expect(result.success).toBe(true);
+      expect(mockUpdateConfig).toHaveBeenCalledWith('agent-1', {
+        plugins: [{ identifier: 'tg_mcp', mode: 'disabled' }],
+      });
     });
 
     it('returns the invocation target for a successful no-op', async () => {
@@ -172,6 +333,34 @@ describe('agentBuilderRuntime', () => {
         state: { agentId: 'agent-1', success: true },
         success: true,
       });
+    });
+
+    it('applies metadata nested under config instead of reporting a successful no-op', async () => {
+      mockGetAgentConfigById.mockResolvedValue({ id: 'agent-1', plugins: [] });
+
+      const runtime = createRuntime();
+      const params = {
+        config: {
+          meta: {
+            avatar: '🤖',
+            title: 'GitHub PR/Issue Manager',
+          },
+        },
+      } as unknown as Parameters<typeof runtime.updateConfig>[0];
+      const result = await runtime.updateConfig(params, {
+        editingAgentId: 'agent-1',
+        toolManifestMap: {},
+      });
+
+      expect(result).toMatchObject({
+        state: { agentId: 'agent-1', success: true },
+        success: true,
+      });
+      expect(mockUpdateAgent).toHaveBeenCalledWith('agent-1', {
+        avatar: '🤖',
+        title: 'GitHub PR/Issue Manager',
+      });
+      expect(mockUpdateConfig).not.toHaveBeenCalled();
     });
   });
 
@@ -202,8 +391,40 @@ describe('agentBuilderRuntime', () => {
     });
   });
 
+  describe('existence guard (0-row silent no-op)', () => {
+    it('updatePrompt fails loudly when the editing agent no longer exists', async () => {
+      mockExistsById.mockResolvedValue(false);
+
+      const result = await createRuntime().updatePrompt(
+        { prompt: 'orphan prompt' },
+        { editingAgentId: 'agent-missing', toolManifestMap: {} },
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.content).toContain('not found');
+      expect(mockUpdateAgent).not.toHaveBeenCalled();
+    });
+
+    // updateConfig's own entry guard (pre-existing) resolves via
+    // getAgentConfigById — that read stays functionally needed for
+    // togglePlugin, so this test exercises that path, not existsById.
+    it('updateConfig meta-only writes fail loudly when the editing agent no longer exists', async () => {
+      mockGetAgentConfigById.mockResolvedValue(undefined);
+
+      const result = await createRuntime().updateConfig(
+        { meta: { title: 'Ghost' } },
+        { editingAgentId: 'agent-missing', toolManifestMap: {} },
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.content).toContain('not found');
+      expect(mockUpdateConfig).not.toHaveBeenCalled();
+      expect(mockUpdateAgent).not.toHaveBeenCalled();
+    });
+  });
+
   describe('installPlugin', () => {
-    it('flips an existing disabled builtin-tool entry back to pinned, without duplicating it', async () => {
+    it('flips an existing disabled builtin-tool entry back to auto, without duplicating it', async () => {
       mockGetAgentConfigById.mockResolvedValue({
         id: 'agent-1',
         plugins: [{ identifier: 'lobe-web-browsing', mode: 'disabled' }],
@@ -218,11 +439,29 @@ describe('agentBuilderRuntime', () => {
       expect(result.success).toBe(true);
       expect(result.state).toMatchObject({ agentId: 'agent-1' });
       expect(mockUpdateConfig).toHaveBeenCalledWith('agent-1', {
-        plugins: [{ identifier: 'lobe-web-browsing', mode: 'pinned' }],
+        plugins: [{ identifier: 'lobe-web-browsing', mode: 'auto' }],
       });
     });
 
-    it('is a no-op write when the builtin-tool identifier is already pinned', async () => {
+    it('writes builtinOverride when enabling an on-demand builtin tool', async () => {
+      mockGetAgentConfigById.mockResolvedValue({
+        id: 'agent-1',
+        plugins: [],
+      });
+
+      const runtime = createRuntime();
+      const result = await runtime.installPlugin(
+        { identifier: 'lobe-calculator', source: 'official' },
+        { editingAgentId: 'agent-1', toolManifestMap: {} },
+      );
+
+      expect(result.success).toBe(true);
+      expect(mockUpdateConfig).toHaveBeenCalledWith('agent-1', {
+        plugins: [{ builtinOverride: true, identifier: 'lobe-calculator', mode: 'auto' }],
+      });
+    });
+
+    it('is a no-op write when the builtin-tool identifier is already enabled', async () => {
       mockGetAgentConfigById.mockResolvedValue({
         id: 'agent-1',
         plugins: ['lobe-web-browsing'],
@@ -239,7 +478,7 @@ describe('agentBuilderRuntime', () => {
       expect(mockUpdateConfig).not.toHaveBeenCalled();
     });
 
-    it('flips an existing disabled market-plugin entry back to pinned, without duplicating it', async () => {
+    it('flips an existing disabled market-plugin entry back to auto, without duplicating it', async () => {
       mockGetAgentConfigById.mockResolvedValue({
         id: 'agent-1',
         plugins: [{ identifier: 'market-plugin', mode: 'disabled' }],
@@ -255,8 +494,245 @@ describe('agentBuilderRuntime', () => {
       expect(result.success).toBe(true);
       expect(result.state).toMatchObject({ agentId: 'agent-1' });
       expect(mockUpdateConfig).toHaveBeenCalledWith('agent-1', {
-        plugins: [{ identifier: 'market-plugin', mode: 'pinned' }],
+        plugins: [{ identifier: 'market-plugin', mode: 'auto' }],
       });
     });
+  });
+
+  describe('installPlugin - market resolution', () => {
+    it('refuses an installed plugin whose manifest lists no tools', async () => {
+      mockGetAgentConfigById.mockResolvedValue({ id: 'agent-1', plugins: [] });
+      mockFindById.mockResolvedValue({
+        identifier: 'adkit',
+        manifest: { identifier: 'adkit', type: 'mcp', url: 'https://mcp.adkit.so' },
+        type: 'customPlugin',
+      });
+
+      const result = await createRuntime().installPlugin(
+        { identifier: 'adkit', source: 'market' },
+        { editingAgentId: 'agent-1', toolManifestMap: {} },
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatchObject({ type: 'PluginHasNoTools' });
+      expect(mockGetMcpManifest).not.toHaveBeenCalled();
+      expect(mockUpdateConfig).not.toHaveBeenCalled();
+    });
+
+    it('writes no row and pins nothing when the marketplace has no manifest', async () => {
+      mockGetAgentConfigById.mockResolvedValue({ id: 'agent-1', plugins: [] });
+
+      const result = await createRuntime().installPlugin(
+        { identifier: 'adkit-ads-mcp', source: 'market' },
+        { editingAgentId: 'agent-1', toolManifestMap: {} },
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatchObject({ type: 'PluginNotFound' });
+      expect(mockInstallMarketplaceConnector).not.toHaveBeenCalled();
+      expect(mockCreatePlugin).not.toHaveBeenCalled();
+      expect(mockUpdateConfig).not.toHaveBeenCalled();
+    });
+
+    it('installs a marketplace MCP as a connector, not a plugin row, and says it loads next run', async () => {
+      const manifest = { deploymentOptions: [], identifier: 'ads-mcp', tools: [{ name: 'list' }] };
+      mockGetAgentConfigById.mockResolvedValue({ id: 'agent-1', plugins: [] });
+      mockGetMcpManifest.mockResolvedValue(manifest);
+      // The connector the install wrote, as the agent's runs resolve it
+      mockResolveConnectors.mockResolvedValue([
+        { identifier: 'ads-mcp', isEnabled: true, status: 'connected' },
+      ]);
+
+      const result = await createRuntime().installPlugin(
+        { identifier: 'ads-mcp', source: 'market' },
+        { editingAgentId: 'agent-1', toolManifestMap: {} },
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.content).toContain('next run');
+      expect(mockInstallMarketplaceConnector).toHaveBeenCalledWith(
+        { serverDB: {}, userId: 'user-1', workspaceId: undefined },
+        'ads-mcp',
+        manifest,
+        { readHostedEndpoint: expect.any(Function) },
+      );
+      expect(mockCreatePlugin).not.toHaveBeenCalled();
+      expect(mockUpdatePlugin).not.toHaveBeenCalled();
+      expect(mockUpdateConfig).toHaveBeenCalledWith('agent-1', {
+        plugins: [{ identifier: 'ads-mcp', mode: 'auto' }],
+      });
+    });
+
+    it("refuses, installing nothing, an install the agent's own disconnected connector would shadow", async () => {
+      mockGetAgentConfigById.mockResolvedValue({ id: 'agent-1', plugins: [] });
+      mockGetMcpManifest.mockResolvedValue({ identifier: 'ads-mcp' });
+      // The agent owns a row of the identifier, which its runs pick over the base install
+      mockResolveConnectors.mockResolvedValue([
+        { agentId: 'agent-1', identifier: 'ads-mcp', isEnabled: true, status: 'disconnected' },
+      ]);
+
+      const result = await createRuntime().installPlugin(
+        { identifier: 'ads-mcp', source: 'market' },
+        { editingAgentId: 'agent-1', toolManifestMap: {} },
+      );
+
+      expect(mockInstallMarketplaceConnector).not.toHaveBeenCalled();
+      expect(mockResolveConnectors).toHaveBeenCalledWith('agent-1');
+      expect(result.success).toBe(false);
+      expect(result.content).toContain('not connected');
+      expect(mockUpdateConfig).not.toHaveBeenCalled();
+    });
+
+    it('installs into the run workspace', async () => {
+      mockGetAgentConfigById.mockResolvedValue({ id: 'agent-1', plugins: [] });
+      mockGetMcpManifest.mockResolvedValue({ identifier: 'ads-mcp' });
+
+      await createWorkspaceRuntime().installPlugin(
+        { identifier: 'ads-mcp', source: 'market' },
+        { editingAgentId: 'agent-1', toolManifestMap: {} },
+      );
+
+      expect(mockInstallMarketplaceConnector).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-1', workspaceId: 'workspace-1' }),
+        'ads-mcp',
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
+    it('pins a finished connector install without installing it again', async () => {
+      mockGetAgentConfigById.mockResolvedValue({ id: 'agent-1', plugins: [] });
+      mockGetMcpManifest.mockResolvedValue({ identifier: 'ads-mcp' });
+      mockInstallMarketplaceConnector.mockResolvedValue({ status: 'exists' });
+      mockResolveConnectors.mockResolvedValue([
+        { identifier: 'ads-mcp', isEnabled: true, status: 'connected' },
+      ]);
+
+      const result = await createRuntime().installPlugin(
+        { identifier: 'ads-mcp', source: 'market' },
+        { editingAgentId: 'agent-1', toolManifestMap: {} },
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.content).not.toContain('next run');
+      expect(mockUpdateConfig).toHaveBeenCalledWith('agent-1', {
+        plugins: [{ identifier: 'ads-mcp', mode: 'auto' }],
+      });
+    });
+
+    it.each([
+      ['oauth', 'PluginNeedsAuthorization', 'OAuth'],
+      ['config', 'PluginNeedsConfig', 'settings'],
+      ['local-only', 'PluginNeedsDesktop', 'desktop app'],
+      ['private-network', 'PluginNeedsDesktop', 'private-network address'],
+      ['conflict', 'PluginIdentifierConflict', 'already exists'],
+      ['forbidden', 'PluginInstallForbidden', 'admins'],
+      ['in-progress', 'PluginInstallInProgress', 'already being installed'],
+      ['no-tools', 'PluginHasNoTools', 'lists no tools'],
+    ])(
+      'refuses a marketplace MCP it cannot install (%s) and pins nothing',
+      async (blocker, type, hint) => {
+        mockGetAgentConfigById.mockResolvedValue({ id: 'agent-1', plugins: [] });
+        mockGetMcpManifest.mockResolvedValue({ identifier: 'gmail' });
+        mockInstallMarketplaceConnector.mockResolvedValue({ blocker, status: 'blocked' });
+
+        const result = await createRuntime().installPlugin(
+          { identifier: 'gmail', source: 'market' },
+          { editingAgentId: 'agent-1', toolManifestMap: {} },
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.error).toMatchObject({ type });
+        expect(result.content).toContain(hint);
+        expect(result.content).toContain('Nothing was changed');
+        expect(mockUpdateConfig).not.toHaveBeenCalled();
+      },
+    );
+
+    it('reports a failed install and pins nothing', async () => {
+      mockGetAgentConfigById.mockResolvedValue({ id: 'agent-1', plugins: [] });
+      mockGetMcpManifest.mockResolvedValue({ identifier: 'ads-mcp' });
+      mockInstallMarketplaceConnector.mockRejectedValue(new Error('connect ECONNREFUSED'));
+
+      const result = await createRuntime().installPlugin(
+        { identifier: 'ads-mcp', source: 'market' },
+        { editingAgentId: 'agent-1', toolManifestMap: {} },
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.content).toContain('ECONNREFUSED');
+      expect(mockUpdateConfig).not.toHaveBeenCalled();
+    });
+  });
+
+  // Regression guard for `searchMarketTools` returning `unauthorized`: built
+  // without an identity, DiscoverService signs no trusted-client token, so every
+  // server-executed market search failed — which the model reports as a plain
+  // tool failure and silently works around, leaving the built agent with no
+  // market tool.
+  describe('market identity', () => {
+    it('passes the run identity to DiscoverService', () => {
+      createRuntime();
+
+      expect(DiscoverService).toHaveBeenCalledWith({
+        userInfo: { userId: 'user-1', workspaceId: undefined },
+      });
+    });
+
+    it('scopes the market identity to the run workspace', () => {
+      createWorkspaceRuntime();
+
+      expect(DiscoverService).toHaveBeenCalledWith({
+        userInfo: { userId: 'user-1', workspaceId: 'workspace-1' },
+      });
+    });
+  });
+});
+
+// A builder run whose tool context lost `editingAgentId` used to fall back to
+// `ctx.agentId` — the builder builtin itself — and report success while the
+// agent the user was editing stayed untouched.
+describe('agentBuilderRuntime without an editing target', () => {
+  const builderRunCtx = {
+    agentId: 'agt_builder_virtual',
+    serverDB: {} as never,
+    toolManifestMap: {},
+    userId: 'user-1',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetAgentConfigById.mockResolvedValue({ plugins: [] });
+  });
+
+  it('updatePrompt refuses instead of writing to the builder itself', async () => {
+    const runtime = agentBuilderRuntime.factory(builderRunCtx);
+    const result = await runtime.updatePrompt({ prompt: 'NEW PROMPT' }, builderRunCtx);
+
+    expect(mockUpdateAgent).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ error: { type: 'NoEditingTarget' }, success: false });
+  });
+
+  it('updateConfig refuses instead of writing to the builder itself', async () => {
+    const runtime = agentBuilderRuntime.factory(builderRunCtx);
+    const result = await runtime.updateConfig(
+      { config: { params: { temperature: 0.8 } } } as any,
+      builderRunCtx,
+    );
+
+    expect(mockServiceUpdateConfig).not.toHaveBeenCalled();
+    expect(mockUpdateAgent).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ error: { type: 'NoEditingTarget' }, success: false });
+  });
+
+  it('installPlugin refuses instead of writing to the builder itself', async () => {
+    const runtime = agentBuilderRuntime.factory(builderRunCtx);
+    const result = await runtime.installPlugin(
+      { identifier: 'lobe-web-browsing', source: 'official' },
+      builderRunCtx,
+    );
+
+    expect(mockUpdateConfig).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ error: { type: 'NoEditingTarget' }, success: false });
   });
 });

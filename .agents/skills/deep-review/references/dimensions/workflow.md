@@ -10,18 +10,18 @@ Is the process around this change healthy? These are objective state checks — 
 
 ## Quick checklist
 
-- Tracked issue exists for non-trivial work (Linear for team members — see `.agents/skills/linear/`; GitHub issue otherwise) and its status matches reality
+- Tracked work item exists for non-trivial work (a LobeHub task managed with `lh task` for team members; GitHub issue otherwise) and its status matches reality
 - PR description still matches the diff — scope drift after review rounds leaves descriptions describing code that no longer exists
 - Key decisions made during implementation (trade-offs, rejected alternatives, scope cuts) recorded in the issue/PR, not only in a chat transcript
 - Decision records still match the implementation: when the implementation legitimately diverged from a decision written earlier in the issue/PR/conversation, the record is updated in the same PR — a stale decision record misleads every later reader, and reviewers without the session context can only trust what is written
 - CI green; preview/deployment build succeeded — a red or pending-forever check is a finding with the failing job named
-- PR targets the right branch (this repo: feature PRs → `canary`; DB schema changes ride a separate branch PR'd to `main` first)
+- PR targets the right branch (`canary` in this repo); follow the repository's migration workflow for schema changes
 - Commit messages follow repo convention (gitmoji prefix)
 - Locale files: new keys shipped with en-US + zh-CN per the i18n workflow; other locales left to the auto-i18n CI
 
 ## Rule sources
 
-- `.agents/skills/linear/SKILL.md`, `.agents/skills/pr/SKILL.md` — expected issue/PR lifecycle
+- `.agents/skills/pr/SKILL.md` — expected task/PR lifecycle
 - Repo `AGENTS.md` — branch strategy, commit conventions
 
 ## How to check

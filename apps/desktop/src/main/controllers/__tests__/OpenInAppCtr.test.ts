@@ -32,6 +32,8 @@ const invokeIpc = async <T = any>(
 
   const fakeEvent = {
     sender: context?.sender ?? ({ id: 'test' } as any),
+    // IpcHandler only serves the renderer's top-level frame.
+    senderFrame: { parent: null, url: 'app://renderer/' },
   };
 
   if (payload === undefined) {
@@ -40,15 +42,6 @@ const invokeIpc = async <T = any>(
 
   return handler(fakeEvent, payload);
 };
-
-vi.mock('@/utils/logger', () => ({
-  createLogger: () => ({
-    debug: vi.fn(),
-    error: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-  }),
-}));
 
 vi.mock('electron', () => ({
   ipcMain: {

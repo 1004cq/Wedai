@@ -1,8 +1,12 @@
 import { z } from 'zod';
 
-import type { RoleItem, UserItem, UserRoleItem } from '@/database/schemas';
+import type { UserRoleItem } from '@/database/schemas';
 
+import { pageInfoShape, totalShape } from '../helpers/pagination';
+import type { PublicRole, PublicUser } from '../helpers/public-fields';
 import type { IPaginationQuery, PaginationQueryResponse } from './common.type';
+import { dateTimeSchema } from './common.type';
+import { RoleSchema } from './role.type';
 
 // ==================== User Base Types ====================
 
@@ -17,9 +21,9 @@ export interface GetUsersRequest {
 /**
  * Extended user info type including role information
  */
-export type UserWithRoles = UserItem & {
+export type UserWithRoles = PublicUser & {
   messageCount?: number;
-  roles?: RoleItem[];
+  roles?: PublicRole[];
 };
 
 // ==================== User CRUD Types ====================
@@ -153,7 +157,7 @@ export const UpdateUserRolesRequestSchema = z
  * User role detail, including role info and association info
  */
 export interface UserRoleDetail extends UserRoleItem {
-  role: RoleItem;
+  role: PublicRole;
 }
 
 /**
@@ -180,3 +184,53 @@ export interface UserRoleOperationResult {
 export const UserIdParamSchema = z.object({
   id: z.string().min(1, 'User ID cannot be empty'),
 });
+
+// ==================== Response Schemas ====================
+
+/**
+ * `PUBLIC_USER_FIELDS` projection of a `users` row plus the caller-visible
+ * roles (`UserWithRoles`). `messageCount` is present in the user list and in
+ * `GET /users/me?includeCount=1`; the other operations leave it out.
+ */
+export const UserSchema = z
+  .object({
+    avatar: z.string().nullable(),
+    createdAt: dateTimeSchema,
+    email: z.string().nullable(),
+    firstName: z.string().nullable(),
+    fullName: z.string().nullable(),
+    id: z.string(),
+    isOnboarded: z.boolean().nullable(),
+    lastName: z.string().nullable(),
+    messageCount: z.number().int().min(0).optional(),
+    phone: z.string().nullable(),
+    roles: z.array(RoleSchema),
+    updatedAt: dateTimeSchema,
+    username: z.string().nullable(),
+  })
+  .strict()
+  .meta({ id: 'User' });
+
+/** What `GET /users/me` answers a caller whose key lacks `user:read` with. */
+export const UserIdentitySchema = z
+  .object({ id: z.string() })
+  .strict()
+  .meta({ id: 'UserIdentity' });
+
+export const CurrentUserSchema = z.union([UserSchema, UserIdentitySchema]);
+
+export const UserListSchema = z
+  .object({ ...pageInfoShape, ...totalShape, users: z.array(UserSchema) })
+  .strict()
+  .meta({ id: 'UserList' });
+
+/** One role assignment as `GET|PATCH /users/:id/roles` reports it. */
+export const UserRoleSchema = z
+  .object({
+    expiresAt: dateTimeSchema.nullable(),
+    roleDisplayName: z.string(),
+    roleId: z.string(),
+    roleName: z.string(),
+  })
+  .strict()
+  .meta({ id: 'UserRole' });

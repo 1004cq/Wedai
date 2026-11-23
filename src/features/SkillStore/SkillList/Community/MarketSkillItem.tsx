@@ -1,18 +1,27 @@
 'use client';
 
-import { ActionIcon, Avatar, Block, DropdownMenu, Flexbox, Icon, Tag } from '@lobehub/ui';
-import { confirmModal } from '@lobehub/ui/base-ui';
-import { SkillsIcon } from '@lobehub/ui/icons';
-import { createStaticStyles, cssVar } from 'antd-style';
-import { DownloadIcon, Loader2, MoreVerticalIcon, Plus, Trash2 } from 'lucide-react';
+import {
+  ActionIcon,
+  Avatar,
+  Block,
+  confirmModal,
+  createModal,
+  createStaticStyles,
+  cssVar,
+  DropdownMenu,
+  Flexbox,
+  Icon,
+} from '@lobehub/ui';
+import { t as translate } from 'i18next';
+import { DownloadIcon, Loader2, MoreHorizontalIcon, Plus, Trash2 } from 'lucide-react';
 import { lazy, memo, Suspense, useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import ImperativeModal from '@/components/ImperativeModal';
 import { usePermission } from '@/hooks/usePermission';
 import { agentSkillService } from '@/services/skill';
 import { useToolStore } from '@/store/tool';
 import { agentSkillsSelectors } from '@/store/tool/selectors';
+import { densityVars } from '@/styles/densityVars';
 import { type DiscoverSkillItem } from '@/types/discover';
 import { downloadFile } from '@/utils/client/downloadFile';
 
@@ -25,12 +34,19 @@ const styles = createStaticStyles(({ css }) => ({
     cursor: pointer;
 
     overflow: hidden;
+    align-self: flex-start;
+    max-width: 100%;
+    padding: 0;
+    border: 0;
 
-    font-size: 14px;
+    font-family: inherit;
+    font-size: ${densityVars.fontSize};
     font-weight: 500;
+    line-height: inherit;
     color: ${cssVar.colorText};
     text-overflow: ellipsis;
     white-space: nowrap;
+    background: transparent;
 
     &:hover {
       color: ${cssVar.colorPrimary};
@@ -38,10 +54,22 @@ const styles = createStaticStyles(({ css }) => ({
   `,
 }));
 
+const openMarketSkillDetailModal = (identifier: string) =>
+  createModal({
+    content: (
+      <Suspense fallback={<div style={{ height: '100%' }} />}>
+        <MarketSkillDetail identifier={identifier} />
+      </Suspense>
+    ),
+    footer: null,
+    styles: { content: { height: 'calc(100dvh - 200px)', overflow: 'hidden', padding: 0 } },
+    title: translate('dev.title.skillDetails', { ns: 'plugin' }),
+    width: 960,
+  });
+
 const MarketSkillItem = memo<DiscoverSkillItem>(({ name, icon, description, identifier }) => {
   const { t } = useTranslation('plugin');
   const { t: tc } = useTranslation('common');
-  const [detailOpen, setDetailOpen] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [loading, setLoading] = useState(false);
   const { allowed: canCreate } = usePermission('create_content');
@@ -122,12 +150,17 @@ const MarketSkillItem = memo<DiscoverSkillItem>(({ name, icon, description, iden
             },
           ]}
         >
-          <ActionIcon disabled={!canEdit} icon={MoreVerticalIcon} loading={loading} />
+          <ActionIcon
+            aria-label={t('connectorMarket.action.manage', { ns: 'setting' })}
+            disabled={!canEdit}
+            icon={MoreHorizontalIcon}
+            loading={loading}
+          />
         </DropdownMenu>
       );
     }
 
-    if (installing) return <ActionIcon loading icon={Loader2} />;
+    if (installing) return <ActionIcon loading aria-label={tc('loading')} icon={Loader2} />;
 
     return (
       <ActionIcon
@@ -140,43 +173,29 @@ const MarketSkillItem = memo<DiscoverSkillItem>(({ name, icon, description, iden
   };
 
   return (
-    <>
-      <Flexbox className={itemStyles.container} gap={0}>
-        <Block
-          horizontal
-          align={'center'}
-          gap={12}
-          paddingBlock={12}
-          paddingInline={12}
-          variant={'outlined'}
-        >
-          <Avatar avatar={icon || name} shape={'square'} size={40} style={{ flex: 'none' }} />
-          <Flexbox flex={1} gap={4} style={{ minWidth: 0, overflow: 'hidden' }}>
-            <Flexbox horizontal align="center" gap={8}>
-              <span className={styles.title} onClick={() => setDetailOpen(true)}>
-                {name}
-              </span>
-              <Tag icon={<Icon icon={SkillsIcon} />} size={'small'} />
-            </Flexbox>
-            {description && <span className={itemStyles.description}>{description}</span>}
-          </Flexbox>
-          {renderAction()}
-        </Block>
-      </Flexbox>
-      <ImperativeModal
-        destroyOnHidden
-        footer={null}
-        open={detailOpen}
-        styles={{ body: { height: 'calc(100dvh - 200px)', overflow: 'hidden', padding: 0 } }}
-        title={t('dev.title.skillDetails')}
-        width={960}
-        onCancel={() => setDetailOpen(false)}
+    <Flexbox className={itemStyles.container} gap={0}>
+      <Block
+        horizontal
+        align={'center'}
+        gap={12}
+        paddingBlock={12}
+        paddingInline={12}
+        variant={'outlined'}
       >
-        <Suspense fallback={<div style={{ height: '100%' }} />}>
-          <MarketSkillDetail identifier={identifier} />
-        </Suspense>
-      </ImperativeModal>
-    </>
+        <Avatar avatar={icon || name} shape={'square'} size={40} style={{ flex: 'none' }} />
+        <Flexbox flex={1} gap={4} style={{ minWidth: 0, overflow: 'hidden' }}>
+          <button
+            className={styles.title}
+            type="button"
+            onClick={() => openMarketSkillDetailModal(identifier)}
+          >
+            {name}
+          </button>
+          {description && <span className={itemStyles.description}>{description}</span>}
+        </Flexbox>
+        {renderAction()}
+      </Block>
+    </Flexbox>
   );
 });
 

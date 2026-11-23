@@ -1,30 +1,42 @@
 import { type GoogleGenAIOptions } from '@google/genai';
+import type { ServerDefaultHeterogeneousAgentType } from '@lobechat/heterogeneous-agents';
+import { SERVER_DEFAULT_HETEROGENEOUS_AGENT_TYPES } from '@lobechat/heterogeneous-agents';
 import {
+  AgentRuntimeError,
+  AgentRuntimeErrorType,
   mergeModelRuntimeHooks,
   ModelRuntime,
   type ModelRuntimeHooks,
+  setInlineImageNormalizer,
 } from '@lobechat/model-runtime';
+import { isResponsesAPIModel } from '@lobechat/model-runtime/providers/openai/modelId';
 import { LobeVertexAI } from '@lobechat/model-runtime/vertexai';
 import {
   type AWSBedrockKeyVault,
   type AzureOpenAIKeyVault,
+  ChatErrorType,
   type ClientSecretPayload,
   type CloudflareKeyVault,
   type ComfyUIKeyVault,
+  type DoubaoSpeechKeyVault,
   type GithubCopilotKeyVault,
   type OAuthDeviceFlowKeyVault,
   type OpenAICompatibleKeyVault,
+  type ServerDefaultHeterogeneousModelDescriptor,
   type SuperGrokKeyVault,
   type VertexAIKeyVault,
 } from '@lobechat/types';
 import { safeParseJSON } from '@lobechat/utils';
-import { ModelProvider } from 'model-bank';
+import type { AiFullModelCard } from 'model-bank';
+import { isAiModelVisible, ModelProvider } from 'model-bank';
+import { AiProviderBaseURLSchema } from 'model-bank/aiProvider';
 import { DEFAULT_MODEL_PROVIDER_LIST } from 'model-bank/modelProviders';
 
 import { getBusinessModelRuntimeHooks } from '@/business/server/model-runtime';
 import { AiProviderModel } from '@/database/models/aiProvider';
 import { type LobeChatDatabase } from '@/database/type';
 import { getLLMConfig } from '@/envs/llm';
+import { getServerAiProviderConfig } from '@/server/globalConfig';
 import { createLLMGenerationTracingHook } from '@/server/services/llmGenerationTracing/hook';
 import { ensureFreshOAuthToken } from '@/server/services/oauthDeviceFlow/refresh';
 import {
@@ -34,8 +46,15 @@ import {
 
 import { KeyVaultsGateKeeper } from '../KeyVaultsEncrypt';
 import apiKeyManager from './apiKeyManager';
+import { sharpInlineImageNormalizer } from './inlineImageNormalizer';
+import { createUserEndpointGuardedRuntime } from './userEndpointGuard';
+
+// Server requests can re-encode oversized images instead of dropping them.
+setInlineImageNormalizer(sharpInlineImageNormalizer);
 
 export * from './trace';
+export type { ServerDefaultHeterogeneousAgentType } from '@lobechat/heterogeneous-agents';
+export { SERVER_DEFAULT_HETEROGENEOUS_AGENT_TYPES } from '@lobechat/heterogeneous-agents';
 
 /**
  * Combined KeyVaults type for all providers
@@ -45,6 +64,7 @@ type ProviderKeyVaults = OpenAICompatibleKeyVault &
   AWSBedrockKeyVault &
   CloudflareKeyVault &
   ComfyUIKeyVault &
+  DoubaoSpeechKeyVault &
   GithubCopilotKeyVault &
   OAuthDeviceFlowKeyVault &
   SuperGrokKeyVault &
@@ -61,7 +81,7 @@ type ProviderKeyVaults = OpenAICompatibleKeyVault &
  * @param sdkType - The sdkType from provider settings
  * @returns The resolved runtime provider
  */
-const resolveRuntimeProvider = (provider: string, sdkType?: string): string => {
+export const resolveRuntimeProvider = (provider: string, sdkType?: string): string => {
   const isBuiltin = Object.values(ModelProvider).includes(provider as ModelProvider);
   if (isBuiltin) return provider;
 
@@ -119,6 +139,16 @@ export const buildPayloadFromKeyVaults = (
       return {
         apiKey: keyVaults.apiKey,
         cloudflareBaseURLOrAccountID: keyVaults.baseURLOrAccountID,
+        runtimeProvider,
+      };
+    }
+
+    case ModelProvider.DoubaoSpeech: {
+      return {
+        apiKey: keyVaults.apiKey,
+        baseURL: keyVaults.baseURL,
+        doubaoSpeechAccessToken: keyVaults.accessToken,
+        doubaoSpeechAppId: keyVaults.appId,
         runtimeProvider,
       };
     }
@@ -185,6 +215,14 @@ export const buildPayloadFromKeyVaults = (
   }
 };
 
+// Deployment credentials are only valid for the deployment-owned provider and endpoint.
+// A custom provider's SDK type does not grant access to that SDK provider's secrets.
+const canUseServerProviderConfig = (provider: string, payload: ClientSecretPayload) =>
+  Object.values(ModelProvider).includes(provider as ModelProvider) &&
+  (!payload.runtimeProvider || payload.runtimeProvider === provider) &&
+  !payload.baseURL &&
+  !payload.cloudflareBaseURLOrAccountID;
+
 /**
  * Retrieves the options object from environment and apikeymanager
  * based on the provider and payload.
@@ -194,9 +232,11 @@ export const buildPayloadFromKeyVaults = (
  * @returns The options object.
  */
 const getParamsFromPayload = (provider: string, payload: ClientSecretPayload) => {
-  const llmConfig = getLLMConfig() as Record<string, any>;
+  const useServerConfig = canUseServerProviderConfig(provider, payload);
+  const llmConfig = (useServerConfig ? getLLMConfig() : {}) as Record<string, any>;
+  const runtimeProvider = payload.runtimeProvider ?? provider;
 
-  switch (provider) {
+  switch (runtimeProvider) {
     case ModelProvider.LobeHub: {
       return { apikey: payload.apiKey, baseURL: payload.baseURL, ...payload };
     }
@@ -206,20 +246,19 @@ const getParamsFromPayload = (provider: string, payload: ClientSecretPayload) =>
     }
 
     default: {
-      let upperProvider = provider.toUpperCase();
-
-      if (!(`${upperProvider}_API_KEY` in llmConfig)) {
-        upperProvider = ModelProvider.OpenAI.toUpperCase(); // Use OpenAI options as default
-      }
+      const upperProvider = runtimeProvider.toUpperCase();
 
       const apiKey = apiKeyManager.pick(payload?.apiKey || llmConfig[`${upperProvider}_API_KEY`]);
-      const baseURL = payload?.baseURL || process.env[`${upperProvider}_PROXY_URL`];
+      const baseURL =
+        payload?.baseURL ||
+        (useServerConfig ? process.env[`${upperProvider}_PROXY_URL`] : undefined);
 
       return baseURL ? { apiKey, baseURL } : { apiKey };
     }
 
     case ModelProvider.Ollama: {
-      const baseURL = payload?.baseURL || process.env.OLLAMA_PROXY_URL;
+      const baseURL =
+        payload?.baseURL || (useServerConfig ? process.env.OLLAMA_PROXY_URL : undefined);
 
       return { baseURL };
     }
@@ -270,11 +309,36 @@ const getParamsFromPayload = (provider: string, payload: ClientSecretPayload) =>
 
       const apiKey = apiKeyManager.pick(payload?.apiKey || CLOUDFLARE_API_KEY);
       const baseURLOrAccountID =
-        payload.apiKey && payload.cloudflareBaseURLOrAccountID
-          ? payload.cloudflareBaseURLOrAccountID
-          : CLOUDFLARE_BASE_URL_OR_ACCOUNT_ID;
+        payload.cloudflareBaseURLOrAccountID || CLOUDFLARE_BASE_URL_OR_ACCOUNT_ID;
 
       return { apiKey, baseURLOrAccountID };
+    }
+
+    case ModelProvider.DoubaoSpeech: {
+      const baseURL =
+        payload?.baseURL ||
+        (useServerConfig ? process.env.DOUBAOSPEECH_PROXY_URL : undefined) ||
+        undefined;
+
+      // The user's own credentials, of either console, are never mixed with the server's.
+      const hasUserCredentials = !!(
+        payload.apiKey ||
+        payload.doubaoSpeechAppId ||
+        payload.doubaoSpeechAccessToken
+      );
+      const credentials = hasUserCredentials
+        ? {
+            accessToken: payload.doubaoSpeechAccessToken,
+            apiKey: apiKeyManager.pick(payload.apiKey),
+            appId: payload.doubaoSpeechAppId,
+          }
+        : {
+            accessToken: llmConfig.DOUBAOSPEECH_ACCESS_TOKEN,
+            apiKey: apiKeyManager.pick(llmConfig.DOUBAOSPEECH_API_KEY),
+            appId: llmConfig.DOUBAOSPEECH_APP_ID,
+          };
+
+      return baseURL ? { ...credentials, baseURL } : credentials;
     }
 
     case ModelProvider.GithubCopilot: {
@@ -370,23 +434,38 @@ const getParamsFromPayload = (provider: string, payload: ClientSecretPayload) =>
 
 const buildVertexOptions = (
   payload: ClientSecretPayload,
-  params: Partial<GoogleGenAIOptions> = {},
+  params: Partial<GoogleGenAIOptions>,
+  useServerConfig: boolean,
 ): GoogleGenAIOptions => {
-  const rawCredentials = payload.apiKey || process.env.VERTEXAI_CREDENTIALS || '';
+  const rawCredentials =
+    payload.apiKey || (useServerConfig ? process.env.VERTEXAI_CREDENTIALS : undefined) || '';
   const credentials = safeParseJSON<Record<string, string>>(rawCredentials);
 
   const projectFromParams = params.project as string | undefined;
   const projectFromCredentials = credentials?.project_id;
-  const projectFromEnv = process.env.VERTEXAI_PROJECT;
+  const projectFromEnv = useServerConfig ? process.env.VERTEXAI_PROJECT : undefined;
 
   const project = projectFromParams || projectFromCredentials || projectFromEnv;
   const location =
     (params.location as string | undefined) ||
     payload.vertexAIRegion ||
-    process.env.VERTEXAI_LOCATION ||
+    (useServerConfig ? process.env.VERTEXAI_LOCATION : undefined) ||
     undefined;
 
+  // The region is interpolated into `<region>-aiplatform.googleapis.com` by the
+  // SDK; reject anything that could change the resulting host.
+  if (location && !/^[a-z0-9-]+$/.test(location)) {
+    throw AgentRuntimeError.createError(AgentRuntimeErrorType.InvalidVertexCredentials, {
+      message: 'Invalid VertexAI region',
+    });
+  }
+
   const googleAuthOptions = params.googleAuthOptions || (credentials ? { credentials } : undefined);
+
+  // Without explicit user credentials Google auth would load the server's ambient credentials.
+  if (!useServerConfig && !googleAuthOptions && !params.apiKey) {
+    throw AgentRuntimeError.createError(AgentRuntimeErrorType.InvalidProviderAPIKey);
+  }
 
   const options: GoogleGenAIOptions = {
     ...params,
@@ -415,21 +494,43 @@ export const initModelRuntimeWithUserPayload = (
 ) => {
   const runtimeProvider = payload.runtimeProvider ?? provider;
 
-  if (runtimeProvider === ModelProvider.VertexAI) {
-    const vertexOptions = buildVertexOptions(payload, params);
-    const runtime = LobeVertexAI.initFromVertexAI(vertexOptions);
-
-    return new ModelRuntime(runtime, hooks);
+  /**
+   * User-configured endpoints can come from older clients or persisted rows that predate
+   * input validation. Reject them before an SDK appends a request path and throws an
+   * unclassified ERR_INVALID_URL, which would otherwise surface as a server-side 500.
+   */
+  if (payload.baseURL && !AiProviderBaseURLSchema.safeParse(payload.baseURL).success) {
+    throw AgentRuntimeError.createError(ChatErrorType.BadRequest, {
+      message: 'Invalid provider baseURL',
+    });
   }
 
-  return ModelRuntime.initializeWithProvider(
-    runtimeProvider,
-    {
-      ...getParamsFromPayload(runtimeProvider, payload),
-      ...params,
-    },
-    hooks,
-  );
+  /**
+   * Endpoints in the payload are user-supplied (keyVaults or the client), so
+   * requests to them are SSRF-guarded. Env-configured `*_PROXY_URL` endpoints
+   * are operator-trusted and stay unguarded. The LobeHub provider is
+   * platform-owned and routes through server config only.
+   */
+  const userEndpoints =
+    runtimeProvider === ModelProvider.LobeHub
+      ? []
+      : [payload.baseURL, payload.cloudflareBaseURLOrAccountID];
+
+  const runtime = createUserEndpointGuardedRuntime({
+    create: () =>
+      runtimeProvider === ModelProvider.VertexAI
+        ? LobeVertexAI.initFromVertexAI(
+            buildVertexOptions(payload, params, canUseServerProviderConfig(provider, payload)),
+          )
+        : ModelRuntime.createProviderRuntime(runtimeProvider, {
+            ...getParamsFromPayload(provider, payload),
+            ...params,
+          }),
+    endpoints: userEndpoints,
+    provider,
+  });
+
+  return new ModelRuntime(runtime, hooks);
 };
 
 /**
@@ -514,5 +615,195 @@ export const initModelRuntimeFromDB = async (
   const hooks = mergeModelRuntimeHooks(businessHooks, tracingHooks);
 
   // 6. Initialize ModelRuntime with the payload and hooks
-  return initModelRuntimeWithUserPayload(provider, payload, { userId }, hooks);
+  return initModelRuntimeWithUserPayload(provider, payload, { userId, workspaceId }, hooks);
+};
+
+/**
+ * The provider-level “使用 Responses API 规范” switch (`ai_providers.config.enableResponseApi`).
+ *
+ * The browser runtime resolves it per request in `services/chat#getChatCompletion`, which
+ * sets `apiMode` to `'responses'` or `'chatCompletion'`. A gateway / server-executed run
+ * builds its own chat payload and never sees that field, so the switch silently lost to
+ * the model default and every request landed on `/v1/chat/completions`. Resolving it from
+ * the provider row keeps both execution sites on the same wire protocol.
+ *
+ * `undefined` means the user never expressed a preference: the model-runtime decides
+ * (see `isResponsesAPIModel`), which is the pre-existing behaviour.
+ */
+export type ProviderResponseApiMode = 'responses' | 'chatCompletion';
+
+export const resolveProviderResponseApiMode = async (
+  db: LobeChatDatabase,
+  userId: string,
+  provider: string,
+  workspaceId?: string,
+): Promise<ProviderResponseApiMode | undefined> => {
+  try {
+    const providerConfig = await new AiProviderModel(db, userId, workspaceId).getAiProviderById(
+      provider,
+    );
+
+    const enableResponseApi = providerConfig?.config?.enableResponseApi;
+
+    if (typeof enableResponseApi !== 'boolean') return undefined;
+
+    return enableResponseApi ? 'responses' : 'chatCompletion';
+  } catch (error) {
+    // A provider-config read must never fail a run: fall back to the model default.
+    console.error('[ModelRuntime] Failed to resolve provider response api mode:', error);
+
+    return undefined;
+  }
+};
+
+export interface ServerDefaultHeterogeneousModelReference {
+  model: string;
+}
+
+export type ServerDefaultHeterogeneousModels = Record<
+  ServerDefaultHeterogeneousAgentType,
+  ServerDefaultHeterogeneousModelReference[]
+>;
+
+/**
+ * Every supported CLI uses the single LobeHub relay provider. `lobehub` is a
+ * deployment-owned router slot, not a hosted-only upstream: official and
+ * private distributions provide their own model catalog and RouterRuntime
+ * behind it.
+ *
+ * The shared agent matrix selects either the Anthropic Messages or OpenAI
+ * Responses ingress. Both translate the wire protocol in both directions
+ * rather than proxying it, and every CLI addresses the relay as
+ * `lobehub/${catalogId}`. The operation token remains the source of truth and
+ * the request must match that selection.
+ *
+ * Every CLI accepts the same enabled, visible chat models unless the catalog
+ * explicitly marks tool calling as unsupported. Missing capability metadata
+ * and custom model IDs do not disqualify a model or prove CLI compatibility.
+ */
+const isServerDefaultHeterogeneousModelCandidate = (
+  model: Pick<AiFullModelCard, 'abilities' | 'visible'>,
+) => isAiModelVisible(model) && model.abilities?.functionCall !== false;
+
+const getEnabledServerChatModels = async (provider: ModelProvider) => {
+  const providerConfig = await getServerAiProviderConfig(provider);
+  if (!providerConfig?.enabled) return [];
+
+  return providerConfig.serverModelLists.filter((model) => model.enabled && model.type === 'chat');
+};
+
+const findEnabledServerChatModel = async (provider: string, model: string) => {
+  if (!Object.values(ModelProvider).includes(provider as ModelProvider)) {
+    throw new Error('Deployment-level custom providers are not supported for server agents');
+  }
+  const modelConfig = (await getEnabledServerChatModels(provider as ModelProvider)).find(
+    (item) => item.id === model,
+  );
+  if (!modelConfig) {
+    throw new Error('The selected server model is not available');
+  }
+
+  return modelConfig;
+};
+
+const toServerModelSelection = (provider: string, modelConfig: AiFullModelCard) => ({
+  ...(modelConfig.config?.deploymentName && {
+    deploymentName: modelConfig.config.deploymentName,
+  }),
+  model: modelConfig.id,
+  provider,
+});
+
+/** Return visible chat models from the single deployment-owned relay provider. */
+export const getServerDefaultHeterogeneousModels = async () => {
+  const models = {} as ServerDefaultHeterogeneousModels;
+  for (const agentType of SERVER_DEFAULT_HETEROGENEOUS_AGENT_TYPES) {
+    models[agentType] = [];
+  }
+
+  for (const model of await getEnabledServerChatModels(ModelProvider.LobeHub)) {
+    if (!isServerDefaultHeterogeneousModelCandidate(model)) continue;
+    for (const agentType of SERVER_DEFAULT_HETEROGENEOUS_AGENT_TYPES) {
+      models[agentType].push({ model: model.id });
+    }
+  }
+
+  return models;
+};
+
+/** Resolve a user selection against the deployment-owned, enabled chat model catalog. */
+export const resolveServerModel = async (provider: string, model: string) =>
+  toServerModelSelection(provider, await findEnabledServerChatModel(provider, model));
+
+const findServerDefaultHeterogeneousModel = async (model: string) => {
+  const modelConfig = await findEnabledServerChatModel(ModelProvider.LobeHub, model);
+  if (!isServerDefaultHeterogeneousModelCandidate(modelConfig)) {
+    throw new Error('The selected server model is not compatible with this heterogeneous agent');
+  }
+  return modelConfig;
+};
+
+/** Describe a compatible model so a CLI can be told about one it has no entry for. */
+export const describeServerDefaultHeterogeneousModel = async (
+  _agentType: ServerDefaultHeterogeneousAgentType,
+  model: string,
+): Promise<ServerDefaultHeterogeneousModelDescriptor> => {
+  const modelConfig = await findServerDefaultHeterogeneousModel(model);
+  return {
+    abilities: {
+      reasoning: modelConfig.abilities?.reasoning === true,
+      vision: modelConfig.abilities?.vision === true,
+    },
+    ...(modelConfig.contextWindowTokens && {
+      contextWindowTokens: modelConfig.contextWindowTokens,
+    }),
+    ...(modelConfig.displayName && { displayName: modelConfig.displayName }),
+    ...(modelConfig.maxOutput && { maxOutput: modelConfig.maxOutput }),
+    model: modelConfig.id,
+    nativeResponses: isResponsesAPIModel(modelConfig.id),
+  };
+};
+
+/** Resolve a model only when it belongs to the selected CLI's relay runtime path. */
+export const resolveServerDefaultHeterogeneousModel = async (
+  _agentType: ServerDefaultHeterogeneousAgentType,
+  model: string,
+) => {
+  const modelConfig = await findServerDefaultHeterogeneousModel(model);
+
+  return {
+    ...toServerModelSelection(ModelProvider.LobeHub, modelConfig),
+    ...(modelConfig.maxOutput !== undefined && { maxOutput: modelConfig.maxOutput }),
+    supportsAdaptiveThinking:
+      modelConfig.settings?.extendParams?.includes('enableAdaptiveThinking') === true,
+  };
+};
+
+/**
+ * Initialize the deployment's single relay directly.
+ *
+ * Do not resolve `DEFAULT_AGENT_CONFIG` here or translate this into OpenAI /
+ * Anthropic environment credentials. Those names describe the two CLI ingress
+ * protocols only; the deployment-owned LobeHub RouterRuntime owns the one
+ * upstream endpoint, credentials, model routing, fallback, and billing policy.
+ */
+export const initModelRuntimeFromServerConfig = async (params: {
+  actorUserId: string;
+  workspaceId?: string;
+}): Promise<ModelRuntime> => {
+  const businessHooks = getBusinessModelRuntimeHooks(
+    params.actorUserId,
+    ModelProvider.LobeHub,
+    params.workspaceId,
+  );
+  const tracingHooks = createLLMGenerationTracingHook(
+    params.actorUserId,
+    ModelProvider.LobeHub,
+    params.workspaceId,
+  );
+  return ModelRuntime.initializeWithProvider(
+    ModelProvider.LobeHub,
+    { userId: params.actorUserId, workspaceId: params.workspaceId },
+    mergeModelRuntimeHooks(businessHooks, tracingHooks),
+  );
 };

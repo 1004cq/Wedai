@@ -23,6 +23,10 @@ export type GitPullRequestCiStatus = 'failure' | 'pending' | 'success' | 'unknow
 
 export interface GitLinkedPullRequest {
   ciStatus?: GitPullRequestCiStatus;
+  /** The PR's head branch on GitHub */
+  headRefName?: string;
+  /** `owner/repo` of the PR's head branch — not the PR's own repo for a fork PR */
+  headRepoFullName?: string;
   isDraft?: boolean;
   mergeable?: string;
   mergedAt?: string | null;
@@ -41,10 +45,117 @@ export interface GitLinkedPullRequestResult {
   extraCount?: number;
   /** Null when no PR is linked to the branch */
   pullRequest: GitLinkedPullRequest | null;
+  /** `owner/repo` of the GitHub remote the branch publishes to, when it is one */
+  remoteRepoFullName?: string;
   /** 'ok' — lookup succeeded; 'gh-missing' — gh CLI unavailable / not authed; 'error' — other failure */
   status: GitLinkedPullRequestLookupStatus;
   /** Remote ref the lookup queried under — the PR's own head ref when one was found */
   upstream?: GitUpstreamRef;
+}
+
+export interface GitPullRequestCheck {
+  completedAt?: string;
+  detailsUrl?: string;
+  name: string;
+  required: boolean;
+  startedAt?: string;
+  status: 'cancelled' | 'failure' | 'neutral' | 'pending' | 'skipped' | 'success';
+}
+
+export interface GitPullRequestComment {
+  author: string;
+  body: string;
+  createdAt: string;
+  id: string;
+}
+
+export interface GitPullRequestReview {
+  author: string;
+  state: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'DISMISSED' | 'PENDING';
+  submittedAt: string;
+}
+
+export interface GitPullRequestCommit {
+  author: string;
+  committedAt: string;
+  message: string;
+  sha: string;
+}
+
+export interface GitPullRequestDetail {
+  additions: number;
+  author: string;
+  autoMerge?: { method: 'merge' | 'rebase' | 'squash' } | null;
+  baseBehindBy: number;
+  baseRefName: string;
+  body: string;
+  changedFiles: number;
+  checks: GitPullRequestCheck[];
+  comments: GitPullRequestComment[];
+  commits: GitPullRequestCommit[];
+  deletions: number;
+  headRefName: string;
+  headRefOid: string;
+  isCrossRepository: boolean;
+  isDraft: boolean;
+  mergeable: 'CONFLICTING' | 'MERGEABLE' | 'UNKNOWN';
+  mergedAt?: string;
+  mergeStateStatus:
+    'BEHIND' | 'BLOCKED' | 'CLEAN' | 'DIRTY' | 'DRAFT' | 'HAS_HOOKS' | 'UNKNOWN' | 'UNSTABLE';
+  number: number;
+  repo: { name: string; owner: string };
+  reviewDecision: 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null;
+  reviews: GitPullRequestReview[];
+  state: 'closed' | 'merged' | 'open';
+  title: string;
+  url: string;
+  viewerCanBypass: boolean;
+  viewerCanWrite: boolean;
+}
+
+export type GitPullRequestActivity = Pick<GitPullRequestDetail, 'comments' | 'commits' | 'reviews'>;
+
+export interface GitPullRequestDetailResult {
+  detail: GitPullRequestDetail | null;
+  status: GitLinkedPullRequestLookupStatus;
+}
+
+export type GitPullRequestMergeMethod = 'merge' | 'rebase' | 'squash';
+
+/**
+ * Slow, permission-dependent merge context resolved separately from the PR
+ * detail so the pane can paint before branch protection / compare calls land.
+ */
+export interface GitPullRequestMergeContext {
+  /** Commits the base branch has that the PR head does not. */
+  baseBehindBy: number;
+  /** Status-check contexts required by branch protection on the base branch. */
+  requiredChecks: string[];
+  viewerCanBypass: boolean;
+  viewerCanWrite: boolean;
+}
+
+export type GitPullRequestAction =
+  | {
+      admin?: boolean;
+      deleteBranch?: boolean;
+      headRefOid: string;
+      method: GitPullRequestMergeMethod;
+      type: 'merge';
+    }
+  | { headRefOid: string; method: GitPullRequestMergeMethod; type: 'autoMerge' }
+  | { type: 'disableAutoMerge' }
+  | { method: 'merge' | 'rebase'; type: 'updateBranch' }
+  | { type: 'ready' }
+  | { body: string; type: 'comment' }
+  | { type: 'close' }
+  | { type: 'reopen' }
+  | { head: string; type: 'deleteBranch' }
+  | { base: string; type: 'changeBase' };
+
+export interface GitPullRequestActionResult {
+  error?: string;
+  success: boolean;
 }
 
 export interface GitBranchListItem {
@@ -214,6 +325,8 @@ export interface GitBranchDiffPatches {
 
 export interface GitCheckoutResult {
   error?: string;
+  /** Echo of the start point the new branch was cut from, when one was requested. */
+  startPoint?: string;
   success: boolean;
 }
 
@@ -237,21 +350,50 @@ export interface GitRemoveWorktreeResult {
   success: boolean;
 }
 
+/** `cleanupOwnedWorktree`: an app-created worktree removed, kept dirty, or refused. */
+export interface GitOwnedWorktreeCleanupResult {
+  branch?: string;
+  dirtyFiles?: number;
+  error?: string;
+  outcome: 'dirty' | 'error' | 'locked' | 'refused' | 'removed';
+  unpushedSubmodules?: number;
+}
+
+/** `restoreOwnedWorktree`: an app-created worktree checked out again at its path. */
+export interface GitOwnedWorktreeRestoreResult {
+  error?: string;
+  outcome: 'branchMissing' | 'error' | 'refused' | 'restored';
+}
+
 export interface GitAddWorktreeResult {
   error?: string;
+  /** Echo of the creation receipt the device wrote into the worktree. */
+  ownerToken?: string;
+  /** Echo of the start point the worktree's branch was cut from, when one was requested. */
+  startPoint?: string;
   success: boolean;
   /** Absolute path of the created worktree, echoed back so the UI can switch to it. */
   worktreePath?: string;
 }
 
+/** Why a named-branch pull was refused before git ran. */
+export type GitSyncRefusal = 'checkedOutElsewhere' | 'noUpstream';
+
 export interface GitPullResult {
+  /** Echo of the named branch that was pulled; absent for a HEAD pull. */
+  branch?: string;
   error?: string;
   /** True when `git pull` reported the branch was already up-to-date */
   noop?: boolean;
+  reason?: GitSyncRefusal;
   success: boolean;
+  /** The worktree holding the branch, for `reason: 'checkedOutElsewhere'`. */
+  worktreePath?: string;
 }
 
 export interface GitPushResult {
+  /** Echo of the named branch that was pushed; absent for a HEAD push. */
+  branch?: string;
   error?: string;
   /** True when `git push` reported everything is already up-to-date */
   noop?: boolean;
@@ -263,6 +405,8 @@ export interface GitAheadBehind {
   ahead: number;
   /** Commits in upstream not in HEAD — pull count */
   behind: number;
+  /** Echo of the named branch the counts describe; absent when they describe HEAD. */
+  branch?: string;
   /** True when the branch has an upstream tracking ref configured */
   hasUpstream: boolean;
   /**

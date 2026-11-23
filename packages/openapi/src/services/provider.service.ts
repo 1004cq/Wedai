@@ -8,7 +8,9 @@ import { KeyVaultsGateKeeper } from '@/server/modules/KeyVaultsEncrypt';
 
 import { BaseService } from '../common/base.service';
 import { processPaginationConditions } from '../helpers/pagination';
+import { projectPublicProvider } from '../helpers/public-fields';
 import type { ServiceResult } from '../types';
+import type { DeletedResource } from '../types/common.type';
 import type {
   CreateProviderRequest,
   DeleteProviderRequest,
@@ -75,13 +77,7 @@ export class ProviderService extends BaseService {
   private async transformProviderRecord(
     provider: AiProviderSelectItem,
   ): Promise<ProviderDetailResponse> {
-    const { fetchOnClient, ...rest } = provider;
-
-    return {
-      ...rest,
-      fetchOnClient: typeof fetchOnClient === 'boolean' ? fetchOnClient : null,
-      keyVaults: await this.decryptKeyVaults(provider.keyVaults),
-    };
+    return projectPublicProvider(provider);
   }
 
   async getProviders(request: ProviderListQuery = {}): ServiceResult<GetProvidersResponse> {
@@ -200,8 +196,6 @@ export class ProviderService extends BaseService {
         throw this.createAuthorizationError(permissionResult.message || '无权创建 Provider');
       }
 
-      const ownerId = permissionResult.condition?.userId ?? this.userId;
-
       const existed = await this.db.query.aiProviders.findFirst({
         where: and(eq(aiProviders.id, request.id), this.buildWorkspaceWhere(aiProviders)),
       });
@@ -310,7 +304,7 @@ export class ProviderService extends BaseService {
     }
   }
 
-  async deleteProvider(request: DeleteProviderRequest): ServiceResult<{ id: string }> {
+  async deleteProvider(request: DeleteProviderRequest): ServiceResult<DeletedResource> {
     this.log('info', '删除 Provider', {
       id: request.id,
       userId: this.userId,
@@ -361,7 +355,7 @@ export class ProviderService extends BaseService {
         id: request.id,
       });
 
-      return { id: request.id };
+      return { deleted: true, id: request.id };
     } catch (error) {
       this.handleServiceError(error, '删除 Provider');
     }

@@ -1,9 +1,10 @@
+import { agentDisplayName } from '@lobechat/types';
 import { type ItemType } from '@lobehub/ui';
-import { Avatar } from '@lobehub/ui';
 import { AtSign } from 'lucide-react';
 import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import Avatar from '@/components/Avatar';
 import { useMentionStore } from '@/store/mention';
 import { useSessionStore } from '@/store/session';
 import { sessionSelectors } from '@/store/session/selectors';
@@ -36,7 +37,7 @@ const Mention = memo(() => {
             />
           ),
           key: agent.id,
-          label: agent.title || agent.id,
+          label: agentDisplayName(agent, agent.id),
           onClick: () => handleMemberSelect(agent.id),
         });
       });

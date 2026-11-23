@@ -2,7 +2,6 @@
  * @vitest-environment happy-dom
  */
 import { renderHook } from '@testing-library/react';
-import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useTopicActionsDropdownMenu } from './useDropdownMenu';
@@ -25,7 +24,7 @@ const chatStoreMock = vi.hoisted(() => ({
   updateTopicStatus: vi.fn(),
 }));
 
-const messageMock = vi.hoisted(() => ({ info: vi.fn(), success: vi.fn() }));
+const messageMock = vi.hoisted(() => ({ error: vi.fn(), info: vi.fn(), success: vi.fn() }));
 
 vi.mock('@/business/client/hooks/useActiveWorkspaceId', () => ({
   useActiveWorkspaceId: () => workspaceMock.activeWorkspaceId,
@@ -43,22 +42,14 @@ vi.mock('@/store/user', () => ({
   useUserStore: () => userMock.currentUserId,
 }));
 
-vi.mock('@lobehub/ui/base-ui', () => ({
+vi.mock('@lobehub/ui', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   confirmModal: confirmModalMock,
   toast: messageMock,
 }));
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string) => key,
-  }),
-}));
-
-vi.mock('@lobehub/ui', () => ({
-  Icon: () => null,
-}));
-
-vi.mock('antd', () => ({
+vi.mock('antd', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   App: {
     useApp: () => ({
       message: messageMock,
@@ -68,7 +59,6 @@ vi.mock('antd', () => ({
       },
     }),
   },
-  Upload: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
 vi.mock('@/hooks/usePermission', () => ({
@@ -79,16 +69,58 @@ vi.mock('@/hooks/usePermission', () => ({
 }));
 
 vi.mock('@/store/chat', () => ({
-  useChatStore: (selector: (state: Record<string, unknown>) => unknown) =>
-    selector({
-      activeGroupId: 'group-1',
-      importTopic: vi.fn(),
-      removeGroupTopics: removeGroupTopicsMock,
-      removeUnstarredTopic: removeUnstarredTopicMock,
-      refreshTopic: chatStoreMock.refreshTopic,
-      topics: chatStoreMock.topics,
-      updateTopicStatus: chatStoreMock.updateTopicStatus,
-    }),
+  useChatStore: Object.assign(
+    (selector: (state: Record<string, unknown>) => unknown) =>
+      selector({
+        activeGroupId: 'group-1',
+        importTopic: vi.fn(),
+        removeGroupTopics: removeGroupTopicsMock,
+        removeUnstarredTopic: removeUnstarredTopicMock,
+        refreshTopic: chatStoreMock.refreshTopic,
+        topics: chatStoreMock.topics,
+        updateTopicStatus: chatStoreMock.updateTopicStatus,
+      }),
+    { getState: () => chatStoreMock },
+  ),
+}));
+
+// Each topic's linked PRs come from its Work rows; a fixture's `prStatus`
+// stands for one linked PR in that state.
+vi.mock('@/services/work', () => ({
+  workService: {
+    listTopicsPullRequests: vi.fn(async (ids: string[]) =>
+      Object.fromEntries(
+        chatStoreMock.topics.flatMap((topic) =>
+          ids.includes(topic.id as string) && topic.prStatus
+            ? [
+                [
+                  topic.id,
+                  [
+                    {
+                      identifier: 'lobehub/lobehub#1',
+                      linkedAt: new Date('2026-11-20T00:00:00Z'),
+                      number: 1,
+                      repoFullName: 'lobehub/lobehub',
+                      scm: null,
+                      source: 'created',
+                      status: topic.prStatus,
+                      title: null,
+                      url: null,
+                      vouched: true,
+                      workId: 'work-1',
+                    },
+                  ],
+                ],
+              ]
+            : [],
+        ),
+      ),
+    ),
+  },
+}));
+
+vi.mock('@/store/device/gitReview/store', () => ({
+  useGitReviewStore: { getState: () => ({ gitPullRequestDetailMap: {} }) },
 }));
 
 vi.mock('@/store/chat/selectors', () => ({
@@ -142,41 +174,15 @@ describe('group useTopicActionsDropdownMenu', () => {
     expect(getMenuItem(result.current!, 'archiveMergedPullRequests')).toMatchObject({
       disabled: true,
     });
-    expect(getMenuItem(result.current!, 'deleteUnstarred')).toMatchObject({ disabled: true });
-    expect(getMenuItem(result.current!, 'deleteAll')).toMatchObject({ disabled: true });
+    expect(getMenuItem(result.current!, 'deleteUnstarred')).toBeUndefined();
+    expect(getMenuItem(result.current!, 'deleteAll')).toBeUndefined();
   });
 
-  it('keeps the personal delete-all copy and deletes through the group scope', async () => {
+  it('does not expose bulk delete actions in the topic menu', () => {
     const { result } = renderHook(() => useTopicActionsDropdownMenu());
-    const item = getMenuItem(result.current!, 'deleteAll');
 
-    expect(item).toMatchObject({ label: 'actions.removeAll' });
-    if (item && 'onClick' in item) item.onClick?.({} as never);
-
-    const [{ content, onOk, title }] = confirmModalMock.mock.calls[0];
-    expect(content).toBe('actions.confirmRemoveAll');
-    expect(title).toBe('actions.removeAll');
-    await onOk();
-    expect(removeGroupTopicsMock).toHaveBeenCalledWith('group-1', 'own');
-  });
-
-  it('uses caller-scoped delete-all copy for workspace members', async () => {
-    workspaceMock.activeWorkspaceId = 'workspace-1';
-
-    const { result } = renderHook(() => useTopicActionsDropdownMenu());
-    const item = getMenuItem(result.current!, 'deleteAll');
-
-    expect(item).toMatchObject({ label: 'actions.removeAllOwn' });
-    if (item && 'onClick' in item) item.onClick?.({} as never);
-    expect(confirmModalMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: 'actions.confirmRemoveAllOwn',
-        title: 'actions.removeAllOwn',
-      }),
-    );
-    expect(getMenuItem(result.current!, 'deleteAllWorkspace')).toBeUndefined();
-    await confirmModalMock.mock.calls[0][0].onOk();
-    expect(removeGroupTopicsMock).toHaveBeenCalledWith('group-1', 'own');
+    expect(getMenuItem(result.current!, 'deleteUnstarred')).toBeUndefined();
+    expect(getMenuItem(result.current!, 'deleteAll')).toBeUndefined();
   });
 
   it('gives workspace owners separate own and workspace maintenance actions', async () => {
@@ -185,32 +191,22 @@ describe('group useTopicActionsDropdownMenu', () => {
     chatStoreMock.topics = [
       {
         id: 'own-merged',
-        metadata: {
-          workingDirectoryConfig: { git: { github: { pullRequest: { state: 'MERGED' } } } },
-        },
+        prStatus: 'merged',
         status: 'active',
         userId: 'user-1',
       },
       {
         id: 'other-merged',
-        metadata: {
-          workingDirectoryConfig: { git: { github: { pullRequest: { state: 'MERGED' } } } },
-        },
+        prStatus: 'merged',
         status: 'active',
         userId: 'user-2',
       },
     ];
 
     const { result } = renderHook(() => useTopicActionsDropdownMenu());
-    const ownItem = getMenuItem(result.current!, 'deleteAll');
     const workspaceArchiveItem = getMenuItem(result.current!, 'archiveMergedPullRequestsWorkspace');
     const workspaceUnstarredItem = getMenuItem(result.current!, 'deleteUnstarredWorkspace');
     const workspaceItem = getMenuItem(result.current!, 'deleteAllWorkspace');
-
-    expect(ownItem).toMatchObject({ label: 'actions.removeAllOwn' });
-    if (ownItem && 'onClick' in ownItem) ownItem.onClick?.({} as never);
-    await confirmModalMock.mock.calls[0][0].onOk();
-    expect(removeGroupTopicsMock).toHaveBeenCalledWith('group-1', 'own');
 
     expect(workspaceArchiveItem).toMatchObject({
       label: 'actions.archiveMergedPullRequestsWorkspace',
@@ -219,9 +215,12 @@ describe('group useTopicActionsDropdownMenu', () => {
       workspaceArchiveItem.onClick?.({} as never);
     }
     expect(confirmModalMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ title: 'actions.confirmArchiveMergedPullRequestsWorkspace' }),
+      expect.objectContaining({
+        content: 'actions.confirmArchiveMergedPullRequestsWorkspace',
+        title: 'actions.archiveMergedPullRequestsWorkspace',
+      }),
     );
-    await confirmModalMock.mock.calls[1][0].onOk();
+    await confirmModalMock.mock.calls[0][0].onOk();
     expect(chatStoreMock.updateTopicStatus).toHaveBeenCalledTimes(2);
     expect(chatStoreMock.updateTopicStatus).toHaveBeenCalledWith({
       status: 'completed',
@@ -233,16 +232,16 @@ describe('group useTopicActionsDropdownMenu', () => {
     });
 
     expect(workspaceUnstarredItem).toMatchObject({
-      label: 'actions.removeUnstarredWorkspace',
+      label: 'actions.removeUnpinnedWorkspace',
     });
     if (workspaceUnstarredItem && 'onClick' in workspaceUnstarredItem) {
       workspaceUnstarredItem.onClick?.({} as never);
     }
     expect(openWorkspaceDeleteAllModalMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        acknowledgeText: 'actions.confirmRemoveUnstarredWorkspaceAcknowledge',
-        description: 'actions.confirmRemoveUnstarredWorkspace',
-        title: 'actions.removeUnstarredWorkspace',
+        acknowledgeText: 'actions.confirmRemoveUnpinnedWorkspaceAcknowledge',
+        description: 'actions.confirmRemoveUnpinnedWorkspace',
+        title: 'actions.removeUnpinnedWorkspace',
       }),
     );
     await openWorkspaceDeleteAllModalMock.mock.calls[0][0].onConfirm();
@@ -266,17 +265,13 @@ describe('group useTopicActionsDropdownMenu', () => {
     chatStoreMock.topics = [
       {
         id: 'own-merged',
-        metadata: {
-          workingDirectoryConfig: { git: { github: { pullRequest: { state: 'MERGED' } } } },
-        },
+        prStatus: 'merged',
         status: 'active',
         userId: 'user-1',
       },
       {
         id: 'other-merged',
-        metadata: {
-          workingDirectoryConfig: { git: { github: { pullRequest: { state: 'MERGED' } } } },
-        },
+        prStatus: 'merged',
         status: 'active',
         userId: 'user-2',
       },
@@ -284,7 +279,6 @@ describe('group useTopicActionsDropdownMenu', () => {
 
     const { result } = renderHook(() => useTopicActionsDropdownMenu());
     const archiveItem = getMenuItem(result.current!, 'archiveMergedPullRequests');
-    const deleteUnstarredItem = getMenuItem(result.current!, 'deleteUnstarred');
 
     expect(archiveItem).toMatchObject({ label: 'actions.archiveMergedPullRequestsOwn' });
     if (archiveItem && 'onClick' in archiveItem) await archiveItem.onClick?.({} as never);
@@ -294,16 +288,8 @@ describe('group useTopicActionsDropdownMenu', () => {
       topicId: 'own-merged',
     });
 
-    expect(deleteUnstarredItem).toMatchObject({ label: 'actions.removeUnstarredOwn' });
-    if (deleteUnstarredItem && 'onClick' in deleteUnstarredItem) {
-      deleteUnstarredItem.onClick?.({} as never);
-    }
-    expect(confirmModalMock.mock.calls[0][0]).toMatchObject({
-      content: 'actions.confirmRemoveUnstarredOwn',
-      title: 'actions.removeUnstarredOwn',
-    });
-    await confirmModalMock.mock.calls[0][0].onOk();
-    expect(removeUnstarredTopicMock).toHaveBeenCalledWith({ onlyOwn: true });
+    expect(getMenuItem(result.current!, 'deleteUnstarred')).toBeUndefined();
+    expect(getMenuItem(result.current!, 'deleteAll')).toBeUndefined();
     expect(getMenuItem(result.current!, 'archiveMergedPullRequestsWorkspace')).toBeUndefined();
     expect(getMenuItem(result.current!, 'deleteUnstarredWorkspace')).toBeUndefined();
   });
@@ -312,32 +298,22 @@ describe('group useTopicActionsDropdownMenu', () => {
     chatStoreMock.topics = [
       {
         id: 'merged',
-        metadata: {
-          workingDirectoryConfig: { git: { github: { pullRequest: { state: 'MERGED' } } } },
-        },
+        prStatus: 'merged',
         status: 'active',
       },
       {
         id: 'open',
-        metadata: {
-          workingDirectoryConfig: { git: { github: { pullRequest: { state: 'OPEN' } } } },
-        },
+        prStatus: 'open',
         status: 'active',
       },
       {
         id: 'completed',
-        metadata: {
-          workingDirectoryConfig: {
-            git: { github: { pullRequest: { mergedAt: '2026-07-10T00:00:00Z' } } },
-          },
-        },
+        prStatus: 'merged',
         status: 'completed',
       },
       {
         id: 'unread',
-        metadata: {
-          workingDirectoryConfig: { git: { github: { pullRequest: { state: 'MERGED' } } } },
-        },
+        prStatus: 'merged',
         status: 'unread',
       },
     ];

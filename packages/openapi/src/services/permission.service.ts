@@ -1,12 +1,13 @@
 import { and, count, desc, eq, ilike, or } from 'drizzle-orm';
 
-import type { PermissionItem } from '@/database/schemas/rbac';
 import { permissions, rolePermissions } from '@/database/schemas/rbac';
 import type { LobeChatDatabase } from '@/database/type';
 
 import { BaseService } from '../common/base.service';
 import { processPaginationConditions } from '../helpers/pagination';
+import { projectPublicPermission, type PublicPermission } from '../helpers/public-fields';
 import type { ServiceResult } from '../types';
+import type { DeletedResource } from '../types/common.type';
 import type {
   CreatePermissionRequest,
   PermissionsListQuery,
@@ -61,7 +62,7 @@ export class PermissionService extends BaseService {
       const [listResult, totalResult] = await Promise.all([listQuery, countQuery]);
 
       return {
-        permissions: listResult,
+        permissions: listResult.map(projectPublicPermission),
         total: totalResult[0]?.count || 0,
       };
     } catch (error) {
@@ -72,13 +73,13 @@ export class PermissionService extends BaseService {
   /**
    * Get permission detail by ID
    */
-  async getPermissionById(id: string): ServiceResult<PermissionItem | null> {
+  async getPermissionById(id: string): ServiceResult<PublicPermission | null> {
     try {
       const permission = await this.db.query.permissions.findFirst({
         where: eq(permissions.id, id),
       });
 
-      return permission || null;
+      return permission ? projectPublicPermission(permission) : null;
     } catch (error) {
       this.handleServiceError(error, '获取权限详情');
     }
@@ -87,7 +88,7 @@ export class PermissionService extends BaseService {
   /**
    * Create a new permission record
    */
-  async createPermission(payload: CreatePermissionRequest): ServiceResult<PermissionItem> {
+  async createPermission(payload: CreatePermissionRequest): ServiceResult<PublicPermission> {
     try {
       // Ensure permission code is unique
       const existing = await this.db.query.permissions.findFirst({
@@ -109,7 +110,7 @@ export class PermissionService extends BaseService {
         })
         .returning();
 
-      return created;
+      return projectPublicPermission(created);
     } catch (error) {
       this.handleServiceError(error, '创建权限');
     }
@@ -121,7 +122,7 @@ export class PermissionService extends BaseService {
   async updatePermission(
     id: string,
     payload: UpdatePermissionRequest,
-  ): ServiceResult<PermissionItem> {
+  ): ServiceResult<PublicPermission> {
     try {
       const existingPermission = await this.db.query.permissions.findFirst({
         where: eq(permissions.id, id),
@@ -160,7 +161,7 @@ export class PermissionService extends BaseService {
         .where(eq(permissions.id, id))
         .returning();
 
-      return updated;
+      return projectPublicPermission(updated);
     } catch (error) {
       this.handleServiceError(error, '更新权限');
     }
@@ -169,7 +170,7 @@ export class PermissionService extends BaseService {
   /**
    * Delete permission by ID
    */
-  async deletePermission(id: string): ServiceResult<{ id: string }> {
+  async deletePermission(id: string): ServiceResult<DeletedResource> {
     try {
       const existingPermission = await this.db.query.permissions.findFirst({
         where: eq(permissions.id, id),
@@ -197,7 +198,7 @@ export class PermissionService extends BaseService {
         throw this.createBusinessError('Failed to delete permission');
       }
 
-      return deleted;
+      return { deleted: true, id: deleted.id };
     } catch (error) {
       this.handleServiceError(error, '删除权限');
     }

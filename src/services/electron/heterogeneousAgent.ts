@@ -1,10 +1,23 @@
 import type {
+  ClaudeCodeAccountResolution,
+  ClaudeCodeLocalAccount,
   ClaudeCodeQuotaSnapshot,
   CodexQuotaSnapshot,
   CodexRateLimitResetResult,
+  KimiCodeQuotaSnapshot,
 } from '@lobechat/electron-client-ipc';
 import type {
+  HeterogeneousAgentType,
+  HeterogeneousProviderBindingReference,
+} from '@lobechat/heterogeneous-agents';
+import type {
+  AntigravityQuotaParams,
+  AntigravityQuotaSnapshot,
+} from '@lobechat/heterogeneous-agents/quota';
+import type {
+  CodexCollaborationMode,
   HeterogeneousAgentModelCatalog,
+  HeteroPermissionMode,
   HeteroSessionImportMessage,
   ListHeterogeneousAgentModelsParams,
 } from '@lobechat/types';
@@ -20,22 +33,43 @@ class HeterogeneousAgentService {
   }
 
   async startSession(params: {
-    agentType?: string;
+    agentType?: HeterogeneousAgentType;
     args?: string[];
     command: string;
     cwd?: string;
     env?: Record<string, string>;
+    initialModel?: string;
+    providerBinding?: HeterogeneousProviderBindingReference;
     resumeSessionId?: string;
     useClaudeCodeSdk?: boolean;
+    useCodexAppServer?: boolean;
   }) {
     return this.ipc.heterogeneousAgent.startSession(params);
   }
 
   async sendPrompt(params: {
     agentId?: string;
+    /** Assistant row this run streams into — recorded in the in-flight ledger. */
+    assistantMessageId?: string;
+    /** User the run belongs to — recovery is user-scoped. */
+    userId?: string;
+    /** Workspace the run belongs to — recovery is workspace-scoped. */
+    workspaceId?: string;
     imageList?: Array<{ id: string; url: string }>;
     operationId: string;
+    /** Claude Code permission mode; absent allows everything. */
+    permissionMode?: HeteroPermissionMode;
+    /** Codex Plan switch; absent sends no collaboration mode. */
+    collaborationMode?: CodexCollaborationMode;
     prompt: string;
+    /**
+     * Replay the session's on-disk transcript instead of spawning the CLI.
+     * Desktop main resolves with `{ replay: { complete } }`.
+     */
+    replayTranscript?: boolean;
+    /** Claude profile root the transcript was written under (restart recovery). */
+    replayTranscriptConfigDir?: string;
+    replayTranscriptStartedAt?: string;
     /** Prior turns used to rebuild a GC-ed Claude Code transcript before `--resume`. */
     resumeReplayMessages?: HeteroSessionImportMessage[];
     sessionId: string;
@@ -45,8 +79,38 @@ class HeterogeneousAgentService {
     return this.ipc.heterogeneousAgent.sendPrompt(params);
   }
 
+  /**
+   * Deliver a message into the session's running turn (Follow-up behavior:
+   * Steer). `accepted` means it was written; the agent confirms reading it
+   * with a `step_complete { phase: 'user_message' }` event naming `messageId`
+   * (or, for Pi, its text). Throws when the outcome is unknown.
+   */
+  async steerSession(params: {
+    imageList?: Array<{ id: string; url: string }>;
+    messageId: string;
+    prompt: string;
+    sessionId: string;
+  }): Promise<{ deliveredText?: string; status: 'accepted' | 'rejected' | 'unsupported' }> {
+    return this.ipc.heterogeneousAgent.steerSession(params);
+  }
+
   async cancelSession(sessionId: string) {
     return this.ipc.heterogeneousAgent.cancelSession({ sessionId });
+  }
+
+  /** Stop one background task of a local Claude Code SDK run. */
+  async stopBackgroundTask(sessionId: string, taskId: string) {
+    return this.ipc.heterogeneousAgent.stopBackgroundTask({ sessionId, taskId });
+  }
+
+  /** Switch a local Claude Code run's permission mode (the composer's mode chip). */
+  async setPermissionMode(sessionId: string, mode: HeteroPermissionMode) {
+    return this.ipc.heterogeneousAgent.setPermissionMode({ mode, sessionId });
+  }
+
+  /** Flip a local native Codex thread's Plan switch; it applies from the next turn. */
+  async setCollaborationMode(sessionId: string, mode: CodexCollaborationMode) {
+    return this.ipc.heterogeneousAgent.setCollaborationMode({ mode, sessionId });
   }
 
   async stopSession(sessionId: string) {
@@ -57,10 +121,50 @@ class HeterogeneousAgentService {
     return this.ipc.heterogeneousAgent.getSessionInfo({ sessionId });
   }
 
+  /**
+   * Local CLI runs the previous desktop process left in flight, handed over
+   * once. Main reaps any surviving process before returning.
+   */
+  /**
+   * Local CLI runs the previous desktop process left in flight, handed over
+   * once. Only runs belonging to this user AND workspace are released: topic
+   * lookups are scoped to both, so an entry recorded elsewhere has to stay on
+   * the ledger until the launch that owns it.
+   */
+  async listInterruptedRuns(owner: { userId?: string; workspaceId?: string }) {
+    return this.ipc.heterogeneousAgent.listInterruptedRuns(owner);
+  }
+
+  /**
+   * Give a claimed run back once its recovery has an outcome. Until this call
+   * the entry stays on the ledger, so a crash mid-recovery can retry it.
+   */
+  async releaseInterruptedRun(ipcSessionId: string) {
+    return this.ipc.heterogeneousAgent.releaseInterruptedRun({ ipcSessionId });
+  }
+
+  /** Whether the on-disk CLI transcript for a run can be replayed, without spawning anything. */
+  async probeTranscriptReplay(params: {
+    agentType: string;
+    configDir?: string;
+    cwd?: string;
+    /** Prompt of the interrupted run; a transcript ending on a different turn is rejected. */
+    expectedPrompt?: string;
+    /** ISO spawn time of the interrupted run; a turn recorded before it is not this run's. */
+    notBefore?: string;
+    sessionId?: string;
+  }): Promise<{ available: boolean; complete?: boolean; reason?: string }> {
+    return this.ipc.heterogeneousAgent.probeTranscriptReplay(params);
+  }
+
   async listModels(
     params: ListHeterogeneousAgentModelsParams,
   ): Promise<HeterogeneousAgentModelCatalog> {
     return this.ipc.heterogeneousAgent.listModels(params);
+  }
+
+  async getAntigravityQuota(params?: AntigravityQuotaParams): Promise<AntigravityQuotaSnapshot> {
+    return this.ipc.heterogeneousAgent.getAntigravityQuota(params);
   }
 
   async getCodexQuota(params?: {
@@ -87,6 +191,14 @@ class HeterogeneousAgentService {
     return this.ipc.heterogeneousAgent.getClaudeCodeQuota(params);
   }
 
+  async getKimiCodeQuota(params?: {
+    env?: Record<string, string>;
+    force?: boolean;
+    kimiCodeHomePath?: string | null;
+  }): Promise<KimiCodeQuotaSnapshot> {
+    return this.ipc.heterogeneousAgent.getKimiCodeQuota(params);
+  }
+
   /**
    * Identity of the Claude login a spawn with this env would use — a pure
    * local file read, safe to call once per run for usage attribution.
@@ -95,6 +207,30 @@ class HeterogeneousAgentService {
     env?: Record<string, string>;
   }): Promise<ClaudeCodeQuotaSnapshot['identity']> {
     return this.ipc.heterogeneousAgent.getClaudeCodeIdentity(params);
+  }
+
+  /** Every Claude Code account signed in on this machine (default login first). */
+  async listClaudeCodeAccounts(): Promise<ClaudeCodeLocalAccount[]> {
+    return this.ipc.heterogeneousAgent.listClaudeCodeAccounts();
+  }
+
+  /** The local login a run for this provider account must spawn with. */
+  async resolveClaudeCodeAccount(externalAccountId: string): Promise<ClaudeCodeAccountResolution> {
+    return this.ipc.heterogeneousAgent.resolveClaudeCodeAccount({ externalAccountId });
+  }
+
+  /** External-provider routing flags a session spawn inherits from the desktop's env. */
+  async getClaudeCodeInheritedRoutingEnv(): Promise<Record<string, string>> {
+    return this.ipc.heterogeneousAgent.getClaudeCodeInheritedRoutingEnv();
+  }
+
+  /** Sign an account in to its own profile; resolves once the browser login completes. */
+  async loginClaudeCodeAccount(params?: { email?: string }): Promise<ClaudeCodeLocalAccount> {
+    return this.ipc.heterogeneousAgent.loginClaudeCodeAccount(params);
+  }
+
+  async cancelClaudeCodeAccountLogin(): Promise<boolean> {
+    return this.ipc.heterogeneousAgent.cancelClaudeCodeAccountLogin();
   }
 
   /**

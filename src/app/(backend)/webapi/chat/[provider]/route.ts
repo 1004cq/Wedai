@@ -1,142 +1,61 @@
-import { AGENT_RUNTIME_ERROR_SET, type ChatCompletionErrorPayload } from '@lobechat/model-runtime';
-import { ChatErrorType, type ModelTokensUsage } from '@lobechat/types';
-import { eq } from 'drizzle-orm';
+import { REQUEST_TOPIC_ID_HEADER } from '@lobechat/const';
+import { type ChatCompletionErrorPayload } from '@lobechat/model-runtime';
+import { AGENT_RUNTIME_ERROR_SET, awaitFirstResponseChunk } from '@lobechat/model-runtime';
+import { ChatErrorType } from '@lobechat/types';
 
 import { checkAuth } from '@/app/(backend)/middleware/auth';
-import {
-  chargeAfterChat,
-  chargeBeforeChat,
-  InsufficientBalanceError,
-} from '@/business/server/chat-billing';
-import { users } from '@/database/schemas';
-import { createTraceOptions, initModelRuntimeFromDB } from '@/server/modules/ModelRuntime';
+import { initModelRuntimeForRequest } from '@/server/modules/AgentRuntime/llmRelay/oneShot';
+import { runRouteWithLlmRelayRequest } from '@/server/modules/AgentRuntime/llmRelay/requestScope';
+import { createTraceOptions } from '@/server/modules/ModelRuntime';
 import { type ChatStreamPayload } from '@/types/openai/chat';
 import { createErrorResponse } from '@/utils/errorResponse';
 import { getTracePayload } from '@/utils/trace';
 
 import { resolveValidWorkspaceIdFromRequest } from '../../_utils/workspace';
 
+// If user don't use fluid compute, will build  failed
+// this enforce user to enable fluid compute
 export const maxDuration = 300;
 
 export const POST = checkAuth(async (req: Request, { params, userId, serverDB }) => {
   const provider = (await params)!.provider!;
-  const requestId = req.headers.get('x-request-id') ?? crypto.randomUUID();
 
   try {
     const workspaceId = await resolveValidWorkspaceIdFromRequest({ req, serverDB, userId });
 
-    // ============  0. banned check  ============ //
-    const [userRow] = await serverDB
-      .select({ banned: users.banned })
-      .from(users)
-      .where(eq(users.id, userId))
-      .limit(1);
-    if (userRow?.banned) {
-      return createErrorResponse(ChatErrorType.Forbidden, {
-        error: { message: 'Account suspended' },
-        provider,
+    // A provider only the user's device reaches is relayed back to the
+    // requesting tab (one-shot relay); the channel stays open while the
+    // response streams.
+    return await runRouteWithLlmRelayRequest(req, userId, async () => {
+      // ============  1. init chat model   ============ //
+      const modelRuntime = await initModelRuntimeForRequest(serverDB, userId, provider, {
+        workspaceId,
       });
-    }
 
-    // ============  1. init chat model  ============ //
-    const modelRuntime = await initModelRuntimeFromDB(serverDB, userId, provider, workspaceId);
+      // ============  2. create chat completion   ============ //
 
-    // ============  2. parse payload  ============ //
-    const data = (await req.json()) as ChatStreamPayload;
-    const modelId = data.model ?? '';
+      const data = (await req.json()) as ChatStreamPayload;
 
-    // ============  3. billing: pre-flight hold  ============ //
-    // Determines BYOK vs platform; if platform, atomically reserves credits.
-    // Throws InsufficientBalanceError if balance < estimate.
-    // Platform admin/env keys are not BYOK. Until we pass an explicit
-    // "user vault has apiKey" flag from initModelRuntimeFromDB, never mark
-    // BYOK here — otherwise platform proxy URLs look like user keys.
-    const billingContext = await chargeBeforeChat({
-      db: serverDB,
-      estimatedPromptTokens: estimatePromptTokens(data),
-      maxCompletionTokens: data.max_tokens ?? 4096,
-      modelId,
-      provider,
-      requestId,
-      userId,
-      userHasProviderKey: false,
-    });
+      const tracePayload = getTracePayload(req);
 
-    // ============  4. create chat completion  ============ //
-    const tracePayload = getTracePayload(req);
-    let traceOptions = {};
-    if (tracePayload?.enabled) {
-      traceOptions = createTraceOptions(data, { provider, trace: tracePayload });
-    }
+      let traceOptions = {};
+      // If user enable trace
+      if (tracePayload?.enabled) {
+        traceOptions = createTraceOptions(data, { provider, trace: tracePayload });
+      }
 
-    // Capture actual token usage from the stream via onUsage callback.
-    // This gives us real numbers for settlement rather than the pre-flight estimate.
-    let capturedUsage: ModelTokensUsage | undefined;
-
-    let response: Response;
-    try {
-      response = await modelRuntime.chat(data, {
-        ...traceOptions,
-        callback: {
-          onUsage: (usage) => {
-            capturedUsage = usage;
-          },
-        },
-        signal: req.signal,
+      const response = await modelRuntime.chat(data, {
         user: userId,
+        ...traceOptions,
+        metadata: { topicId: req.headers.get(REQUEST_TOPIC_ID_HEADER) ?? undefined },
+        signal: req.signal,
       });
-    } catch (providerError) {
-      // ============  5a. provider error / client abort: release hold  ============ //
-      await chargeAfterChat({
-        billingContext,
-        db: serverDB,
-        modelId,
-        provider,
-        success: false,
-        userId,
-      });
-      throw providerError;
-    }
 
-    // ============  5b. success: settle credits  ============ //
-    // For streaming responses, onUsage fires when the stream closes.
-    // If onUsage didn't fire (provider doesn't report usage), fall back to
-    // the x-usage header, then to the pre-flight estimate.
-    const usageHeader = response.headers.get('x-usage-total-tokens');
-    const rawUsage = capturedUsage
-      ? {
-          completionTokens: capturedUsage.outputTextTokens,
-          promptTokens: capturedUsage.inputTextTokens,
-          totalTokens: capturedUsage.totalTokens,
-        }
-      : usageHeader
-        ? { totalTokens: Number.parseInt(usageHeader, 10) }
-        : { totalTokens: estimatePromptTokens(data) + (data.max_tokens ?? 4096) };
-
-    // Fire-and-forget: don't block the streaming response.
-    // The stale-hold reaper handles the rare crash-between-response-and-settle case.
-    void chargeAfterChat({
-      billingContext,
-      db: serverDB,
-      modelId,
-      provider,
-      rawUsage,
-      success: true,
-      userId,
+      // A routed chat can fail before its first byte (e.g. an empty completion); surface that
+      // as the structured error below instead of the framework's 500 page.
+      return await awaitFirstResponseChunk(response);
     });
-
-    return response;
   } catch (e) {
-    if (e instanceof InsufficientBalanceError) {
-      // Use InsufficientBudgetForModel — the existing error type the frontend
-      // PlanLimitCard component recognises.
-      return createErrorResponse(ChatErrorType.InsufficientBudgetForModel, {
-        budget: { pricingBasis: 'estimated' },
-        error: { message: e.message },
-        provider,
-      });
-    }
-
     const {
       errorType = ChatErrorType.InternalServerError,
       error: errorContent,
@@ -145,6 +64,7 @@ export const POST = checkAuth(async (req: Request, { params, userId, serverDB })
 
     const error = errorContent || e;
 
+    // track the error at server side
     if (AGENT_RUNTIME_ERROR_SET.has(errorType as string)) {
       console.warn(`Route: [${provider}] ${errorType}:`, error);
     } else {
@@ -154,26 +74,3 @@ export const POST = checkAuth(async (req: Request, { params, userId, serverDB })
     return createErrorResponse(errorType, { error, ...res, provider });
   }
 });
-
-/**
- * Rough prompt token estimate from message content length.
- * Used only for pre-flight credit estimation (hold amount).
- * The actual charge uses provider-reported usage via onUsage callback.
- */
-function estimatePromptTokens(data: ChatStreamPayload): number {
-  const messages = data.messages ?? [];
-  let charCount = 0;
-  for (const msg of messages) {
-    if (typeof msg.content === 'string') {
-      charCount += msg.content.length;
-    } else if (Array.isArray(msg.content)) {
-      for (const part of msg.content) {
-        if (typeof part === 'string') charCount += part.length;
-        else if (part && typeof part === 'object' && 'text' in part)
-          charCount += (part.text as string)?.length ?? 0;
-      }
-    }
-  }
-  // ~4 chars per token is a conservative English estimate
-  return Math.max(1, Math.ceil(charCount / 4));
-}

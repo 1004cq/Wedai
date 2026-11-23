@@ -33,7 +33,8 @@ vi.mock('react-router', () => ({
   useSearchParams: () => [{ get: mockSearchParamsGet }],
 }));
 
-vi.mock('@lobehub/ui/base-ui', () => ({
+vi.mock('@lobehub/ui', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   toast: { error: mockMessageError, success: mockMessageSuccess },
 }));
 
@@ -54,6 +55,7 @@ vi.mock('@/libs/better-auth/utils/client', () => ({
 
 vi.mock('@lobechat/business-const', () => ({
   BRANDING_NAME: 'LobeHub',
+  ORG_NAME: 'LobeHub',
 }));
 
 vi.mock('@/business/client/hooks/useBusinessSignin', () => ({
@@ -66,7 +68,7 @@ vi.mock('@/business/client/hooks/useBusinessSignin', () => ({
 
 let mockEnableBusinessFeatures = false;
 let mockEnableMagicLink = false;
-vi.mock('@/features/AuthShell', () => ({
+vi.mock('@/features/AuthShell/AuthServerConfigProvider', () => ({
   useAuthServerConfigStore: (selector: (s: any) => any) =>
     selector({
       serverConfig: {
@@ -79,31 +81,17 @@ vi.mock('@/features/AuthShell', () => ({
     }),
 }));
 
-const mockSetFieldValue = vi.fn();
-const mockGetFieldValue = vi.fn();
-const mockValidateFields = vi.fn();
-const mockSetFields = vi.fn();
-const mockResetFields = vi.fn();
-const mockSubmit = vi.fn();
-vi.mock('antd', async () => {
-  const actual: any = await vi.importActual('antd');
-  return {
-    ...actual,
-    Form: {
-      ...actual.Form,
-      useForm: () => [
-        {
-          getFieldValue: mockGetFieldValue,
-          resetFields: mockResetFields,
-          setFields: mockSetFields,
-          setFieldValue: mockSetFieldValue,
-          submit: mockSubmit,
-          validateFields: mockValidateFields,
-        },
-      ],
-    },
-  };
-});
+const mockForm = vi.hoisted(() => ({
+  getValue: vi.fn(),
+  getValues: vi.fn(() => ({ email: 'user@example.com', password: 'stale' })),
+  reset: vi.fn(),
+  setErrors: vi.fn(),
+  setValue: vi.fn(),
+  validate: vi.fn(),
+}));
+vi.mock('@lobehub/ui/form', () => ({
+  useForm: () => mockForm,
+}));
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -123,7 +111,7 @@ describe('useSignIn', () => {
     mockBusinessSignin.preSocialSigninCheck.mockResolvedValue(true);
     Object.defineProperty(window, 'location', {
       configurable: true,
-      value: { ...originalLocation, href: '' },
+      value: { ...originalLocation, href: '', origin: originalLocation.origin },
       writable: true,
     });
   });
@@ -220,7 +208,11 @@ describe('useSignIn', () => {
         await result.current.handleCheckUser({ email: 'unknownuser' });
       });
 
-      expect(mockMessageError).toHaveBeenCalled();
+      // Pinned under the email field with a next step, not a corner toast
+      expect(mockForm.setErrors).toHaveBeenCalledWith({
+        email: expect.stringContaining('usernameNotFound'),
+      });
+      expect(mockMessageError).not.toHaveBeenCalled();
       expect(result.current.step).toBe('email');
     });
 
@@ -231,7 +223,10 @@ describe('useSignIn', () => {
         await result.current.handleCheckUser({ email: 'invalid email!@#' });
       });
 
-      expect(mockMessageError).toHaveBeenCalled();
+      expect(mockForm.setErrors).toHaveBeenCalledWith({
+        email: expect.stringContaining('emailInvalid'),
+      });
+      expect(mockMessageError).not.toHaveBeenCalled();
       expect(mockFetch).not.toHaveBeenCalled();
     });
   });
@@ -261,6 +256,7 @@ describe('useSignIn', () => {
 
       expect(mockSignInEmail).toHaveBeenCalledWith(
         expect.objectContaining({
+          callbackURL: `${originalLocation.origin}/`,
           email: 'user@example.com',
           password: 'password123',
         }),
@@ -319,16 +315,16 @@ describe('useSignIn', () => {
       });
 
       // Error is pinned inline on the password field, not shown as a toast
-      expect(mockSetFields).toHaveBeenCalledWith([
-        { errors: ['Invalid credentials'], name: 'password' },
-      ]);
+      expect(mockForm.setErrors).toHaveBeenCalledWith({ password: 'Invalid credentials' });
       expect(mockMessageError).not.toHaveBeenCalled();
     });
 
-    it('should show the password error on 403 instead of redirecting to verify-email', async () => {
+    it('should redirect to verify-email when the email is not verified', async () => {
       mockSignInEmail.mockImplementation(async (_data: any, opts: any) => {
-        opts.onError({ error: { message: 'Email not verified', status: 403 } });
-        return { error: { message: 'Email not verified', status: 403 } };
+        opts.onError({ error: { code: 'EMAIL_NOT_VERIFIED', status: 403 } });
+        return {
+          error: { code: 'EMAIL_NOT_VERIFIED', message: 'Email not verified', status: 403 },
+        };
       });
 
       mockFetch.mockResolvedValueOnce({
@@ -346,16 +342,65 @@ describe('useSignIn', () => {
         await result.current.handleSignIn({ password: 'password' });
       });
 
-      expect(mockNavigate).not.toHaveBeenCalledWith(
-        expect.stringContaining('/verify-email'),
+      expect(mockNavigate).toHaveBeenCalledWith(
+        expect.stringContaining('/verify-email?email=user%40example.com'),
       );
-      expect(mockSetFields).toHaveBeenCalledWith([
-        { errors: ['Email not verified'], name: 'password' },
-      ]);
+      expect(mockForm.setErrors).not.toHaveBeenCalled();
+    });
+
+    it('should surface a non-verification 403 inline instead of redirecting', async () => {
+      mockSignInEmail.mockImplementation(async (_data: any, opts: any) => {
+        opts.onError({ error: { code: 'BANNED_USER', status: 403 } });
+        return { error: { code: 'BANNED_USER', message: 'You have been banned', status: 403 } };
+      });
+
+      mockFetch.mockResolvedValueOnce({
+        json: async () => ({ exists: true, hasPassword: true }),
+        ok: true,
+      });
+
+      const { result } = renderHook(() => useSignIn());
+
+      await act(async () => {
+        await result.current.handleCheckUser({ email: 'user@example.com' });
+      });
+
+      await act(async () => {
+        await result.current.handleSignIn({ password: 'password' });
+      });
+
+      expect(mockNavigate).not.toHaveBeenCalled();
+      expect(mockForm.setErrors).toHaveBeenCalledWith({ password: 'You have been banned' });
     });
   });
 
   describe('handleSocialSignIn', () => {
+    it('should bind relative OAuth callbacks to the current auth origin', async () => {
+      const authOrigin = 'https://auth.example.com';
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: { ...originalLocation, href: `${authOrigin}/signin`, origin: authOrigin },
+        writable: true,
+      });
+      mockSearchParamsGet.mockImplementation((key: string) =>
+        key === 'callbackUrl' ? '/workspace?tab=members' : null,
+      );
+      mockSignInSocial.mockResolvedValue({ url: 'https://google.com/auth' });
+
+      const { result } = renderHook(() => useSignIn());
+
+      await act(async () => {
+        await result.current.handleSocialSignIn('google');
+      });
+
+      expect(mockSignInSocial).toHaveBeenCalledWith(
+        expect.objectContaining({
+          callbackURL: `${authOrigin}/workspace?tab=members`,
+          newUserCallbackURL: `${authOrigin}/onboarding?callbackUrl=%2Fworkspace%3Ftab%3Dmembers`,
+        }),
+      );
+    });
+
     it('should call signIn.social for builtin providers', async () => {
       mockSignInSocial.mockResolvedValue({ url: 'https://google.com/auth' });
 
@@ -366,7 +411,10 @@ describe('useSignIn', () => {
       });
 
       expect(mockSignInSocial).toHaveBeenCalledWith(
-        expect.objectContaining({ newUserCallbackURL: '/onboarding', provider: 'google' }),
+        expect.objectContaining({
+          newUserCallbackURL: `${originalLocation.origin}/onboarding`,
+          provider: 'google',
+        }),
       );
       expect(mockMessageError).not.toHaveBeenCalled();
     });
@@ -381,7 +429,28 @@ describe('useSignIn', () => {
       });
 
       expect(mockSignInOauth2).toHaveBeenCalledWith(
-        expect.objectContaining({ newUserCallbackURL: '/onboarding', providerId: 'custom-oidc' }),
+        expect.objectContaining({
+          newUserCallbackURL: `${originalLocation.origin}/onboarding`,
+          providerId: 'custom-oidc',
+        }),
+      );
+    });
+
+    it('should preserve a mobile app callback scheme', async () => {
+      const mobileCallbackUrl = 'com.lobehub.app:///auth/callback';
+      mockSearchParamsGet.mockImplementation((key: string) =>
+        key === 'callbackUrl' ? mobileCallbackUrl : null,
+      );
+      mockSignInSocial.mockResolvedValue({ url: 'https://google.com/auth' });
+
+      const { result } = renderHook(() => useSignIn());
+
+      await act(async () => {
+        await result.current.handleSocialSignIn('google');
+      });
+
+      expect(mockSignInSocial).toHaveBeenCalledWith(
+        expect.objectContaining({ callbackURL: mobileCallbackUrl }),
       );
     });
 
@@ -413,7 +482,9 @@ describe('useSignIn', () => {
         await result.current.handleSocialSignIn('google');
       });
 
-      expect(mockMessageError).toHaveBeenCalled();
+      // Explained under the provider buttons instead of a toast
+      expect(result.current.socialErrorProvider).toBe('google');
+      expect(mockMessageError).not.toHaveBeenCalled();
     });
 
     it('should not retry social sign in when captcha is returned unexpectedly', async () => {
@@ -428,7 +499,7 @@ describe('useSignIn', () => {
       });
 
       expect(mockSignInSocial).toHaveBeenCalledTimes(1);
-      expect(mockMessageError).toHaveBeenCalled();
+      expect(result.current.socialErrorProvider).toBe('google');
     });
 
     it('should save last auth provider to localStorage', async () => {
@@ -482,13 +553,13 @@ describe('useSignIn', () => {
       expect(result.current.isSocialOnly).toBe(false);
       // The shared form's password (+ any inline error) must be cleared so the
       // next email doesn't remount pre-filled with the previous account's value.
-      expect(mockResetFields).toHaveBeenCalledWith(['password']);
+      expect(mockForm.reset).toHaveBeenCalledWith({ email: 'user@example.com', password: '' });
     });
   });
 
   describe('handleForgotPassword', () => {
     it('should call requestPasswordReset and land on the email-sent state', async () => {
-      mockRequestPasswordReset.mockResolvedValue(undefined);
+      mockRequestPasswordReset.mockResolvedValue({ data: { status: true }, error: null });
 
       mockFetch.mockResolvedValueOnce({
         json: async () => ({ exists: true, hasPassword: true }),
@@ -507,7 +578,10 @@ describe('useSignIn', () => {
       });
 
       expect(mockRequestPasswordReset).toHaveBeenCalledWith(
-        expect.objectContaining({ email: 'user@example.com' }),
+        expect.objectContaining({
+          email: 'user@example.com',
+          redirectTo: `${originalLocation.origin}/reset-password?email=user%40example.com`,
+        }),
       );
       // Success is a persistent landing state, not a fleeting toast
       expect(result.current.step).toBe('emailSent');
@@ -525,6 +599,37 @@ describe('useSignIn', () => {
 
       expect(mockRequestPasswordReset).not.toHaveBeenCalled();
       expect(result.current.step).toBe('email');
+    });
+
+    // The better-auth client resolves with `{ data, error }` rather than
+    // throwing, so a rejected-promise test alone leaves the failure branch
+    // unreachable and a failed send lands on the "email sent" screen.
+    it('should show error and stay put when the client resolves with an error', async () => {
+      mockRequestPasswordReset.mockResolvedValue({
+        data: null,
+        error: { message: 'Email provider rejected the request', status: 503 },
+      });
+
+      mockFetch.mockResolvedValueOnce({
+        json: async () => ({ exists: true, hasPassword: true }),
+        ok: true,
+      });
+
+      const { result } = renderHook(() => useSignIn());
+
+      await act(async () => {
+        await result.current.handleCheckUser({ email: 'user@example.com' });
+      });
+
+      await act(async () => {
+        await result.current.handleForgotPassword();
+      });
+
+      // Shown under the Forgot password link, not as a toast
+      expect(result.current.sendError).toContain('resetEmailFailed');
+      expect(mockMessageError).not.toHaveBeenCalled();
+      expect(result.current.step).toBe('password');
+      expect(result.current.sentInfo).toBeNull();
     });
 
     it('should show error on failure', async () => {
@@ -545,7 +650,8 @@ describe('useSignIn', () => {
         await result.current.handleForgotPassword();
       });
 
-      expect(mockMessageError).toHaveBeenCalled();
+      expect(result.current.sendError).toContain('resetEmailFailed');
+      expect(mockMessageError).not.toHaveBeenCalled();
       expect(result.current.step).toBe('password');
     });
   });
@@ -566,6 +672,12 @@ describe('useSignIn', () => {
       });
 
       expect(mockSignInMagicLink).toHaveBeenCalledTimes(1);
+      expect(mockSignInMagicLink).toHaveBeenCalledWith(
+        expect.objectContaining({
+          callbackURL: `${originalLocation.origin}/`,
+          newUserCallbackURL: `${originalLocation.origin}/onboarding`,
+        }),
+      );
       expect(result.current.step).toBe('emailSent');
       expect(result.current.sentInfo).toEqual(
         expect.objectContaining({ email: 'user@example.com', type: 'magicLink' }),
@@ -573,9 +685,59 @@ describe('useSignIn', () => {
     });
   });
 
+  describe('magic link failures', () => {
+    it('should pin a failed first send to the email field', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      mockEnableMagicLink = true;
+      mockSignInMagicLink.mockResolvedValue({ error: { message: 'smtp down', status: 500 } });
+      mockFetch.mockResolvedValueOnce({
+        json: async () => ({ exists: true, hasPassword: false }),
+        ok: true,
+      });
+
+      const { result } = renderHook(() => useSignIn());
+
+      await act(async () => {
+        await result.current.handleCheckUser({ email: 'user@example.com' });
+      });
+
+      expect(mockForm.setErrors).toHaveBeenCalledWith({
+        email: expect.stringContaining('magicLinkFailed'),
+      });
+      expect(result.current.step).toBe('email');
+      expect(mockMessageError).not.toHaveBeenCalled();
+    });
+
+    it('should show a failed resend under the Resend button on the inbox screen', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      mockEnableMagicLink = true;
+      mockSignInMagicLink.mockResolvedValueOnce({ error: null });
+      mockFetch.mockResolvedValueOnce({
+        json: async () => ({ exists: true, hasPassword: false }),
+        ok: true,
+      });
+
+      const { result } = renderHook(() => useSignIn());
+
+      await act(async () => {
+        await result.current.handleCheckUser({ email: 'user@example.com' });
+      });
+      expect(result.current.step).toBe('emailSent');
+
+      mockSignInMagicLink.mockResolvedValueOnce({ error: { message: 'smtp down', status: 500 } });
+      await act(async () => {
+        await result.current.handleResendEmail();
+      });
+
+      expect(result.current.sendError).toContain('magicLinkFailed');
+      expect(mockMessageError).not.toHaveBeenCalled();
+      expect(mockMessageSuccess).not.toHaveBeenCalled();
+    });
+  });
+
   describe('handleResendEmail', () => {
     it('should resend the password reset email and confirm', async () => {
-      mockRequestPasswordReset.mockResolvedValue(undefined);
+      mockRequestPasswordReset.mockResolvedValue({ data: { status: true }, error: null });
       mockFetch.mockResolvedValueOnce({
         json: async () => ({ exists: true, hasPassword: true }),
         ok: true,
@@ -604,7 +766,7 @@ describe('useSignIn', () => {
 
   describe('handleBackFromSent', () => {
     it('should return to the email entry (not the password step) after a reset email', async () => {
-      mockRequestPasswordReset.mockResolvedValue(undefined);
+      mockRequestPasswordReset.mockResolvedValue({ data: { status: true }, error: null });
       mockFetch.mockResolvedValueOnce({
         json: async () => ({ exists: true, hasPassword: true }),
         ok: true,
@@ -630,7 +792,7 @@ describe('useSignIn', () => {
       expect(result.current.step).toBe('email');
       expect(result.current.email).toBe('');
       expect(result.current.sentInfo).toBeNull();
-      expect(mockResetFields).toHaveBeenCalledWith(['password']);
+      expect(mockForm.reset).toHaveBeenCalledWith({ email: 'user@example.com', password: '' });
     });
   });
 

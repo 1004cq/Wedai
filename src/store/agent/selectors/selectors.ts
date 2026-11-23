@@ -1,26 +1,25 @@
 import { DEFAULT_PROVIDER } from '@lobechat/business-const';
 import {
   DEFAULT_AGENT_CONFIG,
-  DEFAULT_AVATAR,
   DEFAULT_BACKGROUND_COLOR,
   DEFAULT_INBOX_AVATAR,
+  DEFAULT_INBOX_TITLE,
   DEFAULT_MODEL,
   DEFAUTT_AGENT_TTS_CONFIG,
   isDesktop,
 } from '@lobechat/const';
 import {
+  agentDisplayName,
   type AgentMode,
+  type AgentProfile,
+  getActivePluginIds,
+  getWorkingDirEffectivePath,
   type KnowledgeItem,
+  KnowledgeType,
   type LobeAgentConfig,
   type LobeAgentTTSConfig,
   type MetaData,
   type RuntimeEnvConfig,
-} from '@lobechat/types';
-import {
-  getActivePluginIds,
-  getDisabledPluginIds,
-  getWorkingDirEffectivePath,
-  KnowledgeType,
 } from '@lobechat/types';
 
 import { DEFAULT_OPENING_QUESTIONS } from '@/features/AgentSetting/store/selectors';
@@ -38,10 +37,17 @@ const currentAgentData = (s: AgentStoreState) =>
 
 const currentAgentTitle = (s: AgentStoreState) => currentAgentData(s)?.title;
 
+/**
+ * The label to show for the active agent: personal name first, role as the
+ * fallback. Use this for rendering; `currentAgentTitle` stays the raw role for
+ * anything that edits or reasons about it.
+ */
+const currentAgentDisplayName = (s: AgentStoreState) => agentDisplayName(currentAgentData(s));
+
 const getDefaultAvatarByAgentId = (s: AgentStoreState, agentId?: string) => {
   const inboxAgentId = builtinAgentSelectors.inboxAgentId(s);
 
-  return agentId && inboxAgentId === agentId ? DEFAULT_INBOX_AVATAR : DEFAULT_AVATAR;
+  return agentId && inboxAgentId === agentId ? DEFAULT_INBOX_AVATAR : undefined;
 };
 
 const currentAgentAvatar = (s: AgentStoreState) =>
@@ -60,6 +66,10 @@ const currentAgentCreatedAt = (s: AgentStoreState) => currentAgentData(s)?.creat
 
 const currentAgentVisibility = (s: AgentStoreState) => currentAgentData(s)?.visibility;
 
+/** An agent's visibility by id — for a conversation whose agent is not the active one. */
+const getAgentVisibilityById = (agentId: string) => (s: AgentStoreState) =>
+  s.agentMap[agentId]?.visibility;
+
 /**
  * Get complete meta data for the current agent
  * Used to replace sessionMetaSelectors.currentAgentMeta
@@ -71,6 +81,7 @@ const currentAgentMeta = (s: AgentStoreState): MetaData => {
     backgroundColor: data?.backgroundColor || DEFAULT_BACKGROUND_COLOR,
     description: data?.description || undefined,
     marketIdentifier: data?.marketIdentifier || undefined,
+    name: data?.name || undefined,
     tags: data?.tags,
     title: data?.title || undefined,
   };
@@ -91,10 +102,50 @@ const getAgentMetaById =
       backgroundColor: data.backgroundColor || DEFAULT_BACKGROUND_COLOR,
       description: data.description || undefined,
       marketIdentifier: data.marketIdentifier || undefined,
+      name: data.name || undefined,
       tags: data.tags,
       title: data.title || undefined,
     };
   };
+
+/**
+ * The inbox agent's label: the name the user gave it, else its title, else `DEFAULT_INBOX_TITLE`.
+ * Use it wherever the inbox is named, rather than the brand constant.
+ */
+const inboxAgentDisplayName = (s: AgentStoreState) =>
+  agentDisplayName(
+    getAgentMetaById(builtinAgentSelectors.inboxAgentId(s) ?? '')(s),
+    DEFAULT_INBOX_TITLE,
+  );
+
+/** The inbox agent's avatar, else `DEFAULT_INBOX_AVATAR`. */
+const inboxAgentAvatar = (s: AgentStoreState) =>
+  getAgentMetaById(builtinAgentSelectors.inboxAgentId(s) ?? '')(s).avatar || DEFAULT_INBOX_AVATAR;
+
+/**
+ * Full-body artwork of the agent's character, or `undefined` when it has none.
+ * Kept out of {@link getAgentMetaById} because `MetaData` is shared with
+ * sessions and groups, which have no character sheet.
+ */
+/**
+ * The avatar actually stored on the agent — unlike {@link getAgentMetaById},
+ * which substitutes a default so every surface has something to render. Use
+ * this to decide whether there is anything to remove.
+ */
+const getAgentStoredAvatarById =
+  (agentId: string) =>
+  (s: AgentStoreState): string | undefined =>
+    s.agentMap[agentId]?.avatar || undefined;
+
+const getAgentProfileById =
+  (agentId: string) =>
+  (s: AgentStoreState): AgentProfile | undefined =>
+    s.agentMap[agentId]?.profile ?? undefined;
+
+const getAgentFullBodyArtworkById =
+  (agentId: string) =>
+  (s: AgentStoreState): string | undefined =>
+    s.agentMap[agentId]?.profile?.fullBodyArtwork || undefined;
 
 // ==========   Config   ============== //
 
@@ -140,19 +191,6 @@ const currentAgentPlugins = (s: AgentStoreState) => {
   const config = currentAgentConfig(s);
 
   return getActivePluginIds(config?.plugins);
-};
-
-/**
- * Disabled plugin identifiers for the current agent. Consumers that build a
- * tool/skill candidate pool (not just the "always whitelisted" rule map)
- * need this to actually drop a disabled entry from the pool — being absent
- * from `currentAgentPlugins` alone doesn't stop it from being present (and
- * explicit-activation-eligible) in an unfiltered manifest source.
- */
-const currentAgentDisabledPlugins = (s: AgentStoreState) => {
-  const config = currentAgentConfig(s);
-
-  return getDisabledPluginIds(config?.plugins);
 };
 
 /**
@@ -338,7 +376,19 @@ const currentAgentExecutionTarget = (s: AgentStoreState) =>
 const getAgentDocumentsById = (agentId: string) => (s: AgentStoreState) =>
   s.agentDocumentsMap[agentId];
 
+/** The agent a user-chosen slug names, as known locally (persisted copy first). */
+const getAgentIdBySlug = (slug?: string | null) => (s: AgentStoreState) =>
+  slug ? s.agentSlugIdMap[slug] : undefined;
+
+/** The server confirmed the slug's agent in this session (not only the persisted copy). */
+const isAgentSlugConfirmed = (slug?: string | null) => (s: AgentStoreState) =>
+  !!slug && !!s.agentSlugIdMap[slug] && s.agentSlugIdReplica.entries[slug]?.source === 'server';
+
+const heteroServerDefaultCapability = (s: AgentStoreState) => s.heteroServerDefaultCapability;
+
 export const agentSelectors = {
+  inboxAgentAvatar,
+  inboxAgentDisplayName,
   currentAgentExecutionTarget,
   currentAgentHeterogeneousProviderType,
   currentAgentAuthorId,
@@ -353,7 +403,6 @@ export const agentSelectors = {
   currentAgentRuntimeEnvConfig,
   currentAgentMeta,
   currentAgentMode,
-  currentAgentDisabledPlugins,
   currentAgentModel,
   currentAgentModelProvider,
   currentAgentPlugins,
@@ -361,15 +410,23 @@ export const agentSelectors = {
   currentAgentTTS,
   currentAgentTTSVoice,
   currentAgentTags,
+  currentAgentDisplayName,
   currentAgentTitle,
   currentAgentVisibility,
+  getAgentVisibilityById,
   currentAgentWorkingDirectory,
   currentEnabledKnowledge,
   currentKnowledgeIds,
   displayableAgentPlugins,
   getAgentConfigById,
   getAgentDocumentsById,
+  getAgentIdBySlug,
+  heteroServerDefaultCapability,
+  isAgentSlugConfirmed,
+  getAgentFullBodyArtworkById,
   getAgentMetaById,
+  getAgentProfileById,
+  getAgentStoredAvatarById,
   getAgentSlugById,
   hasEnabledKnowledge,
   hasEnabledKnowledgeBases,

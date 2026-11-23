@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   collectAttachmentUrlsFromEditorData,
   extractFileIdsFromEditorData,
+  resolveFileIdsFromUrls,
 } from './extractFileIdsFromEditorData';
 
 const image = (src: string, status?: string) => ({
@@ -77,23 +78,25 @@ describe('extractFileIdsFromEditorData', () => {
     expect(db.select).not.toHaveBeenCalled();
   });
 
-  it('extracts fileIds from proxy URLs without DB query', async () => {
+  it('extracts prefixed and UUID fileIds from proxy URLs without DB query', async () => {
     const db = mockDb([]);
+    const uuid = '1c4521fe-3921-4f74-8de4-0f8085416ca2';
     const json = {
       root: {
         children: [
           image('http://localhost:3010/f/file_a'),
           file('http://localhost:3010/f/file_b', 'b.pdf'),
+          image(`https://app.lobehub.com/f/${uuid}`),
         ],
       },
     };
     const result = await extractFileIdsFromEditorData(json, { db, userId: 'u' });
-    expect(result.sort()).toEqual(['file_a', 'file_b']);
+    expect(result.sort()).toEqual([uuid, 'file_a', 'file_b'].sort());
     expect(db.select).not.toHaveBeenCalled();
   });
 
   it('falls back to DB lookup by storage key for pre-signed URLs', async () => {
-    const db = mockDb([{ id: 'file_resolved' }]);
+    const db = mockDb([{ id: 'file_resolved', url: 'ppp/494360/03378b6c.jpg' }]);
     const json = {
       root: {
         children: [
@@ -109,7 +112,7 @@ describe('extractFileIdsFromEditorData', () => {
   });
 
   it('mixes proxy + signed URLs and dedupes', async () => {
-    const db = mockDb([{ id: 'file_signed_one' }]);
+    const db = mockDb([{ id: 'file_signed_one', url: 'users/u/files/abc.jpg' }]);
     const json = {
       root: {
         children: [
@@ -164,4 +167,25 @@ describe('extractFileIdsFromEditorData', () => {
   });
 
   void ctx; // silence unused
+});
+
+describe('resolveFileIdsFromUrls', () => {
+  it('keeps the order of the URLs, whichever form each one has', async () => {
+    // Rows come back in database order, not URL order.
+    const db = mockDb([
+      { id: 'file_third', url: 'files/3.png' },
+      { id: 'file_first', url: 'files/1.png' },
+    ]);
+
+    await expect(
+      resolveFileIdsFromUrls(
+        [
+          'https://r2.example.com/files/1.png?X-Amz-Date=…',
+          'https://app.example.com/f/file_second',
+          'https://r2.example.com/files/3.png?X-Amz-Date=…',
+        ],
+        { db, userId: 'u' },
+      ),
+    ).resolves.toEqual(['file_first', 'file_second', 'file_third']);
+  });
 });

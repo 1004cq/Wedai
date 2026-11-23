@@ -2,6 +2,8 @@ import type { TaskDetailWorkspaceNode } from '@lobechat/types';
 import {
   ActionIcon,
   Block,
+  confirmModal,
+  cssVar,
   type DropdownItem,
   DropdownMenu,
   Flexbox,
@@ -9,8 +11,6 @@ import {
   Tag,
   Text,
 } from '@lobehub/ui';
-import { confirmModal } from '@lobehub/ui/base-ui';
-import { cssVar } from 'antd-style';
 import { FileLock2Icon, FileTextIcon, MoreHorizontal, Package, Trash } from 'lucide-react';
 import { memo, useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -138,7 +138,7 @@ const TaskArtifacts = memo(() => {
           gap={8}
           paddingBlock={4}
           paddingInline={8}
-          style={{ cursor: 'pointer', width: 'fit-content' }}
+          style={{ cursor: 'pointer', marginInlineStart: -8, width: 'fit-content' }}
           variant="borderless"
           onClick={() => setIsExpanded((prev) => !prev)}
         >
@@ -151,7 +151,7 @@ const TaskArtifacts = memo(() => {
         </Block>
       </Flexbox>
       {isExpanded && (
-        <Flexbox gap={8} paddingInline={12}>
+        <Flexbox gap={8}>
           {items.map((node) => (
             <ArtifactCard key={node.documentId} node={node} />
           ))}

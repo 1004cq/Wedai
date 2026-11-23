@@ -1,0 +1,195 @@
+'use client';
+
+import { Button, Input, TextArea, toast, Upload } from '@lobehub/ui';
+import { Form, useForm } from '@lobehub/ui/form';
+import { useMutation } from '@tanstack/react-query';
+import { type FC, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+
+import InlineErrorText from '@/components/InlineErrorText';
+import { type InlineErrorState, toInlineError } from '@/components/InlineErrorText/errorDetail';
+
+import { credErrorKey } from '../credError';
+import CredFormFooter from '../CredFormFooter';
+import { createExtras, type CredsApi } from '../useCredsApi';
+
+interface FileCredFormProps {
+  credsApi: CredsApi;
+  disabled?: boolean;
+  onCancel: () => void;
+  onSuccess: () => void;
+}
+
+interface FormValues {
+  description?: string;
+  key: string;
+  name: string;
+}
+
+const FileCredForm: FC<FileCredFormProps> = ({ credsApi, disabled, onCancel, onSuccess }) => {
+  const { t } = useTranslation(['setting', 'common']);
+  const form = useForm<FormValues>({ onSubmit: (values) => handleSubmit(values) });
+  const [fileHashId, setFileHashId] = useState<string | null>(null);
+  const [fileName, setFileName] = useState<string>('');
+  const [isUploading, setIsUploading] = useState(false);
+  /**
+   * Upload failures render under the upload control, create failures (including Market's 409
+   * slot conflicts) above the submit row: the modal stays open, so the user fixes things
+   * here rather than reading a corner toast.
+   */
+  const [uploadError, setUploadError] = useState<InlineErrorState | null>(null);
+  const [submitError, setSubmitError] = useState<InlineErrorState | null>(null);
+
+  const createMutation = useMutation({
+    mutationFn: async (values: FormValues) => {
+      if (disabled) return;
+
+      if (!fileHashId || !fileName) {
+        throw new Error('File is required');
+      }
+
+      await credsApi.client.createFile.mutate({
+        description: values.description,
+        fileHashId,
+        fileName,
+        key: values.key,
+        name: values.name,
+        ...createExtras(credsApi),
+      });
+    },
+    onError: (error) => {
+      console.error('[FileCredForm] Create failed:', error);
+      setSubmitError(toInlineError(t(credErrorKey(error, 'creds.errors.createFailed')), error));
+    },
+    onSuccess: () => {
+      onSuccess();
+    },
+  });
+
+  const handleUpload = async (file: File) => {
+    if (disabled) return;
+
+    setIsUploading(true);
+    setUploadError(null);
+
+    try {
+      // Convert file to base64
+      const arrayBuffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+      let binary = '';
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      const base64 = btoa(binary);
+
+      // Upload via TRPC (personal or workspace, based on the credsApi passed in by the caller)
+      const result = await credsApi.client.uploadFile.mutate({
+        file: base64,
+        fileName: file.name,
+        fileType: file.type || 'application/octet-stream',
+      });
+
+      setFileName(result.fileName);
+      setFileHashId(result.fileHashId);
+      toast.success(t('creds.file.uploadSuccess'));
+    } catch (error) {
+      console.error('[FileCredForm] Upload failed:', error);
+      // The server message is untranslated; it is folded behind the details toggle
+      setUploadError(toInlineError(t('creds.file.uploadFailedRetry'), error));
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleSubmit = (values: FormValues) => {
+    if (disabled) return;
+
+    if (!fileHashId) {
+      setUploadError(toInlineError(t('creds.form.fileRequired')));
+      return;
+    }
+    setSubmitError(null);
+    createMutation.mutate(values);
+  };
+
+  return (
+    <Form form={form} layout="vertical">
+      <Form.Field required label={t('creds.form.file')}>
+        <Upload
+          dragger
+          description={t('creds.form.uploadDesc')}
+          disabled={isUploading || disabled}
+          maxCount={1}
+          title={isUploading ? t('creds.file.uploading') : t('creds.form.uploadHint')}
+          onFiles={([file]) => handleUpload(file)}
+        />
+        {uploadError && (
+          <InlineErrorText detail={uploadError.detail} style={{ marginTop: 8 }}>
+            {uploadError.summary}
+          </InlineErrorText>
+        )}
+        {fileName && (
+          <div style={{ alignItems: 'center', display: 'flex', gap: 8, marginTop: 8 }}>
+            <span>
+              {t('creds.form.selectedFile')}: {fileName}
+            </span>
+            <Button
+              size="small"
+              type="fill"
+              onClick={() => {
+                setFileHashId(null);
+                setFileName('');
+              }}
+            >
+              {t('delete', { ns: 'common' })}
+            </Button>
+          </div>
+        )}
+      </Form.Field>
+
+      <Form.Field label={t('creds.form.name')} name="name" required={t('creds.form.nameRequired')}>
+        <Input disabled={disabled} placeholder="e.g., GCP Service Account" />
+      </Form.Field>
+
+      <Form.Field
+        desc={t('creds.form.keyDesc')}
+        label={t('creds.form.key')}
+        name="key"
+        required={t('creds.form.keyRequired')}
+        validate={(value?: string) =>
+          value && !/^[\w-]+$/.test(value) ? t('creds.form.keyPattern') : undefined
+        }
+      >
+        <Input disabled={disabled} placeholder="e.g., gcp-service-account" />
+      </Form.Field>
+
+      <Form.Field label={t('creds.form.description')} name="description">
+        <TextArea
+          disabled={disabled}
+          placeholder={t('creds.form.descriptionPlaceholder')}
+          rows={2}
+        />
+      </Form.Field>
+
+      {submitError && (
+        <InlineErrorText detail={submitError.detail}>{submitError.summary}</InlineErrorText>
+      )}
+
+      <CredFormFooter>
+        <Button type="fill" onClick={onCancel}>
+          {t('creds.form.cancel')}
+        </Button>
+        <Button
+          disabled={!fileHashId || disabled}
+          htmlType="submit"
+          loading={createMutation.isPending}
+          type="primary"
+        >
+          {t('creds.form.submit')}
+        </Button>
+      </CredFormFooter>
+    </Form>
+  );
+};
+
+export default FileCredForm;

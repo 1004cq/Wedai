@@ -1,15 +1,18 @@
-import { and, desc, eq, inArray, isNull, notInArray, type SQL, sql } from 'drizzle-orm';
+import { HOME_FEED_EXCLUDED_BRIEF_TYPES, NEWS_BRIEF_TYPES } from '@lobechat/types';
+import { and, desc, eq, gte, inArray, isNull, lt, notInArray, type SQL, sql } from 'drizzle-orm';
 
 import { agents } from '../schemas/agent';
 import type { BriefItem, NewBrief } from '../schemas/task';
 import { briefs, tasks } from '../schemas/task';
 import type { LobeChatDatabase } from '../type';
 import { normalizeInboxAgentAvatar, normalizeInboxAgentTitle } from '../utils/inboxAgent';
+import { notTrashed } from '../utils/softDelete';
 import { buildWorkspacePayload } from '../utils/workspace';
 
 export interface UnresolvedBriefRow {
   agentAvatar: string | null;
   agentBackgroundColor: string | null;
+  agentName: string | null;
   agentRowId: string | null;
   agentTitle: string | null;
   brief: BriefItem;
@@ -36,7 +39,7 @@ export class BriefModel {
   // share content rows), which would leak each member's briefs to everyone else
   // in the workspace. Brief ownership therefore always requires `user_id` to
   // match, in both personal and workspace mode.
-  private ownership = (): SQL =>
+  ownership = (): SQL =>
     this.workspaceId
       ? (and(eq(briefs.userId, this.userId), eq(briefs.workspaceId, this.workspaceId)) as SQL)
       : (and(eq(briefs.userId, this.userId), isNull(briefs.workspaceId)) as SQL);
@@ -99,21 +102,20 @@ export class BriefModel {
   async listUnresolvedEnriched(options?: { limit?: number }): Promise<UnresolvedBriefRow[]> {
     const { limit = 20 } = options ?? {};
     const rows = await this.db
-      .select({
-        agentAvatar: agents.avatar,
-        agentBackgroundColor: agents.backgroundColor,
-        agentRowId: agents.id,
-        agentSlug: agents.slug,
-        agentTitle: agents.title,
-        brief: briefs,
-        taskIdentifier: tasks.identifier,
-        taskName: tasks.name,
-        taskStatus: tasks.status,
-      })
+      .select(this.enrichedSelection())
       .from(briefs)
       .leftJoin(agents, eq(briefs.agentId, agents.id))
       .leftJoin(tasks, eq(briefs.taskId, tasks.id))
-      .where(and(this.ownership(), isNull(briefs.resolvedAt)))
+      .where(
+        and(
+          this.ownership(),
+          isNull(briefs.resolvedAt),
+          notInArray(briefs.type, HOME_FEED_EXCLUDED_BRIEF_TYPES),
+          // Briefs hide with their task while it sits in the recycle bin
+          // (a brief without a task joins NULL, which passes).
+          notTrashed(tasks.isDeleted),
+        ),
+      )
       .orderBy(
         sql`CASE
           WHEN ${briefs.priority} = 'urgent' THEN 0
@@ -124,7 +126,81 @@ export class BriefModel {
       )
       .limit(limit);
 
-    return rows.map(({ agentSlug, ...row }) => ({
+    return this.normalizeEnrichedRows(rows);
+  }
+
+  /**
+   * Day-scoped news digest (`insight` + `result`): every brief created in
+   * `[startAt, endAt)`, resolved or not. A day's digest is a record, not a
+   * queue — dropping resolved rows would make every already-read day come
+   * back empty. Plain chronological order: within one day the priority
+   * buckets of the unresolved feed carry no meaning.
+   *
+   * The 50 cap is a deliberate scope cut, newest-first: a single user
+   * producing 50+ news briefs in one local day is far outside current
+   * product reality, and the day pager carries no same-day cursor. Revisit
+   * with real pagination if daily volumes ever approach it.
+   */
+  async listNewsEnriched(options: {
+    endAt: Date;
+    limit?: number;
+    startAt: Date;
+  }): Promise<UnresolvedBriefRow[]> {
+    const { endAt, limit = 50, startAt } = options;
+    const rows = await this.db
+      .select(this.enrichedSelection())
+      .from(briefs)
+      .leftJoin(agents, eq(briefs.agentId, agents.id))
+      .leftJoin(tasks, eq(briefs.taskId, tasks.id))
+      .where(
+        and(
+          this.ownership(),
+          inArray(briefs.type, NEWS_BRIEF_TYPES),
+          notTrashed(tasks.isDeleted),
+          gte(briefs.createdAt, startAt),
+          lt(briefs.createdAt, endAt),
+        ),
+      )
+      .orderBy(desc(briefs.createdAt))
+      .limit(limit);
+
+    return this.normalizeEnrichedRows(rows);
+  }
+
+  /**
+   * Whether any news brief exists before `date` — lets the day pager disable
+   * its "older" arrow at the true start of history instead of paging into
+   * empty days forever.
+   */
+  async hasNewsBefore(date: Date): Promise<boolean> {
+    const rows = await this.db
+      .select({ id: briefs.id })
+      .from(briefs)
+      .where(
+        and(this.ownership(), inArray(briefs.type, NEWS_BRIEF_TYPES), lt(briefs.createdAt, date)),
+      )
+      .limit(1);
+
+    return rows.length > 0;
+  }
+
+  private enrichedSelection = () => ({
+    agentAvatar: agents.avatar,
+    agentBackgroundColor: agents.backgroundColor,
+    agentRowId: agents.id,
+    agentName: agents.name,
+    agentSlug: agents.slug,
+    agentTitle: agents.title,
+    brief: briefs,
+    taskIdentifier: tasks.identifier,
+    taskName: tasks.name,
+    taskStatus: tasks.status,
+  });
+
+  private normalizeEnrichedRows = (
+    rows: (UnresolvedBriefRow & { agentSlug: string | null })[],
+  ): UnresolvedBriefRow[] =>
+    rows.map(({ agentSlug, ...row }) => ({
       ...row,
       agentAvatar: normalizeInboxAgentAvatar(row.agentAvatar, {
         slug: agentSlug,
@@ -133,7 +209,6 @@ export class BriefModel {
         slug: agentSlug,
       }),
     }));
-  }
 
   /**
    * Lists unresolved briefs for one agent and trigger before applying the read cap.
@@ -207,6 +282,35 @@ export class BriefModel {
       .where(and(...conditions))
       .limit(1);
     return rows.length > 0;
+  }
+
+  /**
+   * Which of `taskIds` have an unresolved urgent brief — the batch form of
+   * {@link hasUnresolvedUrgentByTask}, for lists that mark the tasks whose
+   * automation is held back until the user answers.
+   */
+  async findTaskIdsWithUnresolvedUrgent(
+    taskIds: string[],
+    options?: { excludeTypes?: string[] },
+  ): Promise<Set<string>> {
+    if (taskIds.length === 0) return new Set();
+
+    const excludeTypes = options?.excludeTypes ?? [];
+    const conditions = [
+      this.ownership(),
+      inArray(briefs.taskId, taskIds),
+      eq(briefs.priority, 'urgent'),
+      isNull(briefs.resolvedAt),
+    ];
+    if (excludeTypes.length > 0) {
+      conditions.push(notInArray(briefs.type, excludeTypes));
+    }
+
+    const rows = await this.db
+      .selectDistinct({ taskId: briefs.taskId })
+      .from(briefs)
+      .where(and(...conditions));
+    return new Set(rows.map((row) => row.taskId).filter((id): id is string => !!id));
   }
 
   async findByCronJobId(cronJobId: string): Promise<BriefItem[]> {

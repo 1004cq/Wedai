@@ -1,4 +1,4 @@
-import { createStaticStyles } from 'antd-style';
+import { createStaticStyles } from '@lobehub/ui';
 
 import { SPIN_TURN_MS } from './spinHold';
 
@@ -21,9 +21,15 @@ export const styles = createStaticStyles(({ css, cssVar }) => ({
 
     text-align: start;
 
+    html[data-density='compact'] & {
+      padding-block: 4px;
+    }
+
     transition: background ${cssVar.motionDurationFast};
 
-    &:hover {
+    /* the selector mirrors base-ui's variantText hover rule so the row tint
+       can outrank its brighter fill */
+    &:hover:not(:disabled, [aria-disabled='true']) {
       background: ${cssVar.colorFillQuaternary};
     }
   `,

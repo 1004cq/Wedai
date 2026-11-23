@@ -3,9 +3,15 @@ import type {
   ModelReasoning,
   ModelTokensUsage,
   ModelUsage,
+  ResolveToolActivationContext,
+  ToolActivationPlan,
 } from '@lobechat/types';
+import type OpenAI from 'openai';
 
+import type { ComputeChatCostOptions } from '../core/usageConverters/utils/computeChatCost';
 import type { ModelPricingContext } from './pricing';
+import type { ModelRuntimeDiagnostics } from './providerDiagnostics';
+import type { RouteAttemptIdentity } from './routeAttempt';
 import type { MessageToolCall, MessageToolCallChunk } from './toolsCalling';
 
 export type LLMRoleType = 'user' | 'system' | 'assistant' | 'function' | 'tool';
@@ -26,6 +32,10 @@ interface UserMessageContentPartThinking {
   thinking: string;
   type: 'thinking';
 }
+interface UserMessageContentPartRedactedThinking {
+  data: string;
+  type: 'redacted_thinking';
+}
 interface UserMessageContentPartText {
   text: string;
   type: 'text';
@@ -44,7 +54,12 @@ interface UserMessageContentPartVideo {
   video_url: { url: string };
 }
 interface UserMessageContentPartAudio {
-  audio_url: { url: string };
+  audio_url: {
+    codec?: string;
+    durationMs?: number;
+    mimeType?: string;
+    url: string;
+  };
   type: 'audio_url';
 }
 
@@ -53,7 +68,8 @@ export type UserMessageContentPart =
   | UserMessageContentPartImage
   | UserMessageContentPartVideo
   | UserMessageContentPartAudio
-  | UserMessageContentPartThinking;
+  | UserMessageContentPartThinking
+  | UserMessageContentPartRedactedThinking;
 
 export interface OpenAIChatMessage {
   content: string | UserMessageContentPart[];
@@ -62,9 +78,24 @@ export interface OpenAIChatMessage {
   provider?: string;
   reasoning?: ModelReasoning;
   reasoning_content?: string;
+  /** Native tool output parts, including images and files, for Responses replay. */
+  responsesOutput?: OpenAI.Responses.ResponseCustomToolCallOutput['output'];
+  /** Tools introduced at this position in a Responses conversation. */
+  responsesTools?: OpenAI.Responses.Tool[];
   role: LLMRoleType;
   tool_call_id?: string;
   tool_calls?: MessageToolCall[];
+  toolActivationPlan?: ToolActivationPlan;
+  /**
+   * Function names that first became callable at this message, e.g. the result of a
+   * mid-conversation tool activation. Their definitions stay in `ChatStreamPayload.tools`.
+   *
+   * A transport that can declare tools inside the conversation moves these definitions
+   * out of the top-level tool list and anchors them here, so activating a tool does not
+   * rewrite the request prefix (and the prompt cache with it). Every other transport
+   * ignores the field and sends the full top-level list.
+   */
+  toolsAdded?: string[];
 }
 
 /**
@@ -144,6 +175,8 @@ export interface ChatStreamPayload {
   reasoning_effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   response_format?: ChatResponseFormat;
   responseMode?: 'stream' | 'json';
+  /** Native Responses tools, including namespaces and free-form custom tools. */
+  responsesTools?: OpenAI.Responses.Tool[];
   /**
    * @title Whether to enable streaming requests
    * @default true
@@ -176,7 +209,7 @@ export interface ChatStreamPayload {
   /**
    * Thinking level for Gemini models (e.g., gemini-3.0-pro)
    */
-  thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high';
+  thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
   tool_choice?: string;
   tools?: ChatCompletionTool[];
   /**
@@ -196,6 +229,14 @@ export interface ChatStreamPayload {
 export interface ChatMethodOptions {
   callback?: ChatStreamCallbacks;
   /**
+   * Request-scoped provider-boundary evidence retained by the caller.
+   * Keep this separate from metadata because routing hooks may retain metadata
+   * after the provider returns, while diagnostics can contain a large payload.
+   */
+  diagnostics?: ModelRuntimeDiagnostics;
+  /** Evaluated only by a route supporting transcript-anchored tool definitions. */
+  getToolActivationContext?: ResolveToolActivationContext;
+  /**
    * response headers
    */
   headers?: Record<string, any>;
@@ -208,6 +249,8 @@ export interface ChatMethodOptions {
    */
   requestHeaders?: Record<string, any>;
   signal?: AbortSignal;
+  /** Context edits for a Responses transport that supports inline tool declarations. */
+  toolActivationPlan?: ToolActivationPlan;
   /**
    * userId for the chat completion
    */
@@ -256,7 +299,18 @@ export interface OnFinishData {
    */
   finishReason?: string;
   grounding?: any;
+  /** Options used to price `usage.cost` (e.g. cache TTL lookups), so hooks can reprice the same usage. */
+  pricingOptions?: ComputeChatCostOptions;
+  /**
+   * USD charge reported by the upstream provider (OpenRouter, Vercel AI Gateway). Server-side
+   * only: unlike `usage`, it is never streamed to clients or persisted on messages.
+   */
+  providerReportedCost?: number;
   reasoning?: ModelReasoning;
+  /** Stable identities and terminal outcome for the provider attempt producing this result. */
+  routeAttempt?: RouteAttemptIdentity & {
+    outcome?: 'completed' | 'empty' | 'interrupted' | 'cancelled' | 'failed';
+  };
   speed?: ModelPerformance;
   text: string;
   thinking?: string;

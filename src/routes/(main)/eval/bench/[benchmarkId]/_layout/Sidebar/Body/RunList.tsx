@@ -1,11 +1,19 @@
 'use client';
 
-import { AccordionItem, Flexbox, Text } from '@lobehub/ui';
+import {
+  AccordionHeader,
+  AccordionItem,
+  AccordionPanel,
+  AccordionTrigger,
+  Flexbox,
+  Text,
+} from '@lobehub/ui';
 import { CheckCircle2, CircleDot, CircleSlash, Loader2, Play, XCircle } from 'lucide-react';
 import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import NavItem from '@/features/NavPanel/components/NavItem';
+import SectionTitle, { useSectionTriggerStyle } from '@/features/NavPanel/components/SectionTitle';
 import SkeletonList from '@/features/NavPanel/components/SkeletonList';
 import { useWorkspaceAwareNavigate } from '@/features/Workspace/useWorkspaceAwareNavigate';
 import WorkspaceLink from '@/features/Workspace/WorkspaceLink';
@@ -41,10 +49,11 @@ interface RunListProps {
 }
 
 const RunList = memo<RunListProps>(({ activeKey, benchmarkId, itemKey }) => {
+  const sectionTriggerStyle = useSectionTriggerStyle();
   const { t } = useTranslation('eval');
   const navigate = useWorkspaceAwareNavigate();
-  const runList = useEvalStore(runSelectors.runList);
-  const isLoading = useEvalStore(runSelectors.isLoadingRuns);
+  const runList = useEvalStore(runSelectors.runList(benchmarkId));
+  const isLoading = useEvalStore(runSelectors.isLoadingRuns(benchmarkId));
 
   const sortedRuns = useMemo(
     () =>
@@ -55,51 +64,49 @@ const RunList = memo<RunListProps>(({ activeKey, benchmarkId, itemKey }) => {
   );
 
   return (
-    <AccordionItem
-      itemKey={itemKey}
-      paddingBlock={4}
-      paddingInline={'8px 4px'}
-      title={
-        <Flexbox horizontal align="center" gap={4}>
-          <Text ellipsis fontSize={12} type={'secondary'} weight={500}>
-            {t('sidebar.runs')}
-          </Text>
-          {runList.length > 0 && (
-            <Text fontSize={12} type="secondary">
-              {runList.length}
+    <AccordionItem value={itemKey}>
+      <AccordionHeader>
+        <AccordionTrigger style={sectionTriggerStyle}>
+          <Flexbox horizontal align="center" gap={4}>
+            <SectionTitle>{t('sidebar.runs')}</SectionTitle>
+            {runList.length > 0 && (
+              <Text fontSize={12} type="secondary">
+                {runList.length}
+              </Text>
+            )}
+          </Flexbox>
+        </AccordionTrigger>
+      </AccordionHeader>
+      <AccordionPanel>
+        <Flexbox gap={1} paddingBlock={1}>
+          {isLoading && runList.length === 0 ? (
+            <SkeletonList rows={3} />
+          ) : sortedRuns.length > 0 ? (
+            sortedRuns.map((run) => (
+              <WorkspaceLink
+                key={run.id}
+                to={`/eval/bench/${benchmarkId}/runs/${run.id}`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  navigate(`/eval/bench/${benchmarkId}/runs/${run.id}`);
+                }}
+              >
+                <NavItem
+                  active={activeKey === `run-${run.id}`}
+                  icon={getRunIcon(run.status)}
+                  iconSize={16}
+                  loading={run.status === 'running'}
+                  title={run.name || `Run ${run.id.slice(0, 8)}`}
+                />
+              </WorkspaceLink>
+            ))
+          ) : (
+            <Text fontSize={12} style={{ padding: '8px 12px' }} type="secondary">
+              {t('run.empty.title')}
             </Text>
           )}
         </Flexbox>
-      }
-    >
-      <Flexbox gap={1} paddingBlock={1}>
-        {isLoading && runList.length === 0 ? (
-          <SkeletonList rows={3} />
-        ) : sortedRuns.length > 0 ? (
-          sortedRuns.map((run) => (
-            <WorkspaceLink
-              key={run.id}
-              to={`/eval/bench/${benchmarkId}/runs/${run.id}`}
-              onClick={(e) => {
-                e.preventDefault();
-                navigate(`/eval/bench/${benchmarkId}/runs/${run.id}`);
-              }}
-            >
-              <NavItem
-                active={activeKey === `run-${run.id}`}
-                icon={getRunIcon(run.status)}
-                iconSize={16}
-                loading={run.status === 'running'}
-                title={run.name || `Run ${run.id.slice(0, 8)}`}
-              />
-            </WorkspaceLink>
-          ))
-        ) : (
-          <Text fontSize={12} style={{ padding: '8px 12px' }} type="secondary">
-            {t('run.empty.title')}
-          </Text>
-        )}
-      </Flexbox>
+      </AccordionPanel>
     </AccordionItem>
   );
 });

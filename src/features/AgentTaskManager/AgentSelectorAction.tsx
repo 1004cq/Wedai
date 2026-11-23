@@ -1,17 +1,17 @@
-import { Center, Flexbox, Popover } from '@lobehub/ui';
-import { createStaticStyles, cx } from 'antd-style';
+import { agentDisplayName } from '@lobechat/types';
+import { Center, createStaticStyles, cx, Flexbox, Popover } from '@lobehub/ui';
 import isEqual from 'fast-deep-equal';
 import { ChevronsUpDownIcon } from 'lucide-react';
 import { memo, Suspense, useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import AgentAvatar from '@/components/AgentAvatar';
 import { type SidebarAgentItem } from '@/database/repositories/home';
 import { conversationSelectors, useConversationStore } from '@/features/Conversation';
+import { AgentModalProvider } from '@/features/HomeSidebar/Body/Agent/ModalProvider';
 import SkeletonList from '@/features/NavPanel/components/SkeletonList';
 import AgentItem from '@/features/PageEditor/Copilot/AgentSelector/AgentItem';
 import { useFetchAgentList } from '@/hooks/useFetchAgentList';
-import AgentAvatar from '@/routes/(main)/home/_layout/Body/Agent/List/AgentItem/Avatar';
-import { AgentModalProvider } from '@/routes/(main)/home/_layout/Body/Agent/ModalProvider';
 import { useAgentStore } from '@/store/agent';
 import { builtinAgentSelectors } from '@/store/agent/selectors';
 import { useHomeStore } from '@/store/home';
@@ -119,8 +119,9 @@ const AgentSelectorAction = memo<AgentSelectorActionProps>(({ onAgentChange }) =
     list.map((agent) => (
       <AgentItem
         active={agent.id === agentId}
+        agent={agent}
         agentId={agent.id}
-        agentTitle={agent.title || t('untitledAgent', { ns: 'chat' })}
+        agentTitle={agentDisplayName(agent, t('untitledAgent', { ns: 'chat' }))}
         avatar={agent.avatar}
         key={agent.id}
         onAgentChange={handleAgentChange}
@@ -186,7 +187,11 @@ const AgentSelectorAction = memo<AgentSelectorActionProps>(({ onAgentChange }) =
       <Center horizontal className={cx(styles.container)} height={28} paddingInline={6}>
         <Flexbox horizontal align={'center'} gap={4}>
           <AgentAvatar
+            agentId={activeAgent?.id}
             avatar={typeof activeAgent?.avatar === 'string' ? activeAgent.avatar : undefined}
+            background={activeAgent?.backgroundColor || undefined}
+            name={activeAgent ? agentDisplayName(activeAgent) : undefined}
+            size={22}
           />
           <ChevronsUpDownIcon className={styles.chevron} size={14} />
         </Flexbox>

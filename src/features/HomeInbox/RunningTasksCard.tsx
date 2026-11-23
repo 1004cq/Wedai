@@ -1,15 +1,14 @@
-import { Avatar, Flexbox, Icon, Text } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
-import { createStaticStyles, cssVar, cx } from 'antd-style';
+import { agentDisplayName } from '@lobechat/types';
+import { Button, createStaticStyles, cssVar, cx, Flexbox, Icon, Text } from '@lobehub/ui';
 import { ChevronDownIcon, ChevronRightIcon } from 'lucide-react';
 import { memo, type ReactNode, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import AgentAvatar from '@/components/AgentAvatar';
 import { useAgentDisplayMeta } from '@/features/AgentTasks/shared/useAgentDisplayMeta';
 import { homeType } from '@/features/Home/components/homeType';
 import RunningGlyph from '@/features/Home/components/RunningGlyph';
 
-import AuthorChip from './AuthorChip';
 import TopicRow from './TopicRow';
 import { type InboxTopic } from './useHomeInboxTopics';
 
@@ -24,19 +23,17 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
       margin-inline-start: -6px;
     }
   `,
-  // Inside a rail card the shell is already drawn; only the hover bleed remains.
-  bareHead: css`
-    padding-block: 7px;
-    padding-inline: 8px;
-    border-radius: ${cssVar.borderRadius};
-  `,
   bareRoot: css`
+    margin-block: -6px;
     margin-inline: -8px;
   `,
   body: css`
     padding-block: 4px 8px;
     padding-inline: 8px;
     border-block-start: 1px solid ${cssVar.colorBorderSecondary};
+  `,
+  bareBody: css`
+    padding-inline: 0;
   `,
   card: css`
     overflow: hidden;
@@ -55,6 +52,10 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
     padding-inline: 14px;
     border: 0;
 
+    html[data-density='compact'] & {
+      padding-block: 8px;
+    }
+
     text-align: start;
 
     transition: background ${cssVar.motionDurationFast};
@@ -62,6 +63,12 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
     &:hover {
       background: ${cssVar.colorFillQuaternary};
     }
+  `,
+  // Inside a rail card the shell is already drawn; only the hover bleed remains.
+  bareHead: css`
+    padding-block: 7px;
+    padding-inline: 8px;
+    border-radius: ${cssVar.borderRadius};
   `,
   overflowCount: css`
     flex: none;
@@ -82,13 +89,14 @@ const StackedAgentAvatar = memo<{ agentId: string }>(({ agentId }) => {
   if (!agent) return null;
 
   return (
-    <Avatar
+    <AgentAvatar
+      agentId={agentId}
       avatar={agent.avatar}
       background={agent.backgroundColor}
       className={styles.stackedAvatar}
       shape={'circle'}
       size={AVATAR_SIZE}
-      title={agent.title}
+      title={agentDisplayName(agent)}
     />
   );
 });
@@ -122,8 +130,6 @@ interface RunningTasksCardProps {
   /** Rendered inside a rail card, which already draws the shell. */
   bare?: boolean;
   running: InboxTopic[];
-  /** Team view: tag each expanded row with whose run it is. */
-  showAuthor?: boolean;
 }
 
 /**
@@ -131,7 +137,7 @@ interface RunningTasksCardProps {
  * single line by default and only opens on demand. Nothing here is actionable;
  * it exists so the user knows work is in flight.
  */
-const RunningTasksCard = memo<RunningTasksCardProps>(({ action, bare, running, showAuthor }) => {
+const RunningTasksCard = memo<RunningTasksCardProps>(({ action, bare, running }) => {
   const { t } = useTranslation('home');
   const [open, setOpen] = useState(false);
 
@@ -162,18 +168,9 @@ const RunningTasksCard = memo<RunningTasksCardProps>(({ action, bare, running, s
       </Flexbox>
 
       {open && (
-        <Flexbox className={styles.body}>
+        <Flexbox className={cx(styles.body, bare && styles.bareBody)}>
           {running.map((topic) => (
-            <TopicRow
-              key={topic.id}
-              leading={<RunningGlyph size={14} />}
-              topic={topic}
-              trailing={
-                showAuthor ? (
-                  <AuthorChip trigger={topic.trigger} userId={topic.userId} />
-                ) : undefined
-              }
-            />
+            <TopicRow key={topic.id} leading={<RunningGlyph size={14} />} topic={topic} />
           ))}
         </Flexbox>
       )}

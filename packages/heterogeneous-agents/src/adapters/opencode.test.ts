@@ -87,6 +87,128 @@ describe('OpenCodeAdapter', () => {
     expect(adapter.adapt(raw)).toEqual([]);
   });
 
+  it('maps OpenCode 2.x tool parts, which carry the call id in `id` and rename bash to shell', () => {
+    const adapter = new OpenCodeAdapter();
+    const raw = {
+      part: {
+        id: 'call_00_shell',
+        messageID: 'msg-1',
+        partID: 'prt-tool-1',
+        sessionID: 'ses-v2',
+        state: {
+          input: { command: 'ls', workdir: '/repo' },
+          output: 'a.txt\n',
+          status: 'completed',
+        },
+        tool: 'shell',
+        type: 'tool',
+      },
+      sessionID: 'ses-v2',
+      type: 'tool_use',
+    };
+
+    const events = adapter.adapt(raw);
+    expect(events.map(({ type }) => type)).toEqual(['stream_chunk', 'tool_result', 'tool_end']);
+    expect(events[0].data.toolsCalling[0]).toMatchObject({
+      apiName: 'bash',
+      arguments: '{"command":"ls","workdir":"/repo"}',
+      id: 'call_00_shell',
+    });
+    expect(events[1].data).toMatchObject({ content: 'a.txt\n', toolCallId: 'call_00_shell' });
+    expect(adapter.adapt(raw)).toEqual([]);
+  });
+
+  it('maps todowrite snapshots into shared todo plugin state', () => {
+    const adapter = new OpenCodeAdapter();
+    const todos = [
+      { content: 'Inspect the pull request', priority: 'high', status: 'completed' },
+      { content: 'Merge the pull request', priority: 'high', status: 'in_progress' },
+      { content: 'Report any blockers', priority: 'medium', status: 'pending' },
+      { content: 'Use the obsolete merge path', priority: 'low', status: 'cancelled' },
+    ];
+
+    const events = adapter.adapt({
+      part: {
+        callID: 'todo-call-1',
+        id: 'todo-part-1',
+        state: {
+          input: { todos },
+          metadata: { todos },
+          output: JSON.stringify(todos),
+          status: 'completed',
+        },
+        tool: 'todowrite',
+        type: 'tool',
+      },
+      sessionID: 'ses-todos',
+      type: 'tool_use',
+    });
+
+    expect(events.find((event) => event.type === 'tool_result')?.data.pluginState).toEqual({
+      todos: {
+        items: [
+          { status: 'completed', text: 'Inspect the pull request' },
+          { status: 'processing', text: 'Merge the pull request' },
+          { status: 'todo', text: 'Report any blockers' },
+          { status: 'todo', text: 'Use the obsolete merge path' },
+        ],
+        updatedAt: expect.any(String),
+      },
+    });
+  });
+
+  it('opens a new step for the final answer after a completed tool turn', () => {
+    const adapter = new OpenCodeAdapter();
+    const firstStart = adapter.adapt({
+      part: { id: 'step-1', type: 'step-start' },
+      sessionID: 'ses-post-tool',
+      type: 'step_start',
+    });
+
+    adapter.adapt({
+      part: {
+        callID: 'call-1',
+        id: 'tool-1',
+        state: { input: { command: 'pwd' }, output: '/workspace', status: 'completed' },
+        tool: 'bash',
+        type: 'tool',
+      },
+      sessionID: 'ses-post-tool',
+      type: 'tool_use',
+    });
+
+    const secondStart = adapter.adapt({
+      part: { id: 'step-2', type: 'step-start' },
+      sessionID: 'ses-post-tool',
+      type: 'step_start',
+    });
+    const finalText = adapter.adapt({
+      part: { id: 'text-1', text: 'Final answer.', type: 'text' },
+      sessionID: 'ses-post-tool',
+      type: 'text',
+    });
+
+    expect(firstStart[0]).toMatchObject({
+      data: { provider: 'opencode', sessionId: 'ses-post-tool' },
+      stepIndex: 0,
+      type: 'stream_start',
+    });
+    expect(firstStart[0].data.newStep).toBeUndefined();
+    expect(secondStart).toEqual([
+      expect.objectContaining({ data: {}, stepIndex: 0, type: 'stream_end' }),
+      expect.objectContaining({
+        data: { newStep: true, provider: 'opencode', sessionId: 'ses-post-tool' },
+        stepIndex: 1,
+        type: 'stream_start',
+      }),
+    ]);
+    expect(finalText[0]).toMatchObject({
+      data: { chunkType: 'text', content: 'Final answer.' },
+      stepIndex: 1,
+      type: 'stream_chunk',
+    });
+  });
+
   it('suppresses duplicate completed part ids', () => {
     const adapter = new OpenCodeAdapter();
     const raw = {

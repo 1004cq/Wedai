@@ -7,6 +7,8 @@ import { canUseWorkspaceApiKeys } from '@/business/server/workspaceApiKey';
 import { getServerDB } from '@/database/core/db-adaptor';
 import { workspaceMembers, workspaces } from '@/database/schemas';
 
+import { ApiException } from '../common/errors';
+
 const log = debug('lobe-hono:workspace-middleware');
 
 export const OPENAPI_WORKSPACE_HEADER = 'X-Workspace-Id';
@@ -20,22 +22,55 @@ const resolveWorkspaceId = (c: Context): string | undefined => {
 
   if (!apiKeyWorkspaceId) {
     if (requestedWorkspaceId) {
-      throw new HTTPException(403, {
-        message: 'Personal API Key cannot access workspace data',
-      });
+      throw new ApiException(
+        403,
+        'workspace_mismatch',
+        'Personal API Key cannot access workspace data',
+      );
     }
 
     return;
   }
 
   if (requestedWorkspaceId && requestedWorkspaceId !== apiKeyWorkspaceId) {
-    throw new HTTPException(403, {
-      message: 'Workspace API Key cannot access a different workspace',
-    });
+    throw new ApiException(
+      403,
+      'workspace_mismatch',
+      'Workspace API Key cannot access a different workspace',
+    );
   }
 
   return apiKeyWorkspaceId;
 };
+
+/**
+ * Built-in workspace roles, lowest to highest. `workspace_members.role` is the
+ * single source of truth, so ordering here is the whole role model.
+ */
+const WORKSPACE_ROLE_ORDER = ['viewer', 'member', 'admin', 'owner'];
+
+const hasMinWorkspaceRole = (role: string | undefined, minRole: string) =>
+  !!role && WORKSPACE_ROLE_ORDER.indexOf(role) >= WORKSPACE_ROLE_ORDER.indexOf(minRole);
+
+/**
+ * Require at least `minRole` for workspace-scoped requests; personal requests
+ * pass through untouched.
+ *
+ * `workspaceAuthMiddleware` only enforces the admin role for `apikey` auth, so
+ * without this an OIDC/session-authenticated member could reach routes whose
+ * models use a workspace-wide (not row-owner) predicate. Mirrors the tRPC
+ * `requireWorkspaceRoleWhenScoped` guard so both transports gate identically.
+ */
+export const requireWorkspaceRoleWhenScoped =
+  (minRole: 'admin' | 'owner') => async (c: Context, next: Next) => {
+    if (!c.get('workspaceId')) return next();
+
+    if (!hasMinWorkspaceRole(c.get('workspaceRole'), minRole)) {
+      throw new HTTPException(403, { message: `Requires ${minRole} role or higher` });
+    }
+
+    return next();
+  };
 
 export const workspaceAuthMiddleware = async (c: Context, next: Next) => {
   const workspaceId = resolveWorkspaceId(c);
@@ -76,27 +111,13 @@ export const workspaceAuthMiddleware = async (c: Context, next: Next) => {
 
   if (!membership) {
     log('Workspace membership check failed for user %s workspace %s', userId, workspaceId);
-    throw new HTTPException(403, {
-      message: 'Not a member of this workspace',
-    });
+    throw new ApiException(403, 'workspace_mismatch', 'Not a member of this workspace');
   }
 
-  if (c.get('authType') === 'apikey') {
-    // `workspace_members.role` is the single source of truth for built-in
-    // workspace roles.
-    const isWorkspaceAdmin = membership.role === 'owner' || membership.role === 'admin';
-
-    if (!isWorkspaceAdmin) {
-      throw new HTTPException(403, {
-        message: 'Workspace API Key requires an admin account',
-      });
-    }
-
-    if (!(await canUseWorkspaceApiKeys(workspaceId))) {
-      throw new HTTPException(403, {
-        message: 'Workspace API Key access is not available',
-      });
-    }
+  if (c.get('authType') === 'apikey' && !(await canUseWorkspaceApiKeys(workspaceId))) {
+    throw new HTTPException(403, {
+      message: 'Workspace API Key access is not available',
+    });
   }
 
   c.set('workspaceId', workspaceId);

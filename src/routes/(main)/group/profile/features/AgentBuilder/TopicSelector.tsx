@@ -1,14 +1,29 @@
 import { type DropdownMenuCheckboxItem } from '@lobehub/ui';
-import { ActionIcon, DropdownMenu, Tag } from '@lobehub/ui';
+import { ActionIcon, createStaticStyles, DropdownMenu, Tag } from '@lobehub/ui';
 import { Clock3Icon, PlusIcon } from 'lucide-react';
 import { memo, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { DESKTOP_HEADER_ICON_SMALL_SIZE } from '@/const/layoutTokens';
 import NavHeader from '@/features/NavHeader';
+import { useFetchAgentChatTopics } from '@/hooks/useFetchChatTopics';
 import { useQueryState } from '@/hooks/useQueryParam';
 import { useChatStore } from '@/store/chat';
 import { topicSelectors } from '@/store/chat/slices/topic/selectors';
+import { useHeaderActionSize } from '@/styles/density';
+
+const styles = createStaticStyles(({ css }) => ({
+  // The tag is a flex item of the header's left slot: without these it keeps its
+  // full text width and overlaps the action icons on the right.
+  tag: css`
+    overflow: hidden;
+    min-width: 0;
+  `,
+  title: css`
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  `,
+}));
 
 interface TopicSelectorProps {
   agentId: string;
@@ -17,9 +32,10 @@ interface TopicSelectorProps {
 
 const TopicSelector = memo<TopicSelectorProps>(({ agentId, disabled }) => {
   const { t } = useTranslation('topic');
+  const headerActionSmallSize = useHeaderActionSize(true);
 
   // Fetch topics for the group agent builder
-  useChatStore((s) => s.useFetchTopics)(true, { agentId });
+  useFetchAgentChatTopics(agentId);
 
   // Use activeTopicId from chatStore (synced from URL query 'bt' via ProfileHydration)
   const activeTopicId = useChatStore((s) => s.activeTopicId);
@@ -62,14 +78,23 @@ const TopicSelector = memo<TopicSelectorProps>(({ agentId, disabled }) => {
 
   return (
     <NavHeader
-      left={activeTopic?.title ? <Tag>{activeTopic.title}</Tag> : undefined}
       showTogglePanelButton={false}
+      styles={{ right: { flex: 'none' } }}
+      left={
+        activeTopic?.title ? (
+          <Tag className={styles.tag}>
+            <span className={styles.title} title={activeTopic.title}>
+              {activeTopic.title}
+            </span>
+          </Tag>
+        ) : undefined
+      }
       right={
         <>
           <ActionIcon
             disabled={disabled}
             icon={PlusIcon}
-            size={DESKTOP_HEADER_ICON_SMALL_SIZE}
+            size={headerActionSmallSize}
             title={t('actions.addNewTopic')}
             onClick={() => {
               if (disabled) return;
@@ -83,7 +108,11 @@ const TopicSelector = memo<TopicSelectorProps>(({ agentId, disabled }) => {
             popupProps={{ style: { maxHeight: 600, minWidth: 200, overflowY: 'auto' } }}
             triggerProps={{ disabled: disabled || isEmpty }}
           >
-            <ActionIcon disabled={disabled || isEmpty} icon={Clock3Icon} />
+            <ActionIcon
+              disabled={disabled || isEmpty}
+              icon={Clock3Icon}
+              size={headerActionSmallSize}
+            />
           </DropdownMenu>
         </>
       }

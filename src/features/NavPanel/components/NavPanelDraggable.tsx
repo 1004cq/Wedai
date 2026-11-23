@@ -1,23 +1,26 @@
 'use client';
 
-import { DraggablePanel } from '@lobehub/ui';
-import { createStaticStyles, cssVar } from 'antd-style';
+import { createStaticStyles, cssVar, DraggablePanel } from '@lobehub/ui';
 import { type ReactNode } from 'react';
-import { memo, Suspense, useMemo, useRef } from 'react';
+import { Activity, memo, Suspense, useMemo, useRef } from 'react';
 
 import NavPanelUpgradeEntry from '@/business/client/features/NavPanelUpgradeEntry';
 import { isDesktop } from '@/const/version';
+import { MAC_VIBRANCY_BACKGROUND } from '@/features/Electron/system/macWindowFullscreen';
+import Footer from '@/features/HomeSidebar/Footer';
 import { USER_DROPDOWN_ICON_ID } from '@/features/NavPanel/constants';
 import { TOGGLE_BUTTON_ID } from '@/features/NavPanel/ToggleLeftPanelButton';
-import Footer from '@/routes/(main)/home/_layout/Footer';
 import { useGlobalStore } from '@/store/global';
 import {
   NAV_PANEL_MAX_WIDTH,
   NAV_PANEL_MIN_WIDTH,
   systemStatusSelectors,
 } from '@/store/global/selectors';
+import { useInterfaceDensity } from '@/styles/density';
+import { densityVars } from '@/styles/densityVars';
 import { isMacOS } from '@/utils/platform';
 
+import { NavPanelDensityContext } from '../density';
 import { useNavPanelSizeChangeHandler } from '../hooks/useNavPanel';
 import { BACK_BUTTON_ID } from './BackButton';
 
@@ -60,7 +63,7 @@ const draggableStyles = createStaticStyles(({ css, cssVar }) => ({
     user-select: none;
     height: 100%;
     color: ${cssVar.colorTextSecondary};
-    background: ${isDesktop && isMacOS() ? 'transparent' : cssVar.colorBgLayout};
+    background: ${isDesktop && isMacOS() ? MAC_VIBRANCY_BACKGROUND : cssVar.colorBgLayout};
 
     * {
       user-select: none;
@@ -82,12 +85,12 @@ const draggableStyles = createStaticStyles(({ css, cssVar }) => ({
         width 0.2s ${cssVar.motionEaseOut};
     }
     #${BACK_BUTTON_ID} {
-      width: 24px !important;
+      width: ${densityVars.iconBox} !important;
     }
 
     &:hover {
       #${TOGGLE_BUTTON_ID} {
-        width: 32px !important;
+        width: ${densityVars.iconBox} !important;
         opacity: 1;
       }
 
@@ -104,19 +107,23 @@ interface NavPanelDraggableProps {
     key: string;
     node: ReactNode;
   };
+  homeContent?: ReactNode;
 }
 
 const classNames = {
   content: draggableStyles.content,
 };
 
-export const NavPanelDraggable = memo<NavPanelDraggableProps>(({ activeContent }) => {
+const hiddenLayerStyle = { display: 'none' };
+
+export const NavPanelDraggable = memo<NavPanelDraggableProps>(({ activeContent, homeContent }) => {
   const [expand, togglePanel, isStatusInit] = useGlobalStore((s) => [
     systemStatusSelectors.showLeftPanel(s),
     s.toggleLeftPanel,
     systemStatusSelectors.isStatusInit(s),
   ]);
   const handleSizeChange = useNavPanelSizeChangeHandler();
+  const interfaceDensity = useInterfaceDensity();
 
   // Defer DraggablePanel mount until system status hydrates; otherwise defaultSize
   // captures the pre-hydration default and the DOM drifts off NavigationBar's live width.
@@ -127,7 +134,7 @@ export const NavPanelDraggable = memo<NavPanelDraggableProps>(({ activeContent }
 
   const styles = useMemo(
     () => ({
-      background: isDesktop && isMacOS() ? 'transparent' : cssVar.colorBgLayout,
+      background: isDesktop && isMacOS() ? MAC_VIBRANCY_BACKGROUND : cssVar.colorBgLayout,
       zIndex: 11,
     }),
     [],
@@ -139,6 +146,7 @@ export const NavPanelDraggable = memo<NavPanelDraggableProps>(({ activeContent }
   }
 
   const defaultSize = { height: '100%', width: defaultWidthRef.current };
+  const isHomeActive = activeContent.key === 'home';
 
   return (
     <DraggablePanel
@@ -155,17 +163,34 @@ export const NavPanelDraggable = memo<NavPanelDraggableProps>(({ activeContent }
       onExpandChange={togglePanel}
       onSizeDragging={handleSizeChange}
     >
-      <div className={draggableStyles.inner}>
-        <div className={draggableStyles.layer} key={activeContent.key}>
-          {activeContent.node}
+      <NavPanelDensityContext value={interfaceDensity}>
+        <div className={draggableStyles.inner}>
+          {/* Home stays mounted while a route-owned panel is active so its list
+            state survives the round trip. Activity keeps the fibers but not the
+            visibility, so the layer is force-hidden like HomeLayout does. */}
+          {homeContent && (
+            <Activity mode={isHomeActive ? 'visible' : 'hidden'} name="NavPanelHome">
+              <div
+                className={draggableStyles.layer}
+                style={isHomeActive ? undefined : hiddenLayerStyle}
+              >
+                {homeContent}
+              </div>
+            </Activity>
+          )}
+          {!isHomeActive && (
+            <div className={draggableStyles.layer} key={activeContent.key}>
+              {activeContent.node}
+            </div>
+          )}
         </div>
-      </div>
-      <Suspense fallback={null}>
-        <NavPanelUpgradeEntry />
-      </Suspense>
-      <Suspense>
-        <Footer />
-      </Suspense>
+        <Suspense fallback={null}>
+          <NavPanelUpgradeEntry />
+        </Suspense>
+        <Suspense>
+          <Footer />
+        </Suspense>
+      </NavPanelDensityContext>
     </DraggablePanel>
   );
 });

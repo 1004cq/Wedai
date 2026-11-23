@@ -282,9 +282,62 @@ describe('LobeOpenAI', () => {
       expect(textEmbeddingAda).toBeDefined();
       expect(textEmbeddingAda?.type).toBe('embedding');
     });
+
+    it('lists a decision card next to a chat model served by the Decisions API', async () => {
+      (instance['client'].models.list as Mock).mockResolvedValue({
+        data: [{ created: 1_780_000_000, id: 'gpt-6-luna', object: 'model', owned_by: 'system' }],
+      });
+
+      const list = await instance.models();
+
+      expect(list.find((model) => model.id === 'gpt-6-luna')?.type).toBe('chat');
+      expect(list.find((model) => model.id === 'gpt-6-luna:decision')).toMatchObject({
+        displayName: 'GPT-6 Luna Decisions',
+        type: 'decision',
+      });
+    });
   });
 
   describe('chatCompletion.handlePayload', () => {
+    it('should force raw audio input through Chat Completions and send input_audio', async () => {
+      const wavBase64 = 'UklGRjAwMDBXQVZFZm10IA==';
+
+      await instance.chat({
+        enabledSearch: true,
+        messages: [
+          {
+            content: [
+              {
+                audio_url: {
+                  mimeType: 'audio/wav',
+                  url: `data:audio/wav;base64,${wavBase64}`,
+                },
+                type: 'audio_url',
+              },
+            ],
+            role: 'user',
+          },
+        ],
+        model: 'o1-pro',
+        temperature: 0.7,
+      });
+
+      expect(instance['client'].responses.create).not.toHaveBeenCalled();
+      expect(instance['client'].chat.completions.create).toHaveBeenCalledTimes(1);
+      const createCall = (instance['client'].chat.completions.create as Mock).mock.calls[0][0];
+      expect(createCall.messages).toEqual([
+        {
+          content: [
+            {
+              input_audio: { data: wavBase64, format: 'wav' },
+              type: 'input_audio',
+            },
+          ],
+          role: 'user',
+        },
+      ]);
+    });
+
     it('should use responses API for responsesAPIModels without enabledSearch', async () => {
       const payload = {
         messages: [{ content: 'Hello', role: 'user' as const }],
@@ -312,6 +365,40 @@ describe('LobeOpenAI', () => {
       expect(instance['client'].responses.create).toHaveBeenCalled();
       const createCall = (instance['client'].responses.create as Mock).mock.calls[0][0];
       expect(createCall.model).toBe('gpt-5.6-sol');
+    });
+
+    it('should use responses API for GPT-6 family models', async () => {
+      const payload = {
+        messages: [{ content: 'Hello', role: 'user' as const }],
+        model: 'gpt-6-astra',
+        temperature: 0.7,
+      };
+
+      await instance.chat(payload);
+
+      expect(instance['client'].responses.create).toHaveBeenCalled();
+      const createCall = (instance['client'].responses.create as Mock).mock.calls[0][0];
+      expect(createCall.model).toBe('gpt-6-astra');
+    });
+
+    it('should prune sampling parameters for Codex-prefixed GPT-5.6 models', async () => {
+      const payload = {
+        frequency_penalty: 0.5,
+        messages: [{ content: 'Hello', role: 'user' as const }],
+        model: 'codex/gpt-5.6-luna',
+        presence_penalty: 0.3,
+        temperature: 0.7,
+        top_p: 0.9,
+      };
+
+      await instance.chat(payload);
+
+      expect(instance['client'].responses.create).toHaveBeenCalled();
+      const createCall = (instance['client'].responses.create as Mock).mock.calls[0][0];
+      expect(createCall.frequency_penalty).toBeUndefined();
+      expect(createCall.presence_penalty).toBeUndefined();
+      expect(createCall.temperature).toBeUndefined();
+      expect(createCall.top_p).toBeUndefined();
     });
 
     it('should use responses API when enabledSearch is true', async () => {
@@ -402,6 +489,28 @@ describe('LobeOpenAI', () => {
       expect(createCall.temperature).toBeUndefined();
       expect(createCall.top_p).toBeUndefined();
     });
+
+    it.each(['gpt-6-astra', 'gpt-6.2-astra', 'gpt-6.2-sol'])(
+      'should prune unsupported params and keep xhigh reasoning effort for %s',
+      async (model) => {
+        await instance.chat({
+          messages: [{ content: 'Hello', role: 'user' }],
+          model,
+          reasoning_effort: 'xhigh',
+          temperature: 0.7,
+          top_p: 0.9,
+        });
+
+        const createCall = (instance['client'].responses.create as Mock).mock.calls[0][0];
+        expect(createCall).toMatchObject({
+          model,
+          reasoning: { effort: 'xhigh', summary: 'auto' },
+        });
+        expect(createCall.temperature).toBeUndefined();
+        expect(createCall.top_logprobs).toBeUndefined();
+        expect(createCall.top_p).toBeUndefined();
+      },
+    );
 
     it('should add search_context_size to web_search tool when OPENAI_SEARCH_CONTEXT_SIZE is set', async () => {
       // Note: oaiSearchContextSize is read at module load time, not runtime

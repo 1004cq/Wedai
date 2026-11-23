@@ -1,3 +1,4 @@
+import type { BrowserWindowConstructorOptions } from 'electron';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { type App as AppCore } from '../../App';
@@ -41,7 +42,9 @@ const {
     show: vi.fn(),
     unmaximize: vi.fn(),
     webContents: {
+      ipc: { once: vi.fn() },
       openDevTools: vi.fn(),
+      reloadIgnoringCache: vi.fn(),
       send: vi.fn(),
       session: {
         webRequest: {
@@ -56,6 +59,7 @@ const {
 
   return {
     mockAppModule: {
+      commandLine: { hasSwitch: vi.fn(() => false) },
       dock: {
         setBadge: vi.fn(),
         show: vi.fn(),
@@ -66,7 +70,9 @@ const {
       setActivationPolicy: vi.fn(),
       setBadgeCount: vi.fn(),
     },
-    MockBrowserWindow: vi.fn().mockImplementation(() => mockBrowserWindow),
+    MockBrowserWindow: vi.fn(function () {
+      return mockBrowserWindow;
+    }),
     mockBrowserWindow,
     mockEnv: {
       externalNavigationHosts: '',
@@ -111,16 +117,6 @@ vi.mock('electron', () => ({
   nativeTheme: mockNativeTheme,
   screen: mockScreen,
   shell: mockShell,
-}));
-
-// Mock logger
-vi.mock('@/utils/logger', () => ({
-  createLogger: () => ({
-    debug: vi.fn(),
-    error: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-  }),
 }));
 
 // Mock constants
@@ -215,6 +211,12 @@ describe('Browser', () => {
     };
 
     mockApp = {
+      i18n: { ns: () => (key: string) => key },
+      coreUpdateManager: {
+        pauseForUnloadConfirmation: vi.fn(() => false),
+        resolveUnloadConfirmation: vi.fn(() => true),
+        handleUnloadPrevented: vi.fn(),
+      },
       browserManager: {
         retrieveByIdentifier: vi.fn(),
       },
@@ -294,6 +296,18 @@ describe('Browser', () => {
       expect(MockBrowserWindow).toHaveBeenCalled();
     });
 
+    it('tells the renderer to expose stores while remote debugging is on', () => {
+      const rendererArgs = (call: unknown[] | undefined) =>
+        (call?.[0] as BrowserWindowConstructorOptions).webPreferences?.additionalArguments;
+
+      expect(rendererArgs(MockBrowserWindow.mock.calls[0])).not.toContain('--lobe-expose-stores');
+
+      mockAppModule.commandLine.hasSwitch.mockReturnValueOnce(true);
+      new Browser({ ...defaultOptions, identifier: 'debug-window' }, mockApp);
+
+      expect(rendererArgs(MockBrowserWindow.mock.lastCall)).toContain('--lobe-expose-stores');
+    });
+
     it('loads the renderer directly without a splash-page navigation', async () => {
       await vi.waitFor(() => {
         expect(mockBrowserWindow.loadURL).toHaveBeenCalledWith(
@@ -334,6 +348,46 @@ describe('Browser', () => {
   });
 
   describe('retrieveOrInitialize', () => {
+    const firstFrameSignals = () => ({
+      loadingScreenPainted: mockBrowserWindow.webContents.ipc.once.mock.calls.findLast(
+        ([channel]: [string]) => channel === 'desktop:loading-screen-painted',
+      )?.[1],
+      readyToShow: mockBrowserWindow.once.mock.calls.findLast(
+        ([event]: [string]) => event === 'ready-to-show',
+      )?.[1],
+    });
+
+    it('should show the window once the preload reports the loading screen painted', () => {
+      new Browser({ ...defaultOptions, showOnInit: true }, mockApp);
+      expect(mockBrowserWindow.show).not.toHaveBeenCalled();
+
+      const { loadingScreenPainted, readyToShow } = firstFrameSignals();
+      loadingScreenPainted();
+      expect(mockBrowserWindow.show).toHaveBeenCalledTimes(1);
+
+      readyToShow();
+      expect(mockBrowserWindow.show).toHaveBeenCalledTimes(1);
+    });
+
+    it('should fall back to ready-to-show when the paint report never arrives', () => {
+      new Browser({ ...defaultOptions, showOnInit: true }, mockApp);
+
+      const { loadingScreenPainted, readyToShow } = firstFrameSignals();
+      readyToShow();
+      expect(mockBrowserWindow.show).toHaveBeenCalledTimes(1);
+
+      loadingScreenPainted();
+      expect(mockBrowserWindow.show).toHaveBeenCalledTimes(1);
+    });
+
+    it('should not show the window when showOnInit is unset', () => {
+      const { loadingScreenPainted, readyToShow } = firstFrameSignals();
+      loadingScreenPainted();
+      readyToShow();
+
+      expect(mockBrowserWindow.show).not.toHaveBeenCalled();
+    });
+
     it('should restore window size from store', () => {
       mockStoreManagerGet.mockImplementation((key: string) => {
         if (key === 'windowSize_test-window') {
@@ -349,6 +403,32 @@ describe('Browser', () => {
         expect.objectContaining({
           height: 700,
           width: 900,
+        }),
+      );
+    });
+
+    it('should prefer the requested initial size when state restoration is disabled', () => {
+      mockStoreManagerGet.mockImplementation((key: string) => {
+        if (key === 'windowSize_test-window') {
+          return { height: 700, width: 900 };
+        }
+        return undefined;
+      });
+
+      new Browser(
+        {
+          ...defaultOptions,
+          height: 954,
+          restoreWindowState: false,
+          width: 1432,
+        },
+        mockApp,
+      );
+
+      expect(MockBrowserWindow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          height: 954,
+          width: 1432,
         }),
       );
     });
@@ -883,6 +963,146 @@ describe('Browser', () => {
 
       expect(mockEvent.preventDefault).not.toHaveBeenCalled();
     });
+
+    it('continues a protected window close without reloading the page', () => {
+      const closeHandler = mockBrowserWindow.on.mock.calls.find((call) => call[0] === 'close')?.[1];
+      const event = { preventDefault: vi.fn() };
+      closeHandler(event);
+      willPreventUnloadHandler(event);
+      mockBrowserWindow.close.mockImplementationOnce(() => {
+        closeHandler(event);
+        willPreventUnloadHandler(event);
+      });
+
+      browser.resolveUnloadConfirmation(true);
+      browser.resolveUnloadConfirmation(true);
+
+      expect(mockBrowserWindow.close).toHaveBeenCalledOnce();
+      expect(mockBrowserWindow.webContents.reloadIgnoringCache).not.toHaveBeenCalled();
+      expect(event.preventDefault).toHaveBeenCalledOnce();
+    });
+
+    it('keeps a protected window open when closing is cancelled', () => {
+      const closeHandler = mockBrowserWindow.on.mock.calls.find((call) => call[0] === 'close')?.[1];
+      closeHandler({ preventDefault: vi.fn() });
+      willPreventUnloadHandler({ preventDefault: vi.fn() });
+      browser.resolveUnloadConfirmation(false);
+
+      expect(mockBrowserWindow.close).not.toHaveBeenCalled();
+      expect(mockBrowserWindow.webContents.reloadIgnoringCache).not.toHaveBeenCalled();
+    });
+
+    it('requests one UI confirmation and retries only after approval', () => {
+      const event = { preventDefault: vi.fn() };
+      mockBrowserWindow.webContents.reloadIgnoringCache.mockImplementation(() => {
+        const loadingHandler = mockBrowserWindow.webContents.on.mock.calls.find(
+          (call) => call[0] === 'did-start-loading',
+        )?.[1];
+        loadingHandler?.();
+        willPreventUnloadHandler(event);
+      });
+      browser.reloadIgnoringCache();
+      browser.reloadIgnoringCache();
+      expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(
+        mockBrowserWindow.webContents.send.mock.calls.filter(
+          ([name]) => name === 'reloadConfirmationRequested',
+        ),
+      ).toHaveLength(1);
+      expect(mockBrowserWindow.webContents.reloadIgnoringCache).toHaveBeenCalledOnce();
+      browser.resolveUnloadConfirmation(true);
+      expect(event.preventDefault).toHaveBeenCalledOnce();
+      browser.resolveUnloadConfirmation(true);
+      expect(mockBrowserWindow.webContents.reloadIgnoringCache).toHaveBeenCalledTimes(2);
+    });
+
+    it('cancels a stale prompt and registers a fresh confirmation on retry', () => {
+      mockApp.coreUpdateManager.pauseForUnloadConfirmation = vi.fn(() => true);
+      const event = { preventDefault: vi.fn() };
+      mockBrowserWindow.webContents.reloadIgnoringCache.mockImplementation(() =>
+        willPreventUnloadHandler(event),
+      );
+      browser.reloadIgnoringCache();
+      browser.cancelUnloadConfirmation();
+      expect(mockBrowserWindow.webContents.send).toHaveBeenCalledWith(
+        'reloadConfirmationCancelled',
+        undefined,
+      );
+      browser.resolveUnloadConfirmation(true);
+      expect(mockBrowserWindow.webContents.reloadIgnoringCache).toHaveBeenCalledOnce();
+      browser.reloadIgnoringCache();
+      expect(mockApp.coreUpdateManager.pauseForUnloadConfirmation).toHaveBeenCalledTimes(2);
+      browser.resolveUnloadConfirmation(true);
+      expect(mockBrowserWindow.webContents.reloadIgnoringCache).toHaveBeenCalledTimes(3);
+    });
+
+    it('keeps the page when the confirmation is dismissed', () => {
+      mockBrowserWindow.webContents.reloadIgnoringCache.mockImplementation(() =>
+        willPreventUnloadHandler({ preventDefault: vi.fn() }),
+      );
+      browser.reloadIgnoringCache();
+      browser.resolveUnloadConfirmation(false);
+      expect(mockBrowserWindow.webContents.reloadIgnoringCache).toHaveBeenCalledOnce();
+    });
+
+    it('does not replace an unknown unload operation with a reload', () => {
+      const event = { preventDefault: vi.fn() };
+      willPreventUnloadHandler(event);
+      browser.resolveUnloadConfirmation(true);
+      expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(mockBrowserWindow.webContents.send).not.toHaveBeenCalledWith(
+        'reloadConfirmationRequested',
+        undefined,
+      );
+      expect(mockBrowserWindow.webContents.reloadIgnoringCache).not.toHaveBeenCalled();
+    });
+
+    it('does not replace a pending reload confirmation with a close', () => {
+      const event = { preventDefault: vi.fn() };
+      mockBrowserWindow.webContents.reloadIgnoringCache.mockImplementation(() =>
+        willPreventUnloadHandler(event),
+      );
+      browser.reloadIgnoringCache();
+      const closeEvent = { preventDefault: vi.fn() };
+      const closeHandler = mockBrowserWindow.on.mock.calls.find((call) => call[0] === 'close')?.[1];
+      closeHandler(closeEvent);
+      expect(closeEvent.preventDefault).toHaveBeenCalledOnce();
+      browser.resolveUnloadConfirmation(true);
+      expect(mockBrowserWindow.webContents.reloadIgnoringCache).toHaveBeenCalledTimes(2);
+      expect(mockBrowserWindow.close).not.toHaveBeenCalled();
+    });
+
+    it('silently defers automatic reloads without requesting a modal', () => {
+      const event = { preventDefault: vi.fn() };
+      mockBrowserWindow.webContents.reloadIgnoringCache.mockImplementationOnce(() => {
+        const loadingHandler = mockBrowserWindow.webContents.on.mock.calls.find(
+          (call) => call[0] === 'did-start-loading',
+        )?.[1];
+        loadingHandler?.();
+        willPreventUnloadHandler(event);
+      });
+      browser.reloadIgnoringCache(false, false);
+      expect(mockBrowserWindow.webContents.send).not.toHaveBeenCalledWith(
+        'reloadConfirmationRequested',
+        undefined,
+      );
+      expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(mockApp.coreUpdateManager.handleUnloadPrevented).toHaveBeenCalledOnce();
+    });
+
+    it('should bypass beforeunload once for a renderer OTA reload', () => {
+      const reloadEvent = { preventDefault: vi.fn() };
+      const laterEvent = { preventDefault: vi.fn() };
+      mockBrowserWindow.webContents.reloadIgnoringCache.mockImplementationOnce(() => {
+        willPreventUnloadHandler(reloadEvent);
+      });
+
+      browser.reloadIgnoringCache(true);
+      willPreventUnloadHandler(laterEvent);
+
+      expect(reloadEvent.preventDefault).toHaveBeenCalledOnce();
+      expect(laterEvent.preventDefault).not.toHaveBeenCalled();
+    });
   });
 
   describe('top-level navigation handling', () => {
@@ -936,7 +1156,7 @@ describe('Browser', () => {
     });
 
     it('should deny renderer-origin URLs instead of handing them to the OS', () => {
-      expect(windowOpenHandler({ url: 'app://renderer/verify/run-1' })).toEqual({
+      expect(windowOpenHandler({ url: 'app://renderer/acceptance/acc-1' })).toEqual({
         action: 'deny',
       });
       expect(mockShell.openExternal).not.toHaveBeenCalled();

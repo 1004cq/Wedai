@@ -1,5 +1,9 @@
 import type { IconType } from '@icons-pack/react-simple-icons';
-import { SiGithub, SiLinear, SiPosthog, SiVercel, SiX } from '@icons-pack/react-simple-icons';
+import SiGithub from '@icons-pack/react-simple-icons/icons/SiGithub';
+import SiLinear from '@icons-pack/react-simple-icons/icons/SiLinear';
+import SiPosthog from '@icons-pack/react-simple-icons/icons/SiPosthog';
+import SiVercel from '@icons-pack/react-simple-icons/icons/SiVercel';
+import SiX from '@icons-pack/react-simple-icons/icons/SiX';
 
 import { OFFICIAL_SITE } from './url';
 
@@ -113,12 +117,12 @@ export const LOBEHUB_SKILL_PROVIDERS: LobehubSkillProviderType[] = [
     authorUrl: OFFICIAL_SITE,
     defaultVisible: true,
     description:
-      'X (Twitter) is a social media platform for sharing real-time updates, news, and engaging with your audience through posts, replies, and direct messages.',
+      'X is a social media platform for sharing real-time updates, news, and engaging with your audience through posts, replies, and direct messages.',
     icon: SiX,
     id: 'twitter',
     readme:
-      'Connect to X (Twitter) to post tweets, manage your timeline, and engage with your audience. Create content, schedule posts, monitor mentions, and build your social media presence through conversational AI.',
-    label: 'X (Twitter)',
+      'Connect to X to publish posts, manage your timeline, and engage with your audience. Create content, schedule posts, monitor mentions, and build your social media presence through conversational AI.',
+    label: 'X',
   },
   {
     author: 'LobeHub',

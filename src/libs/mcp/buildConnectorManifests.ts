@@ -1,8 +1,9 @@
-import type { ToolManifest } from '@lobechat/types';
+import { buildConnectorManifest, resolveConnectorLinkParam } from '@lobechat/mecha';
+import { needsConnectorReauthorization, type ToolManifest } from '@lobechat/types';
+import { connectorConnectVia, connectorDeviceBinding } from '@lobechat/utils/mcpEndpoint';
 
 import type { DecryptedConnector } from '@/database/models/connector';
 import type { UserConnectorToolItem } from '@/database/schemas';
-import { ConnectorToolPermission } from '@/database/schemas';
 
 /**
  * Convert connector DB rows into ToolManifest entries suitable for
@@ -12,10 +13,18 @@ import { ConnectorToolPermission } from '@/database/schemas';
  * - 'auto'           → humanIntervention: undefined (AI calls freely)
  * - 'needs_approval' → humanIntervention: 'required' (human must confirm)
  * - 'disabled'       → tool included with blocking description; AI knows it exists but is told it cannot be called
+ * A tool whose manifest made approval mandatory (`metadata.mandatoryApproval`)
+ * is `humanIntervention: 'always'` unless disabled: auto-run cannot skip it.
  */
 export function buildConnectorManifests(
-  connectors: DecryptedConnector[],
+  /**
+   * Rows from `ConnectorModel.resolveToolSets` carry their tool prefix
+   * (`toolIdentifier`): each becomes its own manifest under it. Rows without
+   * one are keyed by their identifier.
+   */
+  connectors: (DecryptedConnector & { toolIdentifier?: string })[],
   tools: UserConnectorToolItem[],
+  mcpApps = false,
 ): ToolManifest[] {
   const toolsByConnector = new Map<string, UserConnectorToolItem[]>();
   for (const tool of tools) {
@@ -27,57 +36,42 @@ export function buildConnectorManifests(
   const manifests: ToolManifest[] = [];
 
   for (const connector of connectors) {
-    if (!connector.isEnabled) continue;
-
-    const connectorTools = toolsByConnector.get(connector.id) ?? [];
-
-    // Include ALL tools in the manifest so the AI is aware of their existence.
-    // Disabled tools get a blocking description so the AI knows not to call them.
-    // At execution time, the callTool endpoint will double-check and hard-block disabled tools.
-    if (connectorTools.length === 0) continue;
-
-    const api = connectorTools.map((t) => {
-      if (t.permission === ConnectorToolPermission.disabled) {
-        return {
-          description:
-            `[TOOL DISABLED] The user has disabled this tool and it cannot be executed. ` +
-            `Do NOT call this tool. If the user asks to perform this action, inform them ` +
-            `that they have manually disabled "${t.toolName}" and can re-enable it in Settings > Connectors.`,
-          humanIntervention: 'required' as const,
-          name: t.toolName,
-          parameters: (t.inputSchema ?? { properties: {}, type: 'object' }) as Record<
-            string,
-            unknown
-          >,
-        };
-      }
-      return {
-        description: t.description ?? '',
-        humanIntervention:
-          t.permission === ConnectorToolPermission.needs_approval
-            ? ('required' as const)
-            : undefined,
-        name: t.toolName,
-        parameters: (t.inputSchema ?? { properties: {}, type: 'object' }) as Record<
-          string,
-          unknown
-        >,
-      };
-    });
-
-    const mcpParams = buildMcpParams(connector);
-
-    manifests.push({
-      api,
-      identifier: connector.identifier,
-      // @ts-ignore — mcpParams is a runtime-only field not in the public type
-      mcpParams,
-      meta: {
-        avatar: 'MCP_AVATAR',
-        description: `${connector.name} connector with ${api.length} tools`,
-        title: connector.name,
+    // The listing and the permission mapping are the shared rule; the server
+    // adds the endpoint and credentials the runtime needs to call it.
+    const manifest = buildConnectorManifest(
+      {
+        id: connector.id,
+        identifier: connector.identifier,
+        isEnabled: connector.isEnabled,
+        name: connector.name,
+        links: connector.links,
+        toolIdentifier: connector.toolIdentifier,
+        tools: toolsByConnector.get(connector.id) ?? [],
       },
-      type: 'mcp' as any,
+      mcpApps,
+    );
+    if (!manifest) continue;
+
+    const reauthorizationRequired = needsConnectorReauthorization(connector.credentials);
+    manifests.push({
+      ...(manifest as ToolManifest),
+      // @ts-ignore — mcpParams is a runtime-only field not in the public type
+      mcpParams: buildMcpParams(
+        reauthorizationRequired || (connector.links?.length ?? 0) > 1
+          ? { ...connector, credentials: null }
+          : connector,
+      ),
+      ...(reauthorizationRequired && { connectorReauthorizationRequired: true }),
+      ...((connector.links?.length ?? 0) > 1
+        ? {
+            connectorLinks: {
+              connectorId: connector.id,
+              param: resolveConnectorLinkParam(
+                (toolsByConnector.get(connector.id) ?? []).map((tool) => tool.inputSchema),
+              ),
+            },
+          }
+        : {}),
     });
   }
 
@@ -85,9 +79,13 @@ export function buildConnectorManifests(
 }
 
 function buildMcpParams(connector: DecryptedConnector) {
+  // Only set when bound, so an unbound connector keeps the params it always
+  // had. Must match `buildConnectorMcpParams`.
+  const boundDevice = connectorDeviceBinding(connector);
   if (connector.mcpConnectionType === 'stdio') {
     return {
       args: connector.mcpStdioConfig?.args ?? [],
+      ...(boundDevice && { boundDevice }),
       command: connector.mcpStdioConfig?.command ?? '',
       env: connector.mcpStdioConfig?.env,
       name: connector.identifier,
@@ -101,11 +99,25 @@ function buildMcpParams(connector: DecryptedConnector) {
   // Merge them on top of any header-type credential headers (legacy rows), to
   // mirror the sync/callTool path in services/connector/sync.ts.
   const customHeaders = connector.metadata?.customHeaders as Record<string, string> | undefined;
-  const mergedHeaders =
-    headers || customHeaders ? { ...headers, ...customHeaders } : undefined;
+  const mergedHeaders = headers || customHeaders ? { ...headers, ...customHeaders } : undefined;
+
+  // A marketplace stdio server the market hosts: the tool executor calls it
+  // through the market's cloud gateway by identifier.
+  if (connector.mcpConnectionType === 'cloud') {
+    return {
+      headers: mergedHeaders,
+      name: connector.identifier,
+      type: 'cloud' as const,
+      url: (connector.metadata?.cloudEndPoint as string | undefined) ?? '',
+    };
+  }
 
   return {
     auth,
+    ...(boundDevice && { boundDevice }),
+    // Only set when chosen, so `auto` keeps the params (and the MCP session
+    // cached by them) it always had. Must match `buildConnectorMcpParams`.
+    ...(connectorConnectVia(connector.metadata) === 'device' && { connectVia: 'device' as const }),
     headers: mergedHeaders,
     name: connector.identifier,
     type: 'http' as const,

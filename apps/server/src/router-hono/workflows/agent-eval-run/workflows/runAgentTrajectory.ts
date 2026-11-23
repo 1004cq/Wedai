@@ -1,0 +1,130 @@
+import { type WorkflowContext } from '@upstash/workflow';
+import debug from 'debug';
+
+import { getServerDB } from '@/database/server';
+import { AgentEvalRunService } from '@/server/services/agentEvalRun';
+import {
+  AgentEvalRunWorkflow,
+  type RunAgentTrajectoryPayload,
+} from '@/server/workflows/agentEvalRun';
+import { resolveAgentEvalRunWorkspace } from '@/server/workflows/agentEvalRun/utils';
+import { runStep } from '@/server/workflows/step';
+
+const log = debug('lobe-server:workflows:run-agent-trajectory');
+
+/**
+ * Run agent trajectory workflow - executes a single agent runtime call
+ * For k=1: directly executes agent via completionWebhook
+ * For k>1: creates K threads and triggers K run-thread-trajectory sub-workflows
+ */
+export const runAgentTrajectoryHandler = async (
+  context: WorkflowContext<RunAgentTrajectoryPayload>,
+) => {
+  const { runId, testCaseId, userId } = context.requestPayload ?? {};
+
+  log('Starting: runId=%s testCaseId=%s', runId, testCaseId);
+
+  if (!runId || !testCaseId || !userId) {
+    return { error: 'Missing required parameters', success: false };
+  }
+
+  const db = await getServerDB();
+  const wsId = await resolveAgentEvalRunWorkspace(db, runId);
+  const service = new AgentEvalRunService(db, userId, wsId);
+
+  // Step 1: Read all required data
+  const data = await runStep(context, 'agent-eval-run:load-data', () =>
+    service.loadTrajectoryData(runId, testCaseId),
+  );
+
+  if ('error' in data) {
+    return { error: data.error, success: false };
+  }
+
+  const { environment, envPrompt, run, testCase } = data;
+
+  if (run.status === 'aborted') {
+    log('Run aborted, skipping: runId=%s testCaseId=%s', runId, testCaseId);
+    return { cancelled: true };
+  }
+
+  const k = (run.config as { k?: number } | null)?.k ?? 1;
+
+  // Step 2: Branch on k value
+  if (k > 1) {
+    // Multi-thread path: create K threads and trigger sub-workflows
+    const result = await runStep(context, 'agent-eval-run:exec-multi-thread', () =>
+      service.executeMultiThreadTrajectory({ k, run, runId, testCaseId }),
+    );
+
+    if (!result) return { cancelled: true };
+
+    log(
+      'Multi-thread started: runId=%s testCaseId=%s k=%d threads=%d',
+      runId,
+      testCaseId,
+      k,
+      result.threadIds.length,
+    );
+
+    return {
+      k,
+      success: true,
+      testCaseId,
+      threadIds: result.threadIds,
+      topicId: result.topicId,
+    };
+  }
+
+  // Single execution path (k=1): existing logic
+  const result = await runStep(context, 'agent-eval-run:exec-agent', () =>
+    service.executeTrajectory({ environment, envPrompt, run, runId, testCase, testCaseId }),
+  );
+
+  if (!result || ('cancelled' in result && result.cancelled)) return { cancelled: true };
+
+  // If execAgent failed, record completion and check if run should be finalized
+  if ('error' in result) {
+    await runStep(context, 'agent-eval-run:handle-exec-error', async () => {
+      const { allDone } = await service.recordTrajectoryCompletion({
+        executionId: result.executionId,
+        topicId: result.topicId,
+        runId,
+        status: 'error',
+        telemetry: { completionReason: 'error', errorMessage: result.error as string },
+        testCaseId,
+      });
+
+      if (allDone) {
+        log('All test cases done after exec error, triggering finalize: runId=%s', runId);
+        await AgentEvalRunWorkflow.triggerFinalizeRun({ runId, userId });
+      }
+    });
+
+    return { error: result.error, success: false, testCaseId };
+  }
+
+  log(
+    'Agent started (async): runId=%s testCaseId=%s topicId=%s',
+    runId,
+    testCaseId,
+    result.topicId,
+  );
+
+  return {
+    success: true,
+    testCaseId,
+    topicId: result.topicId,
+  };
+};
+
+/** Trajectories (one per attempt, pass@k threads included) in flight at once; see executeTestCase. */
+const TRAJECTORY_PARALLELISM = Number(process.env.AGENT_EVAL_TRAJECTORY_PARALLELISM) || 500;
+
+export const runAgentTrajectoryWorkflowOptions = {
+  flowControl: {
+    key: 'agent-eval-run.run-agent-trajectory',
+    parallelism: TRAJECTORY_PARALLELISM,
+    ratePerSecond: 20,
+  },
+};

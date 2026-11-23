@@ -1,18 +1,34 @@
-import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
 
 import { getAllScopePermissions } from '@/utils/rbac';
 
+import {
+  example,
+  FILE_LIST_EXAMPLE,
+  QUERY_FILES_EXAMPLE,
+  QUERY_FILES_RESULT_EXAMPLE,
+} from '../common/examples';
+import { routeDoc } from '../common/openapi';
+import { zValidator } from '../common/validator';
 import { FileController } from '../controllers/file.controller';
 import { requireAnyPermission } from '../middleware';
 import { requireAuth } from '../middleware/auth';
+import { DeletedResourceSchema } from '../types/common.type';
 import {
+  BatchFileUploadResponseSchema,
   BatchGetFilesRequestSchema,
+  BatchGetFilesResponseSchema,
   FileChunkRequestSchema,
+  FileChunkStatusResponseSchema,
+  FileChunkTaskResponseSchema,
+  FileDetailSchema,
   FileIdParamSchema,
   FileListQuerySchema,
+  FileListResponseSchema,
   FileParseRequestSchema,
+  FileParseResultSchema,
   FileUrlRequestSchema,
+  FileUrlResponseSchema,
   UpdateFileSchema,
 } from '../types/file.type';
 
@@ -34,8 +50,17 @@ const app = new Hono();
  */
 app.get(
   '/',
+  routeDoc({
+    data: FileListResponseSchema,
+    responseExample: FILE_LIST_EXAMPLE,
+    summary: 'List files',
+    tags: ['files'],
+  }),
   requireAuth,
-  requireAnyPermission(getAllScopePermissions('FILE_READ'), 'You do not have permission to view file list'),
+  requireAnyPermission(
+    getAllScopePermissions('FILE_READ'),
+    'You do not have permission to view file list',
+  ),
   zValidator('query', FileListQuerySchema),
   async (c) => {
     const fileController = new FileController();
@@ -56,12 +81,41 @@ app.get(
  * - sessionId: string (optional) - Session ID; if provided, creates a file-session association
  * - skipCheckFileType: boolean (optional) - Whether to skip file type check
  * - directory: string (optional) - Upload directory
- * - skipExist: boolean (optional) - Whether to skip existing parse results, default false
+ * - skipDeduplication: boolean (optional) - Whether to skip content deduplication
  */
 app.post(
   '/',
+  routeDoc({
+    data: FileDetailSchema,
+    errors: [400],
+    requestBody: {
+      content: {
+        'multipart/form-data': {
+          schema: {
+            properties: {
+              agentId: { type: 'string' },
+              directory: { type: 'string' },
+              file: { format: 'binary', type: 'string' },
+              knowledgeBaseId: { type: 'string' },
+              sessionId: { type: 'string' },
+              skipCheckFileType: { type: 'boolean' },
+              skipDeduplication: { type: 'boolean' },
+            },
+            required: ['file'],
+            type: 'object',
+          },
+        },
+      },
+      required: true,
+    },
+    summary: 'Upload a file and return the corresponding file record',
+    tags: ['files'],
+  }),
   requireAuth,
-  requireAnyPermission(getAllScopePermissions('FILE_UPLOAD'), 'You do not have permission to upload files'),
+  requireAnyPermission(
+    getAllScopePermissions('FILE_UPLOAD'),
+    'You do not have permission to upload files',
+  ),
   async (c) => {
     const fileController = new FileController();
     return await fileController.uploadFile(c);
@@ -77,8 +131,18 @@ app.post(
  */
 app.get(
   '/:id',
+  routeDoc({
+    data: FileDetailSchema,
+    description:
+      'Non-image files include their parse result. A file that does not exist answers 400.',
+    summary: 'Get a file',
+    tags: ['files'],
+  }),
   requireAuth,
-  requireAnyPermission(getAllScopePermissions('FILE_READ'), 'You do not have permission to get file details'),
+  requireAnyPermission(
+    getAllScopePermissions('FILE_READ'),
+    'You do not have permission to get file details',
+  ),
   zValidator('param', FileIdParamSchema),
   async (c) => {
     const fileController = new FileController();
@@ -98,8 +162,16 @@ app.get(
  */
 app.get(
   '/:id/url',
+  routeDoc({
+    data: FileUrlResponseSchema,
+    summary: 'Get a pre-signed file URL',
+    tags: ['files'],
+  }),
   requireAuth,
-  requireAnyPermission(getAllScopePermissions('FILE_READ'), 'You do not have permission to get file access URL'),
+  requireAnyPermission(
+    getAllScopePermissions('FILE_READ'),
+    'You do not have permission to get file access URL',
+  ),
   zValidator('param', FileIdParamSchema),
   zValidator('query', FileUrlRequestSchema),
   async (c) => {
@@ -122,8 +194,17 @@ app.get(
  */
 app.patch(
   '/:id',
+  routeDoc({
+    data: FileDetailSchema,
+    errors: [404],
+    summary: 'Update a file',
+    tags: ['files'],
+  }),
   requireAuth,
-  requireAnyPermission(getAllScopePermissions('FILE_UPDATE'), 'You do not have permission to update a file'),
+  requireAnyPermission(
+    getAllScopePermissions('FILE_UPDATE'),
+    'You do not have permission to update a file',
+  ),
   zValidator('param', FileIdParamSchema),
   zValidator('json', UpdateFileSchema),
   async (c) => {
@@ -141,8 +222,12 @@ app.patch(
  */
 app.delete(
   '/:id',
+  routeDoc({ data: DeletedResourceSchema, summary: 'Delete a file', tags: ['files'] }),
   requireAuth,
-  requireAnyPermission(getAllScopePermissions('FILE_DELETE'), 'You do not have permission to delete a file'),
+  requireAnyPermission(
+    getAllScopePermissions('FILE_DELETE'),
+    'You do not have permission to delete a file',
+  ),
   zValidator('param', FileIdParamSchema),
   async (c) => {
     const fileController = new FileController();
@@ -158,7 +243,6 @@ app.delete(
  * - id: string (required) - File ID
  *
  * Query parameters:
- * - skipExist: boolean (optional) - Whether to skip existing parse results, default false
  *
  * Features:
  * - Parses the text content of document files (PDF, Word, Excel, etc.)
@@ -167,8 +251,17 @@ app.delete(
  */
 app.post(
   '/:id/parses',
+  routeDoc({
+    operationId: 'files.parse',
+    data: FileParseResultSchema,
+    summary: 'Parse file content',
+    tags: ['files'],
+  }),
   requireAuth,
-  requireAnyPermission(getAllScopePermissions('FILE_UPDATE'), 'You do not have permission to parse file content'),
+  requireAnyPermission(
+    getAllScopePermissions('FILE_UPDATE'),
+    'You do not have permission to parse file content',
+  ),
   zValidator('param', FileIdParamSchema),
   zValidator('query', FileParseRequestSchema),
   async (c) => {
@@ -190,8 +283,16 @@ app.post(
  */
 app.post(
   '/:id/chunks',
+  routeDoc({
+    data: FileChunkTaskResponseSchema,
+    summary: 'Start a file chunking task',
+    tags: ['files'],
+  }),
   requireAuth,
-  requireAnyPermission(getAllScopePermissions('FILE_UPDATE'), 'You do not have permission to create chunking tasks'),
+  requireAnyPermission(
+    getAllScopePermissions('FILE_UPDATE'),
+    'You do not have permission to create chunking tasks',
+  ),
   zValidator('param', FileIdParamSchema),
   zValidator('json', FileChunkRequestSchema),
   async (c) => {
@@ -214,8 +315,16 @@ app.post(
  */
 app.get(
   '/:id/chunks',
+  routeDoc({
+    data: FileChunkStatusResponseSchema,
+    summary: 'Get file chunking status',
+    tags: ['files'],
+  }),
   requireAuth,
-  requireAnyPermission(getAllScopePermissions('FILE_READ'), 'You do not have permission to view file chunking status'),
+  requireAnyPermission(
+    getAllScopePermissions('FILE_READ'),
+    'You do not have permission to view file chunking status',
+  ),
   zValidator('param', FileIdParamSchema),
   async (c) => {
     const fileController = new FileController();
@@ -239,8 +348,42 @@ app.get(
  */
 app.post(
   '/batches',
+  routeDoc({
+    operationId: 'files.uploadBatch',
+    data: BatchFileUploadResponseSchema,
+    errors: [400],
+    requestBody: {
+      content: {
+        'multipart/form-data': {
+          schema: {
+            properties: {
+              agentId: { type: 'string' },
+              directory: { type: 'string' },
+              files: {
+                items: { format: 'binary', type: 'string' },
+                maxItems: 20,
+                minItems: 1,
+                type: 'array',
+              },
+              knowledgeBaseId: { type: 'string' },
+              sessionId: { type: 'string' },
+              skipCheckFileType: { type: 'boolean' },
+            },
+            required: ['files'],
+            type: 'object',
+          },
+        },
+      },
+      required: true,
+    },
+    summary: 'Batch file upload',
+    tags: ['files'],
+  }),
   requireAuth,
-  requireAnyPermission(getAllScopePermissions('FILE_UPLOAD'), 'You do not have permission to batch upload files'),
+  requireAnyPermission(
+    getAllScopePermissions('FILE_UPLOAD'),
+    'You do not have permission to batch upload files',
+  ),
   async (c) => {
     const fileController = new FileController();
     return await fileController.batchUploadFiles(c);
@@ -263,8 +406,19 @@ app.post(
  */
 app.post(
   '/queries',
+  routeDoc({
+    operationId: 'files.query',
+    data: BatchGetFilesResponseSchema,
+    requestExample: example(BatchGetFilesRequestSchema, QUERY_FILES_EXAMPLE),
+    responseExample: QUERY_FILES_RESULT_EXAMPLE,
+    summary: 'Get several files',
+    tags: ['files'],
+  }),
   requireAuth,
-  requireAnyPermission(getAllScopePermissions('FILE_READ'), 'You do not have permission to batch get file details'),
+  requireAnyPermission(
+    getAllScopePermissions('FILE_READ'),
+    'You do not have permission to batch get file details',
+  ),
   zValidator('json', BatchGetFilesRequestSchema),
   async (c) => {
     const fileController = new FileController();

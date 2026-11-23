@@ -1,14 +1,19 @@
 'use client';
 
-import { Empty, Flexbox, Skeleton, Text } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
-import { createStaticStyles, cssVar } from 'antd-style';
-import { FlaskConical, Plus } from 'lucide-react';
+import { Button, createStaticStyles, cssVar, Empty, Flexbox, Skeleton, Text } from '@lobehub/ui';
+import { Database, FlaskConical, Plus } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import AsyncBoundary from '@/components/AsyncBoundary';
-import { useEvalStore } from '@/store/eval';
+import WorkspaceLink from '@/features/Workspace/WorkspaceLink';
+import {
+  benchmarkSelectors,
+  datasetSelectors,
+  experimentSelectors,
+  useEvalStore,
+} from '@/store/eval';
+import { densityVars } from '@/styles/densityVars';
 
 import BenchmarkCard from './features/BenchmarkCard';
 import { createCreateBenchmarkModal } from './features/CreateBenchmarkModal';
@@ -24,6 +29,37 @@ const styles = createStaticStyles(({ css }) => ({
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(480px, 1fr));
     gap: 20px;
+  `,
+  datasetRow: css`
+    display: flex;
+    gap: ${densityVars.contentGap};
+    align-items: center;
+
+    padding-block: 14px;
+    padding-inline: ${densityVars.cardPadding};
+    border: 1px solid ${cssVar.colorBorderSecondary};
+    border-radius: ${cssVar.borderRadiusLG};
+
+    color: inherit;
+    text-decoration: none;
+
+    transition: border-color 0.15s ease;
+
+    &:hover {
+      border-color: ${cssVar.colorBorder};
+    }
+  `,
+  datasetIcon: css`
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
+
+    background: ${cssVar.colorFillTertiary};
   `,
   skeletonCard: css`
     padding: 20px;
@@ -44,13 +80,13 @@ const SkeletonGrid = memo(() => (
     {[0, 1, 2, 3].map((i) => (
       <Flexbox className={styles.skeletonCard} gap={16} key={i}>
         <Flexbox horizontal gap={12}>
-          <Skeleton.Avatar active shape={'square'} size={36} />
+          <Skeleton.Avatar shape={'square'} size={36} />
           <Flexbox flex={1} gap={8}>
-            <Skeleton.Button active size={'small'} style={{ height: 14, width: 160 }} />
-            <Skeleton.Button active size={'small'} style={{ height: 12, width: 220 }} />
+            <Skeleton height={14} width={160} />
+            <Skeleton height={12} width={220} />
           </Flexbox>
         </Flexbox>
-        <Skeleton.Button active block size={'small'} style={{ height: 64 }} />
+        <Skeleton height={64} />
       </Flexbox>
     ))}
   </div>
@@ -58,11 +94,16 @@ const SkeletonGrid = memo(() => (
 
 const EvalOverview = memo(() => {
   const { t } = useTranslation('eval');
-  const benchmarkList = useEvalStore((s) => s.benchmarkList);
+  // The Evaluation Lab shows its own benchmarks, datasets and experiments;
+  // Lobe Bench's live in the same tables and have their own pages.
+  const benchmarkList = useEvalStore(benchmarkSelectors.agentBenchmarkList);
   const useFetchBenchmarks = useEvalStore((s) => s.useFetchBenchmarks);
+  const useFetchAllDatasets = useEvalStore((s) => s.useFetchAllDatasets);
   const { data, isLoading, error, mutate } = useFetchBenchmarks();
+  useFetchAllDatasets();
+  const allDatasets = useEvalStore(datasetSelectors.agentDatasets);
 
-  const experimentList = useEvalStore((s) => s.experimentList);
+  const experimentList = useEvalStore(experimentSelectors.agentExperimentList);
   const useFetchExperiments = useEvalStore((s) => s.useFetchExperiments);
   const {
     data: experimentData,
@@ -186,6 +227,49 @@ const EvalOverview = memo(() => {
             ))}
           </div>
         </AsyncBoundary>
+      </Flexbox>
+
+      {/* Every dataset, benchmark-owned or not. A dataset need not belong to a
+          benchmark, and every other listing is benchmark-scoped, so this is the
+          only place all of them are visible. */}
+      <Flexbox gap={16}>
+        <Text as={'h2'} style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>
+          {t('overview.sections.datasets.title')}
+        </Text>
+        {allDatasets && allDatasets.length > 0 ? (
+          <div className={styles.grid}>
+            {allDatasets.map(
+              (dataset: {
+                benchmarkId?: string | null;
+                description?: string | null;
+                id: string;
+                name: string;
+              }) => (
+                <WorkspaceLink
+                  className={styles.datasetRow}
+                  key={dataset.id}
+                  to={`/eval/datasets/${dataset.id}`}
+                >
+                  <div className={styles.datasetIcon}>
+                    <Database size={16} style={{ color: cssVar.colorTextSecondary }} />
+                  </div>
+                  <Flexbox gap={2} style={{ minWidth: 0 }}>
+                    <Text ellipsis weight={500}>
+                      {dataset.name}
+                    </Text>
+                    <Text ellipsis fontSize={12} type="secondary">
+                      {dataset.description || t('overview.sections.datasets.noBenchmark')}
+                    </Text>
+                  </Flexbox>
+                </WorkspaceLink>
+              ),
+            )}
+          </div>
+        ) : (
+          <Text fontSize={12} type="secondary">
+            {t('overview.sections.datasets.empty')}
+          </Text>
+        )}
       </Flexbox>
     </Flexbox>
   );

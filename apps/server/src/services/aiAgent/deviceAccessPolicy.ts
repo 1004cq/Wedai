@@ -17,12 +17,22 @@ export type DeviceAccessReason =
    */
   | 'bot-personal-platform'
   /**
-   * Bot caller, sender is on the operator's trusted external list. Reserved —
-   * the resolver never returns this value yet; future work will plumb the
-   * trusted list through `DeviceAccessPolicyInput` and add the branch here
-   * without touching `AgentToolsEngine`.
+   * Bot caller, sender is on the owner's device list (`settings.devicePolicy =
+   * 'allowlist'`), carried as `botContext.isDeviceTrusted`.
    */
   | 'bot-trusted'
+  /**
+   * Bot caller in a channel whose members may all use the owner's devices
+   * (`settings.devicePolicy = 'channel'`), carried as
+   * `botContext.isDeviceChannelGranted`.
+   */
+  | 'bot-channel-granted'
+  /**
+   * Bot caller in a channel outside the owner's device channel list
+   * (`settings.deviceChannelPolicy = 'allowlist'`), carried as
+   * `botContext.isDeviceChannelRestricted` — DENY device tools, owner included.
+   */
+  | 'bot-channel-restricted'
   /** Bot caller, sender is identifiable but not the owner — DENY device tools. */
   | 'bot-external-sender'
   /**
@@ -30,7 +40,22 @@ export type DeviceAccessReason =
    * webhook didn't deliver the author). Treated as untrusted external —
    * fail-closed.
    */
-  | 'bot-owner-not-configured';
+  | 'bot-owner-not-configured'
+  /**
+   * Shared-agent visitor conversation the share does not grant device access
+   * (`shareConfig.deviceAccess`) — DENY device tools. The run executes under
+   * the creator's identity, so device access would hand the visitor the
+   * creator's machines; hetero agents are refused, native device tools
+   * degrade to plain chat.
+   */
+  | 'share-visitor'
+  /**
+   * Shared-agent visitor the creator explicitly granted the Agent's execution
+   * environment (`shareConfig.deviceAccess` = `contacts` with the visitor in the
+   * address book, or `allowlist` with the visitor also listed). The device is still the Agent's configured one; the
+   * visitor never picks it.
+   */
+  | 'share-visitor-granted';
 
 /**
  * Bot platforms whose LobeHub integration is **personal-scope-only at the
@@ -57,6 +82,11 @@ const PERSONAL_SCOPE_BOT_PLATFORMS = new Set<string>(['wechat']);
 export interface DeviceAccessPolicyInput {
   /** Undefined when the caller is a first-party UI (web / desktop / mobile). */
   botContext?: ChatTopicBotContext;
+  /**
+   * Present when the run serves a shared-agent visitor (share gate present);
+   * `canUseDevice` is the share's device grant resolved for this visitor.
+   */
+  shareVisitor?: { canUseDevice: boolean };
 }
 
 export interface DeviceAccessPolicyOutput {
@@ -78,10 +108,26 @@ export interface DeviceAccessPolicyOutput {
 export const resolveDeviceAccessPolicy = (
   input: DeviceAccessPolicyInput,
 ): DeviceAccessPolicyOutput => {
-  const { botContext } = input;
+  const { botContext, shareVisitor } = input;
+
+  // Checked before every trust branch: a share visitor reaches the creator's
+  // devices only through the share's own grant, regardless of how the
+  // request arrived.
+  if (shareVisitor) {
+    return shareVisitor.canUseDevice
+      ? { canUseDevice: true, reason: 'share-visitor-granted' }
+      : { canUseDevice: false, reason: 'share-visitor' };
+  }
 
   if (!botContext) {
     return { canUseDevice: true, reason: 'first-party' };
+  }
+
+  // The channel scope narrows every people branch below: a sender must both
+  // pass the people check AND be in an allowed channel. It is only set when
+  // the owner configured a channel list, so unconfigured bots are unaffected.
+  if (botContext.isDeviceChannelRestricted) {
+    return { canUseDevice: false, reason: 'bot-channel-restricted' };
   }
 
   if (botContext.isOwner) {
@@ -96,9 +142,13 @@ export const resolveDeviceAccessPolicy = (
     return { canUseDevice: true, reason: 'bot-personal-platform' };
   }
 
-  // Future: bot-trusted branch (operator-curated allowlist of external
-  // senders). Falls through to the deny branch until the trusted list is
-  // wired into `DeviceAccessPolicyInput`.
+  if (botContext.isDeviceTrusted) {
+    return { canUseDevice: true, reason: 'bot-trusted' };
+  }
+
+  if (botContext.isDeviceChannelGranted) {
+    return { canUseDevice: true, reason: 'bot-channel-granted' };
+  }
 
   if (!botContext.senderExternalUserId) {
     return { canUseDevice: false, reason: 'bot-owner-not-configured' };

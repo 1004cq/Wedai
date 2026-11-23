@@ -1,9 +1,9 @@
-import { Flexbox, Icon, Text } from '@lobehub/ui';
-import { createStaticStyles, cssVar } from 'antd-style';
+import { createStaticStyles, cssVar, Flexbox, Icon, Text } from '@lobehub/ui';
 import { LockIcon } from 'lucide-react';
-import { memo } from 'react';
+import { memo, type ReactNode } from 'react';
 
 import KnowledgeIcon from '@/components/KnowledgeIcon';
+import { densityVars } from '@/styles/densityVars';
 import { type KnowledgeItem } from '@/types/knowledgeBase';
 
 import Actions from './Action';
@@ -16,7 +16,7 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
 
     overflow: hidden;
 
-    padding: 12px;
+    padding: ${densityVars.contentGap};
     border: 1px solid ${cssVar.colorBorderSecondary};
     border-radius: ${cssVar.borderRadiusLG};
 
@@ -37,20 +37,25 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
   `,
   title: css`
     margin: 0 !important;
-    font-size: 14px;
+    font-size: ${densityVars.fontSize};
     font-weight: 500;
     line-height: 1.4;
   `,
 }));
 
-const MasonryItem = memo<KnowledgeItem>(
-  ({ id, fileType, name, type, description, enabled, visibility }) => {
+interface MasonryItemProps extends KnowledgeItem {
+  action?: ReactNode;
+}
+
+const MasonryItem = memo<MasonryItemProps>(
+  ({ action, id, fileType, name, type, description, enabled, memberRestricted, visibility }) => {
     return (
       <div className={styles.card}>
         <Flexbox gap={12} style={{ position: 'relative' }}>
           <Flexbox horizontal align={'center'} gap={12}>
             <KnowledgeIcon
               fileType={fileType}
+              locked={memberRestricted}
               name={name}
               size={{ file: 48, repo: 48 }}
               type={type}
@@ -72,7 +77,7 @@ const MasonryItem = memo<KnowledgeItem>(
             </Text>
           )}
           <Flexbox align={'center'} justify={'flex-end'}>
-            <Actions enabled={enabled} id={id} type={type} />
+            {action === undefined ? <Actions enabled={enabled} id={id} type={type} /> : action}
           </Flexbox>
         </Flexbox>
       </div>

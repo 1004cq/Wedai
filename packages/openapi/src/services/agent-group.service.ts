@@ -5,6 +5,7 @@ import { sessionGroups } from '@/database/schemas';
 import type { LobeChatDatabase } from '@/database/type';
 
 import { BaseService } from '../common/base.service';
+import { projectPublicAgentGroup } from '../helpers/public-fields';
 import type { ServiceResult } from '../types';
 import type {
   AgentGroupListResponse,
@@ -52,7 +53,7 @@ export class AgentGroupService extends BaseService {
 
       this.log('info', `Found ${agentGroupList.length} agent groups`);
 
-      return agentGroupList;
+      return agentGroupList.map(projectPublicAgentGroup);
     } catch (error) {
       this.handleServiceError(error, '获取助理分类列表');
     }
@@ -88,7 +89,7 @@ export class AgentGroupService extends BaseService {
         return null;
       }
 
-      return agentGroup;
+      return projectPublicAgentGroup(agentGroup);
     } catch (error) {
       this.handleServiceError(error, '获取助理分类详情');
     }
@@ -134,7 +135,9 @@ export class AgentGroupService extends BaseService {
    * @param request Update request parameters
    * @returns Update result
    */
-  async updateAgentGroup(request: UpdateAgentGroupRequest): ServiceResult<void> {
+  async updateAgentGroup(
+    request: UpdateAgentGroupRequest,
+  ): ServiceResult<AgentGroupListResponse[0]> {
     this.log('info', 'Updating agent group', { id: request.id, name: request.name });
 
     try {
@@ -152,14 +155,18 @@ export class AgentGroupService extends BaseService {
         throw this.createBusinessError(`助理分类 ID "${id}" 不存在`);
       }
 
-      await this.db
+      // Answer with the row the update wrote, under the same scope it used.
+      const [updated] = await this.db
         .update(sessionGroups)
         .set({ ...updateData, updatedAt: new Date() })
-        .where(and(eq(sessionGroups.id, id), this.buildWorkspaceWhere(sessionGroups)));
+        .where(and(eq(sessionGroups.id, id), this.buildWorkspaceWhere(sessionGroups)))
+        .returning();
+      if (!updated) throw this.createBusinessError(`助理分类 ID "${id}" 不存在`);
 
       this.log('info', 'Agent group updated successfully', { id });
+      return projectPublicAgentGroup(updated);
     } catch (error) {
-      this.handleServiceError(error, '更新助理分类');
+      return this.handleServiceError(error, '更新助理分类');
     }
   }
 

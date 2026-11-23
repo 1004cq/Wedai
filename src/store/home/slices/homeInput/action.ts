@@ -2,6 +2,7 @@ import { BUILTIN_AGENT_SLUGS } from '@lobechat/builtin-agents';
 import { CUSTOM_DOCUMENT_FILE_TYPE } from '@lobechat/const';
 import type { ContextSelection, PageSelection } from '@lobechat/types';
 
+import { docsPagePath } from '@/features/ResourceHome/paths';
 import { stableWorkspaceAwareNavigate } from '@/features/Workspace/stableWorkspaceAwareNavigate';
 import { chatGroupService } from '@/services/chatGroup';
 import { documentService } from '@/services/document';
@@ -279,6 +280,12 @@ export class HomeInputActionImpl {
         await sendMessage({
           context: {
             agentId: groupAgentBuilderId,
+            // Name the group explicitly rather than letting the transport read
+            // `chatStore.activeGroupId`: the navigation above may not have
+            // mounted the group layout yet, and an unset id here would create
+            // the builder topic without its `editingGroupId` marker — invisible
+            // in every group's topic list afterwards.
+            editingGroupId: group.id,
             scope: 'group_agent_builder',
             ...(workspaceSlug ? { workspaceSlug } : {}),
           },
@@ -334,7 +341,7 @@ export class HomeInputActionImpl {
       });
 
       // 3. Navigate to Page
-      stableWorkspaceAwareNavigate(`/page/${newDoc.id}`);
+      stableWorkspaceAwareNavigate(docsPagePath(newDoc.id));
 
       // 4. Send the initial page-agent message. Hydrate first to avoid the same
       // race the agent/group flows hit.

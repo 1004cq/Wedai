@@ -1,0 +1,155 @@
+import type { DeviceGitPullRequestAction, DeviceGitPullRequestDetail } from '@lobechat/types';
+import {
+  ActionIcon,
+  copyToClipboard,
+  type DropdownItem,
+  DropdownMenu,
+  Icon,
+  toast,
+} from '@lobehub/ui';
+import * as stylex from '@stylexjs/stylex';
+import {
+  ArrowRightIcon,
+  ChevronDownIcon,
+  EllipsisIcon,
+  ExternalLinkIcon,
+  LinkIcon,
+} from 'lucide-react';
+import { memo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+
+import { useGitRemoteBranches } from '@/store/device';
+import { openTrustedExternalUrl } from '@/utils/openTrustedExternalUrl';
+
+import { rowStyles } from '../Overview/OverviewRow';
+import PrHead, { headStyles, PrStatePill, PrTitle } from './Head';
+
+interface HeaderProps {
+  /** Mutations (close / reopen / change base) wait for the live PR reads. */
+  actionsDisabled?: boolean;
+  activityLoaded?: boolean;
+  detail: DeviceGitPullRequestDetail;
+  deviceId?: string;
+  onAction: (action: DeviceGitPullRequestAction) => Promise<boolean>;
+  workingDirectory: string;
+}
+
+const Header = memo<HeaderProps>(
+  ({ actionsDisabled, activityLoaded = true, detail, deviceId, onAction, workingDirectory }) => {
+    const { t } = useTranslation('chat');
+    const openOnGithubLabel = t('workingPanel.pr.menu.openOnGithub');
+    const canChangeBase = detail.viewerCanWrite && detail.state === 'open';
+    const [basePickerOpen, setBasePickerOpen] = useState(false);
+    const { data: remoteBranches } = useGitRemoteBranches(
+      workingDirectory,
+      canChangeBase && basePickerOpen,
+      deviceId,
+    );
+    const baseItems: DropdownItem[] = remoteBranches
+      ? remoteBranches
+          .map((branch) => branch.name.replace(/^[^/]+\//, ''))
+          .filter((name) => name !== detail.headRefName)
+          .map((name) => ({
+            key: name,
+            disabled: actionsDisabled,
+            label: name,
+            onClick: () => {
+              if (name !== detail.baseRefName) void onAction({ base: name, type: 'changeBase' });
+            },
+          }))
+      : [{ disabled: true, key: 'loading', label: t('workingPanel.review.baseRef.loading') }];
+
+    const menuItems: DropdownItem[] = [
+      {
+        icon: <Icon icon={LinkIcon} size={14} />,
+        key: 'copy',
+        label: t('workingPanel.pr.menu.copyLink'),
+        onClick: async () => {
+          await copyToClipboard(detail.url);
+          toast.success(t('workingPanel.pr.menu.copied'));
+        },
+      },
+      ...(detail.viewerCanWrite && detail.state !== 'merged'
+        ? [
+            { type: 'divider' as const },
+            detail.state === 'open'
+              ? {
+                  danger: true,
+                  disabled: actionsDisabled,
+                  key: 'close',
+                  label: t('workingPanel.pr.menu.close'),
+                  onClick: () => void onAction({ type: 'close' }),
+                }
+              : {
+                  disabled: actionsDisabled,
+                  key: 'reopen',
+                  label: t('workingPanel.pr.menu.reopen'),
+                  onClick: () => void onAction({ type: 'reopen' }),
+                },
+          ]
+        : []),
+    ];
+
+    return (
+      <PrHead
+        title={<PrTitle number={detail.number} title={detail.title} />}
+        actions={
+          <>
+            <ActionIcon
+              aria-label={openOnGithubLabel}
+              icon={ExternalLinkIcon}
+              size={'small'}
+              title={openOnGithubLabel}
+              onClick={() => openTrustedExternalUrl(detail.url)}
+            />
+            <DropdownMenu items={menuItems} placement={'bottomRight'}>
+              <ActionIcon icon={EllipsisIcon} size={'small'} />
+            </DropdownMenu>
+          </>
+        }
+        meta={
+          <>
+            <PrStatePill pr={detail} />
+            <span {...stylex.props(headStyles.ref)} title={detail.headRefName}>
+              {detail.headRefName}
+            </span>
+            <Icon icon={ArrowRightIcon} size={11} />
+            {canChangeBase ? (
+              <DropdownMenu
+                virtual
+                items={baseItems}
+                placement={'bottomLeft'}
+                onOpenChange={setBasePickerOpen}
+              >
+                <span
+                  {...stylex.props(headStyles.ref, headStyles.refButton)}
+                  role={'button'}
+                  tabIndex={0}
+                  title={t('workingPanel.pr.header.changeBase')}
+                >
+                  {detail.baseRefName}
+                  <Icon icon={ChevronDownIcon} size={10} />
+                </span>
+              </DropdownMenu>
+            ) : (
+              <span {...stylex.props(headStyles.ref)} title={detail.baseRefName}>
+                {detail.baseRefName}
+              </span>
+            )}
+            {activityLoaded && (
+              <span>· {t('workingPanel.pr.header.commits', { count: detail.commits.length })}</span>
+            )}
+            <span {...stylex.props(headStyles.stats)}>
+              <span {...stylex.props(rowStyles.changeAdditions)}>+{detail.additions}</span>{' '}
+              <span {...stylex.props(rowStyles.changeDeletions)}>−{detail.deletions}</span>
+            </span>
+          </>
+        }
+      />
+    );
+  },
+);
+
+Header.displayName = 'PullRequestHeader';
+
+export default Header;

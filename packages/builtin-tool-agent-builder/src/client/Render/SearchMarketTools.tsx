@@ -46,7 +46,7 @@ const ToolItem = memo<ToolItemProps>(({ tool }) => {
     try {
       const isSuccess = await installMCPPlugin(tool.identifier);
       if (isSuccess) {
-        await togglePlugin(tool.identifier);
+        await togglePlugin(tool.identifier, true);
       }
     } finally {
       setLocalInstalling(false);
@@ -108,11 +108,11 @@ const ToolItem = memo<ToolItemProps>(({ tool }) => {
             <span style={{ fontSize: 12 }}>Installed</span>
           </Flexbox>
         ) : isInstalling ? (
-          <Button size="small" variant="filled" onClick={handleCancel}>
+          <Button size="small" type="fill" onClick={handleCancel}>
             Cancel
           </Button>
         ) : (
-          <Button icon={<Download size={14} />} size="small" type="primary" onClick={handleInstall}>
+          <Button icon={<Download size={14} />} size="small" onClick={handleInstall}>
             Install
           </Button>
         )}

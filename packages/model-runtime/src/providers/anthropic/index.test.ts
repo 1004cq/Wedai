@@ -2,11 +2,19 @@
 import type { Mock } from 'vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { buildDefaultAnthropicPayload } from '../../core/anthropicCompatibleFactory';
-import * as anthropicHelpers from '../../core/contextBuilders/anthropic';
+import { buildDefaultAnthropicPayload } from '../../core/anthropicCompatible';
+import * as anthropicHelpers from '../../core/protocols/anthropicMessages/messages';
 import type { ChatCompletionTool, ChatStreamPayload } from '../../types/chat';
 import * as debugStreamModule from '../../utils/debugStream';
 import { LobeAnthropicAI } from './index';
+
+const createHelloStream = () =>
+  new ReadableStream({
+    start(controller) {
+      controller.enqueue('Hello, world!');
+      controller.close();
+    },
+  });
 
 const provider = 'anthropic';
 
@@ -70,12 +78,7 @@ describe('LobeAnthropicAI', () => {
 
     it('should handle text messages correctly', async () => {
       // Arrange
-      const mockStream = new ReadableStream({
-        start(controller) {
-          controller.enqueue('Hello, world!');
-          controller.close();
-        },
-      });
+      const mockStream = createHelloStream();
       const mockResponse = Promise.resolve(mockStream);
       (instance['client'].messages.create as Mock).mockResolvedValue(mockResponse);
 
@@ -107,14 +110,32 @@ describe('LobeAnthropicAI', () => {
       expect(result).toBeInstanceOf(Response);
     });
 
+    it.each([
+      ['claude-opus-4-6', 'high', 'high'],
+      ['claude-haiku-4-5-20251001', 'high', undefined],
+      ['claude-sonnet-4-6', 'xhigh', undefined],
+      ['claude-opus-4-7', 'xhigh', 'xhigh'],
+    ] as const)(
+      'should map routed effort %s / %s to Anthropic output config %s',
+      async (model, reasoningEffort, expectedEffort) => {
+        await instance.chat({
+          messages: [{ content: 'Hello', role: 'user' }],
+          model,
+          reasoning_effort: reasoningEffort,
+        });
+
+        const payload = (instance['client'].messages.create as Mock).mock.calls[0][0];
+
+        expect(payload.output_config).toEqual(
+          expectedEffort ? { effort: expectedEffort } : undefined,
+        );
+        expect(payload).not.toHaveProperty('reasoning_effort');
+      },
+    );
+
     it('should handle system prompt correctly', async () => {
       // Arrange
-      const mockStream = new ReadableStream({
-        start(controller) {
-          controller.enqueue('Hello, world!');
-          controller.close();
-        },
-      });
+      const mockStream = createHelloStream();
       const mockResponse = Promise.resolve(mockStream);
       (instance['client'].messages.create as Mock).mockResolvedValue(mockResponse);
 
@@ -159,12 +180,7 @@ describe('LobeAnthropicAI', () => {
 
     it('should call Anthropic API with supported opions in streaming mode', async () => {
       // Arrange
-      const mockStream = new ReadableStream({
-        start(controller) {
-          controller.enqueue('Hello, world!');
-          controller.close();
-        },
-      });
+      const mockStream = createHelloStream();
       const mockResponse = Promise.resolve(mockStream);
       (instance['client'].messages.create as Mock).mockResolvedValue(mockResponse);
 
@@ -199,12 +215,7 @@ describe('LobeAnthropicAI', () => {
 
     it('should call Anthropic API without unsupported opions', async () => {
       // Arrange
-      const mockStream = new ReadableStream({
-        start(controller) {
-          controller.enqueue('Hello, world!');
-          controller.close();
-        },
-      });
+      const mockStream = createHelloStream();
       const mockResponse = Promise.resolve(mockStream);
       (instance['client'].messages.create as Mock).mockResolvedValue(mockResponse);
 
@@ -241,12 +252,7 @@ describe('LobeAnthropicAI', () => {
 
     it('should call debugStream in DEBUG mode', async () => {
       // Arrange
-      const mockProdStream = new ReadableStream({
-        start(controller) {
-          controller.enqueue('Hello, world!');
-          controller.close();
-        },
-      }) as any;
+      const mockProdStream = createHelloStream() as any;
       const mockDebugStream = new ReadableStream({
         start(controller) {
           controller.enqueue('Debug stream content');
@@ -548,7 +554,7 @@ describe('LobeAnthropicAI', () => {
         vi.spyOn(customInstance['client'].messages, 'create').mockRejectedValue(apiError);
 
         // Act & Assert
-        // anthropicCompatibleFactory normalizes the `/v1` suffix away (see #14960),
+        // anthropicCompatible normalizes the `/v1` suffix away (see #14960),
         // then desensitizeUrl reconstructs via the WHATWG URL parser which always
         // emits a trailing `/` in the pathname.
         await expect(
@@ -909,7 +915,7 @@ describe('LobeAnthropicAI', () => {
         ]);
       });
 
-      it('should drop ALL stacked trailing assistant messages (LOBE-12572)', async () => {
+      it('should drop ALL stacked trailing assistant messages', async () => {
         // Failed-run placeholder rows can stack several assistant turns at the
         // payload tail; popping only one still triggers the prefill 400.
         const payload: ChatStreamPayload = {

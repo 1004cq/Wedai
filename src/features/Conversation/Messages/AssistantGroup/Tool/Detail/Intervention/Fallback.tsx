@@ -6,10 +6,11 @@ import {
 import { builtinToolIdentifiers } from '@lobechat/builtin-tools/identifiers';
 import { safeParseJSON } from '@lobechat/utils';
 import { ActionIcon, Avatar, Flexbox, Icon } from '@lobehub/ui';
-import { createStaticStyles } from 'antd-style';
+import { cssVar } from '@lobehub/ui/stylex/cssVar.stylex';
+import * as stylex from '@stylexjs/stylex';
 import isEqual from 'fast-deep-equal';
 import { ChevronDown, ChevronRight, Edit3Icon } from 'lucide-react';
-import { memo, Suspense, useCallback, useMemo, useState } from 'react';
+import { memo, Suspense, useCallback, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -17,45 +18,39 @@ import { pluginHelpers, useToolStore } from '@/store/tool';
 import { toolSelectors } from '@/store/tool/selectors';
 import { useUserStore } from '@/store/user';
 import { toolInterventionSelectors } from '@/store/user/selectors';
+import { densityTokens } from '@/styles/density.stylex';
 
-import { useConversationStore } from '../../../../../store';
+import { dataSelectors, useConversationStore } from '../../../../../store';
 import Arguments from '../Arguments';
+import { useConnectorAccountNames } from '../useConnectorAccountNames';
 import ApprovalActions from './ApprovalActions';
 import KeyValueEditor from './KeyValueEditor';
 
-const styles = createStaticStyles(({ css, cssVar }) => ({
-  collapseHeader: css`
-    cursor: pointer;
-    user-select: none;
-
-    padding-block: 6px;
-    padding-inline: 10px;
-
-    font-size: 12px;
-    color: ${cssVar.colorTextTertiary};
-
-    &:hover {
-      color: ${cssVar.colorTextSecondary};
-    }
-  `,
-  description: css`
-    padding-block: 8px;
-    padding-inline: 16px;
-
-    font-size: ${cssVar.fontSize};
-    font-weight: 600;
-    color: ${cssVar.colorText};
-  `,
-  reason: css`
-    margin-block-start: -4px;
-    padding-block-end: 8px;
-    padding-inline: 16px;
-
-    font-size: ${cssVar.fontSizeSM};
-    line-height: 1.45;
-    color: ${cssVar.colorTextSecondary};
-  `,
-}));
+const styles = stylex.create({
+  collapseHeader: {
+    cursor: 'pointer',
+    userSelect: 'none',
+    paddingBlock: '6px',
+    paddingInline: '10px',
+    fontSize: '12px',
+    color: { 'default': cssVar.colorTextTertiary, ':hover': cssVar.colorTextSecondary },
+  },
+  description: {
+    paddingBlock: '8px',
+    paddingInline: densityTokens['--lobe-density-card-padding'],
+    fontSize: cssVar.fontSize,
+    fontWeight: 600,
+    color: cssVar.colorText,
+  },
+  reason: {
+    marginBlockStart: '-4px',
+    paddingBlockEnd: '8px',
+    paddingInline: densityTokens['--lobe-density-card-padding'],
+    fontSize: cssVar.fontSizeSM,
+    lineHeight: 1.45,
+    color: cssVar.colorTextSecondary,
+  },
+});
 
 interface FallbackInterventionProps {
   actionsPortalTarget?: HTMLDivElement | null;
@@ -69,11 +64,19 @@ interface FallbackInterventionProps {
 
 const FallbackIntervention = memo<FallbackInterventionProps>(
   ({ requestArgs, id, identifier, apiName, toolCallId, assistantGroupId, actionsPortalTarget }) => {
-    const { t } = useTranslation(['chat', 'plugin', 'common']);
+    const { t } = useTranslation(['chat', 'plugin', 'common', 'tool']);
     const approvalMode = useUserStore(toolInterventionSelectors.approvalMode);
     const [isEditing, setIsEditing] = useState(false);
     const [showArgs, setShowArgs] = useState(false);
     const updatePluginArguments = useConversationStore((s) => s.updatePluginArguments);
+    const message = useConversationStore((s) => dataSelectors.getDbMessageById(id)(s));
+    const usesDurableServerClaim = Boolean(
+      message?.pluginIntervention?.operationId && message.pluginIntervention.batchId,
+    );
+    const [pendingEditedArguments, setPendingEditedArguments] = useState<
+      Record<string, unknown> | undefined
+    >();
+    const pendingEditedArgumentsRef = useRef<Record<string, unknown> | undefined>(undefined);
 
     const pluginMeta = useToolStore(toolSelectors.getMetaById(identifier));
     const isBuiltin = builtinToolIdentifiers.includes(identifier);
@@ -86,8 +89,21 @@ const FallbackIntervention = memo<FallbackInterventionProps>(
       ? t(`builtins.${identifier}.apiName.${apiName}`, { defaultValue: apiName, ns: 'plugin' })
       : apiName;
 
-    const parsedArgs = useMemo(() => safeParseJSON(requestArgs || '') ?? {}, [requestArgs]);
+    const parsedArgs = useMemo(
+      () => pendingEditedArguments ?? safeParseJSON(requestArgs || '') ?? {},
+      [pendingEditedArguments, requestArgs],
+    );
+    const renderedArgs = useMemo(
+      () =>
+        pendingEditedArguments ? JSON.stringify(pendingEditedArguments, null, 2) : requestArgs,
+      [pendingEditedArguments, requestArgs],
+    );
     const argCount = typeof parsedArgs === 'object' ? Object.keys(parsedArgs).length : 0;
+    // The parameters start collapsed, so the account a connector call acts as
+    // is named next to the action: approving "send email" must say from where.
+    const accountName = Object.values(
+      useConnectorAccountNames(parsedArgs, { identifier, messageId: id }),
+    )[0];
     const isActivateToolsIntervention =
       identifier === LobeActivatorIdentifier && apiName === ActivatorApiName.activateTools;
     const requestedToolIdentifiers = useMemo(() => {
@@ -130,21 +146,28 @@ const FallbackIntervention = memo<FallbackInterventionProps>(
           const newArgsString = JSON.stringify(editedObject, null, 2);
 
           if (newArgsString !== requestArgs) {
-            await updatePluginArguments(toolCallId, editedObject, true);
+            if (usesDurableServerClaim) {
+              pendingEditedArgumentsRef.current = editedObject;
+              setPendingEditedArguments(editedObject);
+            } else {
+              await updatePluginArguments(toolCallId, editedObject, true);
+            }
           }
           setIsEditing(false);
         } catch (error) {
           console.error('Error stringifying arguments:', error);
         }
       },
-      [requestArgs, toolCallId, updatePluginArguments],
+      [requestArgs, toolCallId, updatePluginArguments, usesDurableServerClaim],
     );
 
     if (isEditing)
       return (
-        <Suspense fallback={<Arguments arguments={requestArgs} />}>
+        <Suspense
+          fallback={<Arguments arguments={renderedArgs} identifier={identifier} messageId={id} />}
+        >
           <KeyValueEditor
-            initialValue={safeParseJSON(requestArgs || '')}
+            initialValue={parsedArgs}
             onCancel={handleCancel}
             onFinish={handleFinish}
           />
@@ -159,14 +182,21 @@ const FallbackIntervention = memo<FallbackInterventionProps>(
           assistantGroupId={assistantGroupId}
           identifier={identifier}
           messageId={id}
+          toolArgs={parsedArgs}
           toolCallId={toolCallId}
+          onBeforeApprove={() => pendingEditedArgumentsRef.current}
         />
       </Flexbox>
     );
 
     return (
       <Flexbox gap={4}>
-        <Flexbox horizontal align="center" className={styles.description} gap={6}>
+        <Flexbox
+          horizontal
+          align="center"
+          className={stylex.props(styles.description).className}
+          gap={6}
+        >
           {pluginMeta?.avatar && (
             <Avatar
               avatar={pluginMeta.avatar}
@@ -182,14 +212,19 @@ const FallbackIntervention = memo<FallbackInterventionProps>(
           </span>
         </Flexbox>
 
-        {activationReason && <div className={styles.reason}>{activationReason}</div>}
+        {activationReason && <div {...stylex.props(styles.reason)}>{activationReason}</div>}
+        {accountName && (
+          <div {...stylex.props(styles.reason)}>
+            {t('connector.account.usingAccount', { name: accountName, ns: 'tool' })}
+          </div>
+        )}
 
         {argCount > 0 && (
           <>
             <Flexbox
               horizontal
               align="center"
-              className={styles.collapseHeader}
+              className={stylex.props(styles.collapseHeader).className}
               gap={4}
               onClick={() => setShowArgs(!showArgs)}
             >
@@ -212,7 +247,9 @@ const FallbackIntervention = memo<FallbackInterventionProps>(
                 />
               )}
             </Flexbox>
-            {showArgs && <Arguments arguments={requestArgs} />}
+            {showArgs && (
+              <Arguments arguments={renderedArgs} identifier={identifier} messageId={id} />
+            )}
           </>
         )}
 

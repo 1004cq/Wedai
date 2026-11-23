@@ -1,26 +1,42 @@
 import { type AgentState } from '@lobechat/agent-runtime';
-import { type BotPlatformContext } from '@lobechat/context-engine';
+import type { AgentDocumentIndexSnapshot } from '@lobechat/context-engine/agent-document';
 import {
+  type AgentShareVisitorContext,
+  type CancelVirtualSubAgentParams,
+  type CancelVirtualSubAgentResult,
   type ExecSubAgentParams,
   type ExecSubAgentResult,
   type ExecVirtualSubAgentParams,
 } from '@lobechat/types';
-import type { SearchDecision } from 'model-bank';
 
 import { type MessageModel } from '@/database/models/message';
 import { type LobeChatDatabase } from '@/database/type';
-import { type EvalContext } from '@/server/modules/Mecha/ContextEngineering/types';
 import type { HookDispatcher } from '@/server/services/agentRuntime/hooks/HookDispatcher';
 import type {
   ExecGroupMemberParams,
   ExecGroupMemberResult,
+  GroupActionMemberBridgeParams,
 } from '@/server/services/agentRuntime/types';
 import { type ToolExecutionService } from '@/server/services/toolExecution';
 
 import { type IStreamEventManager } from './types';
 
 export interface RuntimeExecutorContext {
-  agentConfig?: any;
+  /**
+   * Cancels tool work that is still in flight for this step. Driven by the
+   * persisted interruption flag (the step runs in its own invocation, so there
+   * is no in-process controller to share with whoever requested the stop).
+   */
+  abortSignal?: AbortSignal;
+  /**
+   * Shared-agent visitor marker, read back from
+   * `state.principal.actor.shareVisitor`. Present ONLY for a share-visitor run;
+   * its presence alone is the signal every per-step consumer keys off. Forwarded
+   * into `ToolExecutionContext.agentShareVisitor` so
+   * `BuiltinToolsExecutor.execute` can re-check the visitor's grants right
+   * before dispatch — see `isShareBlockedDataToolCall` in `shareGate/dispatch.ts`.
+   */
+  agentShareVisitor?: AgentShareVisitorContext;
   /**
    * Allows call_llm to publish visible_output_end immediately after a no-tool
    * LLM stream_end. Only the default GeneralChatAgent treats no-tool llm_result
@@ -28,10 +44,21 @@ export interface RuntimeExecutorContext {
    * tools: [] for an intermediate graph node and continue to another node.
    */
   allowEarlyFinalAnswerVisibleOutputEnd?: boolean;
+  /**
+   * Receives the agent-document index snapshot a step pinned (the run's first
+   * step, or a mid-run compression). `executeStep` writes it into
+   * `binding.agentDocumentIndex` of the state it saves, so later steps render
+   * the same index and change notes and keep the prompt-cache prefix.
+   */
+  bindAgentDocumentIndex?: (snapshot: AgentDocumentIndexSnapshot) => void;
   botContext?: unknown;
-  botPlatformContext?: BotPlatformContext;
-  discordContext?: any;
-  evalContext?: EvalContext;
+  /**
+   * Callback to stop a running `lobe-agent.callSubAgent` child dispatched by
+   * this run's agent (`lobe-agent.cancelSubAgent`).
+   */
+  cancelVirtualSubAgent?: (
+    params: CancelVirtualSubAgentParams,
+  ) => Promise<CancelVirtualSubAgentResult>;
   /**
    * Callback to fork a group member ("call agent member") under a
    * `lobe-group-management` tool call. Injected by AiAgentService; powers the
@@ -51,10 +78,35 @@ export interface RuntimeExecutorContext {
    */
   execVirtualSubAgent?: (params: ExecVirtualSubAgentParams) => Promise<ExecSubAgentResult>;
   hookDispatcher?: HookDispatcher;
+  isInterrupted?: (operationId: string) => Promise<boolean>;
   loadAgentState?: (operationId: string) => Promise<AgentState | null>;
   messageModel: MessageModel;
+  modelRuntimeConfig?: AgentState['modelRuntimeConfig'];
+  /** Check the shared completion barrier after a startup-failure receipt is published. */
+  onGroupMemberResult?: (
+    params: Pick<
+      GroupActionMemberBridgeParams,
+      'anchorMessageId' | 'expectedMembers' | 'groupToolMessageId' | 'parentOperationId'
+    >,
+  ) => Promise<boolean>;
   operationId: string;
-  searchDecision?: SearchDecision;
+  /**
+   * Register the one-shot deadline for a parked shell command.
+   *
+   * The wait itself costs nothing — the device reports completion as a late
+   * tool result — so something has to fail the run when the device never comes
+   * back (closed app, killed process, lost session). One delayed message per
+   * command, fired once; never a polling loop.
+   *
+   * Absent on hosts without a queue: the caller then relies on the gateway's
+   * own watchdog deadline.
+   */
+  scheduleShellExpiry?: (params: {
+    delayMs: number;
+    operationId: string;
+    toolCallId: string;
+    toolMessageId: string;
+  }) => Promise<void>;
   serverDB: LobeChatDatabase;
   stepIndex: number;
   stream?: boolean;
@@ -72,9 +124,8 @@ export interface RuntimeExecutorContext {
    * ~83% of each step. Routing CE through this callback keeps the heavy
    * payload in trace only, reducing per-step Redis state from ~3.4MB to ~6KB.
    */
-  tracingContextEngine?: (input: unknown, output: unknown) => void;
+  tracingContextEngine?: (input: unknown, output: unknown, metadata?: unknown) => void;
   userId?: string;
-  userTimezone?: string;
   /**
    * Workspace scoping for ownership filters on models/services constructed
    * inside the agent runtime. Threaded down from the originating request

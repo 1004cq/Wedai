@@ -1,5 +1,5 @@
-import { DEFAULT_AVATAR } from '@lobechat/const';
-import { cssVar } from 'antd-style';
+import { agentDisplayName } from '@lobechat/types';
+import { cssVar } from '@lobehub/ui';
 import { useTranslation } from 'react-i18next';
 
 import { DEFAULT_INBOX_AVATAR } from '@/const/meta';
@@ -11,7 +11,7 @@ import { homeAgentListSelectors } from '@/store/home/selectors';
 import { isInboxAgentId } from './isInboxAgent';
 
 interface AgentDisplayMeta {
-  avatar: string;
+  avatar?: string;
   backgroundColor: string;
   title: string;
 }
@@ -41,17 +41,21 @@ export const useAgentDisplayMeta = (
   const isInbox = isInboxAgentId(agentId, inboxAgentId);
   const sidebarAvatar = typeof sidebarAgent?.avatar === 'string' ? sidebarAgent.avatar : undefined;
   const hasResolvedMeta =
-    isInbox || !!meta?.avatar || !!meta?.backgroundColor || !!meta?.title?.trim() || !!sidebarAgent;
+    isInbox ||
+    Object.keys(meta ?? {}).length > 0 ||
+    !!meta?.backgroundColor ||
+    !!agentDisplayName(meta) ||
+    !!sidebarAgent;
 
   if (!fallbackToDefault && !hasResolvedMeta) return undefined;
 
   return {
-    avatar: meta?.avatar || sidebarAvatar || (isInbox ? DEFAULT_INBOX_AVATAR : DEFAULT_AVATAR),
+    avatar: meta?.avatar || sidebarAvatar || (isInbox ? DEFAULT_INBOX_AVATAR : undefined),
     backgroundColor:
       meta?.backgroundColor || sidebarAgent?.backgroundColor || cssVar.colorBgContainer,
     title:
-      meta?.title?.trim() ||
-      sidebarAgent?.title ||
+      agentDisplayName(meta) ||
+      agentDisplayName(sidebarAgent) ||
       (isInbox ? t('inbox.title', { ns: 'chat' }) : t('defaultSession', { ns: 'common' })),
   };
 };

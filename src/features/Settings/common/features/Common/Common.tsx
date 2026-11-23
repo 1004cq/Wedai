@@ -1,0 +1,200 @@
+'use client';
+
+import { Flexbox, Icon, ImageSelect, Select, Tabs } from '@lobehub/ui';
+import { Form, type FormGroupItem, useForm } from '@lobehub/ui/form';
+import isEqual from 'fast-deep-equal';
+import { Ban, Gauge, Monitor, Moon, Rows3, Rows4, Sun, Waves } from 'lucide-react';
+import { useTheme as useNextThemesTheme } from 'next-themes';
+import { memo } from 'react';
+import { useTranslation } from 'react-i18next';
+
+import AutoSaveHint from '@/components/Editor/AutoSaveHint';
+import { CommonSectionSkeleton } from '@/components/Skeleton/Settings/tabs/Appearance';
+import { FORM_STYLE } from '@/const/layoutTokens';
+import { imageUrl } from '@/const/url';
+import { isDesktop } from '@/const/version';
+import { SettingsSearchAnchor } from '@/features/SettingsSearch/anchor';
+import { useSaveState } from '@/hooks/useSaveState';
+import { localeOptions } from '@/locales/resources';
+import { useGlobalStore } from '@/store/global';
+import { systemStatusSelectors } from '@/store/global/selectors';
+import { useUserStore } from '@/store/user';
+import { settingsSelectors } from '@/store/user/selectors';
+import { type LocaleMode } from '@/types/locale';
+import { type UserGeneralConfig } from '@/types/user/settings';
+import { preloadLang } from '@/utils/client/preloadLang';
+
+const Common = memo(() => {
+  const { t } = useTranslation('setting');
+
+  const general = useUserStore((s) => settingsSelectors.currentSettings(s).general, isEqual);
+  const { theme, setTheme } = useNextThemesTheme();
+  const language = useGlobalStore(systemStatusSelectors.language);
+  const [setSettings, isUserStateInit] = useUserStore((s) => [s.setSettings, s.isUserStateInit]);
+  const [switchLocale, isStatusInit] = useGlobalStore((s) => [s.switchLocale, s.isStatusInit]);
+  const { status: saveStatus, lastSavedAt, save, retry } = useSaveState();
+  const form = useForm({
+    initialValues: general,
+    values: general,
+    onValuesChange: (v) => save(() => setSettings({ general: v })),
+  });
+
+  // Use the theme value from next-themes, default to 'system'
+  const currentTheme = theme || 'system';
+
+  const handleLangChange = (value: LocaleMode) => {
+    switchLocale(value);
+  };
+
+  if (!(isStatusInit && isUserStateInit)) return <CommonSectionSkeleton />;
+
+  const themeFormGroup: FormGroupItem<UserGeneralConfig> = {
+    children: [
+      {
+        children: (
+          <ImageSelect
+            height={60}
+            unoptimized={isDesktop}
+            value={currentTheme}
+            width={100}
+            options={[
+              {
+                icon: Sun,
+                img: imageUrl('theme_light.webp'),
+                label: t('settingCommon.themeMode.light'),
+                value: 'light',
+              },
+              {
+                icon: Moon,
+                img: imageUrl('theme_dark.webp'),
+                label: t('settingCommon.themeMode.dark'),
+                value: 'dark',
+              },
+              {
+                icon: Monitor,
+                img: imageUrl('theme_auto.webp'),
+                label: t('settingCommon.themeMode.auto'),
+                value: 'system',
+              },
+            ]}
+            onChange={(value) => setTheme(value === 'auto' ? 'system' : value)}
+          />
+        ),
+        label: (
+          <SettingsSearchAnchor id={'appearance-theme-mode'}>
+            {t('settingCommon.themeMode.title')}
+          </SettingsSearchAnchor>
+        ),
+        minWidth: undefined,
+      },
+      {
+        children: (
+          <Flexbox horizontal justify={'flex-end'}>
+            <Select
+              defaultValue={language}
+              optionRender={(option) => (
+                <span
+                  style={{
+                    flex: 1,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                  onMouseEnter={() => preloadLang(option.value as LocaleMode)}
+                >
+                  {option.label}
+                </span>
+              )}
+              options={[
+                { label: t('settingCommon.lang.autoMode'), value: 'auto' },
+                ...localeOptions,
+              ]}
+              style={{
+                width: '50%',
+              }}
+              onChange={handleLangChange}
+            />
+          </Flexbox>
+        ),
+        label: (
+          <SettingsSearchAnchor id={'appearance-language'}>
+            {t('settingCommon.lang.title')}
+          </SettingsSearchAnchor>
+        ),
+      },
+      {
+        children: (
+          <Tabs
+            items={[
+              {
+                icon: <Icon icon={Ban} size={16} />,
+                key: 'disabled',
+                label: t('settingAppearance.animationMode.disabled'),
+              },
+              {
+                icon: <Icon icon={Gauge} size={16} />,
+                key: 'agile',
+                label: t('settingAppearance.animationMode.agile'),
+              },
+              {
+                icon: <Icon icon={Waves} size={16} />,
+                key: 'elegant',
+                label: t('settingAppearance.animationMode.elegant'),
+              },
+            ]}
+          />
+        ),
+        label: (
+          <SettingsSearchAnchor id={'appearance-animation'}>
+            {t('settingAppearance.animationMode.title')}
+          </SettingsSearchAnchor>
+        ),
+        minWidth: undefined,
+        name: 'animationMode',
+        valueProp: 'activeKey',
+      },
+      {
+        children: (
+          <Tabs
+            items={[
+              {
+                icon: <Icon icon={Rows4} size={16} />,
+                key: 'compact',
+                label: t('settingAppearance.density.compact'),
+              },
+              {
+                icon: <Icon icon={Rows3} size={16} />,
+                key: 'loose',
+                label: t('settingAppearance.density.loose'),
+              },
+            ]}
+          />
+        ),
+        desc: t('settingAppearance.density.desc'),
+        label: (
+          <SettingsSearchAnchor id={'appearance-density'}>
+            {t('settingAppearance.density.title')}
+          </SettingsSearchAnchor>
+        ),
+        minWidth: undefined,
+        name: 'interfaceDensity',
+        valueProp: 'activeKey',
+      },
+    ],
+    extra: <AutoSaveHint lastUpdatedTime={lastSavedAt} saveStatus={saveStatus} onRetry={retry} />,
+    title: t('settingCommon.title'),
+  };
+
+  return (
+    <Form
+      collapsible={false}
+      form={form}
+      items={[themeFormGroup]}
+      itemsType={'group'}
+      variant={'filled'}
+      {...FORM_STYLE}
+    />
+  );
+});
+
+export default Common;

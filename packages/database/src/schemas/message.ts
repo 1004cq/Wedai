@@ -19,7 +19,7 @@ import {
 import { createInsertSchema } from 'drizzle-zod';
 
 import { idGenerator } from '../utils/idGenerator';
-import { timestamps, varchar255 } from './_helpers';
+import { softDeleteColumns, timestamps, varchar255 } from './_helpers';
 import { agents } from './agent';
 import { chatGroups } from './chatGroup';
 import { files } from './file';
@@ -150,6 +150,8 @@ export const messages = pgTable(
       onDelete: 'cascade',
     }),
     workspaceId: text('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
+    /** Recycle bin — see `schemas/trash.ts`. */
+    ...softDeleteColumns(),
     ...timestamps,
   },
   (table) => [
@@ -161,6 +163,12 @@ export const messages = pgTable(
     index('messages_quota_id_idx').on(table.quotaId),
 
     index('messages_user_id_idx').on(table.userId),
+    /**
+     * Author counts joined to their topic's scope (workspace usage stats):
+     * lets them read `topic_id` from the index instead of fetching every
+     * message the user ever wrote from the heap.
+     */
+    index('messages_user_id_topic_id_idx').on(table.userId, table.topicId),
     index('messages_session_id_idx').on(table.sessionId),
     index('messages_thread_id_idx').on(table.threadId),
     index('messages_agent_id_idx').on(table.agentId),
@@ -173,6 +181,8 @@ export const messages = pgTable(
     index('messages_workspace_id_idx').on(table.workspaceId),
   ],
 );
+
+export type MessageItem = typeof messages.$inferSelect;
 
 // if the message container a plugin
 export const messagePlugins = pgTable(

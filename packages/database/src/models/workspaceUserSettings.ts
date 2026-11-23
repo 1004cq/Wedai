@@ -1,4 +1,13 @@
-import type { WorkspaceUserPreference } from '@lobechat/types';
+import type {
+  HeteroPermissionMode,
+  HeteroPermissionModeDir,
+  WorkspaceUserPreference,
+} from '@lobechat/types';
+import {
+  applyHeteroPermissionModeDir,
+  applyHeteroPlanModeDir,
+  applyWorktreeModeDir,
+} from '@lobechat/types';
 import { mergeNotificationSettings } from '@lobechat/utils/mergeNotificationSettings';
 import { and, eq } from 'drizzle-orm';
 
@@ -56,29 +65,6 @@ export class WorkspaceUserSettingsModel {
   };
 
   /**
-   * Record the caller's per-member folder assignment for a sidebar item.
-   * Creation flows call this when an item is created inside a folder in
-   * workspace mode: the shared `sessionGroupId` / `chat_groups.groupId`
-   * columns are ignored there, so without this entry a create-in-folder
-   * would land the new item in the ungrouped list.
-   */
-  setSidebarGroupAssignment = async (itemId: string, folderId: string | null) => {
-    await this.updatePreference({ sidebarGroupAssignments: { [itemId]: folderId } });
-  };
-
-  /**
-   * Copy the caller's folder assignment from a source item to its duplicate,
-   * so duplicating an item that sits in "my" folder keeps the copy there.
-   * No-op when the caller never assigned the source item.
-   */
-  copySidebarGroupAssignment = async (sourceItemId: string, targetItemId: string) => {
-    const preference = await this.getPreference();
-    const assignment = preference.sidebarGroupAssignments?.[sourceItemId];
-    if (assignment === undefined) return;
-    await this.updatePreference({ sidebarGroupAssignments: { [targetItemId]: assignment } });
-  };
-
-  /**
    * Merge `patch` on top of the caller's current preference and persist the
    * result via UPSERT. The merge is done at the application layer (read →
    * merge → write) because only the caller writes their own row, so the
@@ -91,7 +77,7 @@ export class WorkspaceUserSettingsModel {
    * in the patch is a no-op — pass an explicit `{}` to clear it).
    */
   updatePreference = async (patch: Partial<WorkspaceUserPreference>) => {
-    const current = (await this.getPreference()) ?? {};
+    const current = await this.getPreference();
     // Per-agent override maps merge one level deeper: clients patch a single
     // agent's leaf from a local copy that may be stale or empty (for example a
     // picker used before the preference fetch settles). A top-level replace
@@ -127,19 +113,25 @@ export class WorkspaceUserSettingsModel {
             },
           }
         : {}),
-      ...(patch.sidebarGroupAssignments
-        ? {
-            sidebarGroupAssignments: {
-              ...current.sidebarGroupAssignments,
-              ...patch.sidebarGroupAssignments,
-            },
-          }
-        : {}),
       ...(patch.sidebarAgentVisibilityOverrides
         ? {
             sidebarAgentVisibilityOverrides: {
               ...current.sidebarAgentVisibilityOverrides,
               ...patch.sidebarAgentVisibilityOverrides,
+            },
+          }
+        : {}),
+      // Deprecated, but still merged: the fields stay on the API, so a client
+      // from before the shared-sidebar change can still patch a single item.
+      // A top-level replace would let one such write shred the rest of that
+      // user's saved map — which is exactly the data the deprecation promises
+      // to leave intact for a rollback. Drop these two once the fields leave
+      // `WorkspaceUserPreference`.
+      ...(patch.sidebarGroupAssignments
+        ? {
+            sidebarGroupAssignments: {
+              ...current.sidebarGroupAssignments,
+              ...patch.sidebarGroupAssignments,
             },
           }
         : {}),
@@ -166,4 +158,68 @@ export class WorkspaceUserSettingsModel {
       .returning();
     return row;
   };
+
+  /**
+   * Turn the composer's "New worktree" switch on or off for one directory and
+   * return the stored list. The cap (see `applyWorktreeModeDir`) is enforced
+   * here rather than trusted from a client copy that may be stale.
+   */
+  setWorktreeModeDir = async (key: string, enabled: boolean): Promise<string[]> =>
+    this.mutatePreference((current) => {
+      const worktreeModeDirs = applyWorktreeModeDir(current.worktreeModeDirs, key, enabled);
+      return { next: { ...current, worktreeModeDirs }, result: worktreeModeDirs };
+    });
+
+  /**
+   * Remember whether this member left the Codex Plan switch on for one
+   * directory and return the stored list (capped here, like the worktree switch).
+   */
+  setHeteroPlanModeDir = async (key: string, enabled: boolean): Promise<string[]> =>
+    this.mutatePreference((current) => {
+      const heteroPlanModeDirs = applyHeteroPlanModeDir(current.heteroPlanModeDirs, key, enabled);
+      return { next: { ...current, heteroPlanModeDirs }, result: heteroPlanModeDirs };
+    });
+
+  /**
+   * Remember the Claude Code permission mode this member picked for one
+   * directory and return the stored list (capped here, like the worktree switch).
+   */
+  setHeteroPermissionModeDir = async (
+    key: string,
+    mode: HeteroPermissionMode,
+  ): Promise<HeteroPermissionModeDir[]> =>
+    this.mutatePreference((current) => {
+      const heteroPermissionModeDirs = applyHeteroPermissionModeDir(
+        current.heteroPermissionModeDirs,
+        key,
+        mode,
+      );
+      return { next: { ...current, heteroPermissionModeDirs }, result: heteroPermissionModeDirs };
+    });
+
+  /** Read → change → write this member's preference under the row lock. */
+  private mutatePreference = async <T>(
+    change: (current: WorkspaceUserPreference) => { next: WorkspaceUserPreference; result: T },
+  ): Promise<T> =>
+    this.db.transaction(async (trx) => {
+      const [row] = await trx
+        .select({ preference: workspaceUserSettings.preference })
+        .from(workspaceUserSettings)
+        .where(
+          and(
+            eq(workspaceUserSettings.workspaceId, this.workspaceId),
+            eq(workspaceUserSettings.userId, this.userId),
+          ),
+        )
+        .for('update');
+      const { next, result } = change(row?.preference ?? {});
+      await trx
+        .insert(workspaceUserSettings)
+        .values({ preference: next, userId: this.userId, workspaceId: this.workspaceId })
+        .onConflictDoUpdate({
+          set: { preference: next, updatedAt: new Date() },
+          target: [workspaceUserSettings.workspaceId, workspaceUserSettings.userId],
+        });
+      return result;
+    });
 }

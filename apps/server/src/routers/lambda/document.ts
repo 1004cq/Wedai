@@ -5,64 +5,97 @@ import { businessFileTransferStorageCheck } from '@/business/server/lambda-route
 import { withScopedPermission } from '@/business/server/trpc-middlewares/rbacPermission';
 import { wsCompatProcedure } from '@/business/server/trpc-middlewares/workspaceAuth';
 import { FREE_DOCUMENT_HISTORY_WINDOW_DAYS } from '@/const/documentHistory';
+import { AgentOperationModel } from '@/database/models/agentOperation';
 import { ChunkModel } from '@/database/models/chunk';
-import { DocumentModel } from '@/database/models/document';
+import { DOCUMENT_TRANSFER_FOREIGN_ROWS, DocumentModel } from '@/database/models/document';
 import { FileModel } from '@/database/models/file';
 import { MessageModel } from '@/database/models/message';
 import { ResourcePermissionModel } from '@/database/models/resourcePermission';
+import { WorkModel } from '@/database/models/work';
 import { DEFAULT_RESOURCE_ACCESS_LEVELS } from '@/database/schemas';
 import { router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
 import { DocumentService } from '@/server/services/document';
-import { FileService } from '@/server/services/file';
+import { resolveDocumentWrite } from '@/server/services/document/editorData';
 import {
-  assertCanEditResource,
+  assertCanCreateUnderParent,
+  createDocumentFromInput,
+  updateDocumentFromInput,
+} from '@/server/services/document/writeFlow';
+import { getDocumentForViewer } from '@/server/services/documentAccess';
+import { FileService } from '@/server/services/file';
+import { resolvePageAccess } from '@/server/services/pageCollab';
+import { snapshotPageThroughRoom } from '@/server/services/pageCollab/bodyWriter';
+import { dropPageRooms } from '@/server/services/pageCollab/notify';
+import {
   assertCanPerformResourceAction,
   buildResourcePermissionState,
-  getResourceMeta,
 } from '@/server/services/resourcePermission';
 import { hasWorkspaceScopedPermission } from '@/server/services/workspacePermission';
 import { TransferErrorCode } from '@/types/transferError';
 
 import { isWorkspaceNonOwner } from './_helpers/assertWorkspaceRowManageable';
 import {
+  assertContentsNotInRestrictedKnowledgeBase,
+  getRestrictedKnowledgeBaseIds,
+} from './_helpers/knowledgeBaseAccess';
+import { resolveRootOperation } from './_helpers/runProvenance';
+import {
   compareDocumentHistoryItemsInputSchema,
+  DOCUMENT_CONTENT_MAX_LENGTH,
+  DOCUMENT_EDITOR_DATA_MAX_LENGTH,
   getDocumentHistoryItemInputSchema,
   listDocumentHistoryInputSchema,
   saveDocumentHistoryInputSchema,
   updateDocumentInputSchema,
 } from './_schema/documentHistory';
 
-/**
- * Creating a child modifies the parent's tree — viewers of a workspace-shared
- * parent must not be able to insert under it. Parents outside the current
- * workspace (personal docs, foreign ids) fall through; the model's ownership
- * WHERE keeps those unreachable anyway.
- */
-const assertCanCreateUnderParent = async (
-  ctx: {
-    serverDB: Parameters<typeof getResourceMeta>[0];
-    userId: string;
-    workspaceId?: string | null;
-  },
-  parentId: string | undefined,
-) => {
-  if (!ctx.workspaceId || !parentId) return;
-  const meta = await getResourceMeta(ctx.serverDB, 'document', parentId);
-  if (!meta || meta.workspaceId !== ctx.workspaceId) return;
-  await assertCanEditResource({
-    db: ctx.serverDB,
-    resourceId: parentId,
-    resourceType: 'document',
-    userId: ctx.userId,
-    workspaceId: ctx.workspaceId,
-  });
-};
-
 const getFreeDocumentHistorySince = () => {
   const now = Date.now();
 
   return new Date(now - FREE_DOCUMENT_HISTORY_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+};
+
+/**
+ * Credit a document written inside an agent run to that run as a Work version,
+ * so run consumers (a Goal harvesting a Task's deliverables) can find it. Agents
+ * that write through the `lh doc` CLI never pass through a tool runtime, which is
+ * where document Work is otherwise registered.
+ *
+ * Attribution is best effort and never fails the write: only an owned operation
+ * that is still running can claim the document — a stale `LOBEHUB_OPERATION_ID`
+ * left in a shell must not credit a finished run — and any provenance or
+ * bookkeeping failure just leaves the document unattributed.
+ */
+const registerRunDocumentWork = async (
+  ctx: { operationModel: AgentOperationModel; workModel: WorkModel },
+  params: {
+    changeType: 'created' | 'updated';
+    documentId: string;
+    operationId?: string;
+    toolName: string;
+  },
+) => {
+  if (!params.operationId) return;
+  try {
+    const operation = await ctx.operationModel.findOwnOperationById(params.operationId);
+    if (!operation || operation.status !== 'running') return;
+    const rootOperation = await resolveRootOperation(
+      (id) => ctx.operationModel.findOwnOperationById(id),
+      operation,
+    );
+    await ctx.workModel.registerDocument({
+      agentId: operation.agentId,
+      changeType: params.changeType,
+      documentId: params.documentId,
+      rootOperationId: rootOperation.id,
+      toolIdentifier: 'lobehub-document',
+      toolName: params.toolName,
+      topicId: operation.topicId,
+    });
+  } catch (error) {
+    console.error('[document] Failed to credit the document to its run', error);
+  }
 };
 
 const documentProcedure = wsCompatProcedure.use(serverDatabase).use(async (opts) => {
@@ -76,6 +109,8 @@ const documentProcedure = wsCompatProcedure.use(serverDatabase).use(async (opts)
       documentService: new DocumentService(ctx.serverDB, ctx.userId, wsId),
       fileModel: new FileModel(ctx.serverDB, ctx.userId, wsId),
       messageModel: new MessageModel(ctx.serverDB, ctx.userId, wsId),
+      operationModel: new AgentOperationModel(ctx.serverDB, ctx.userId, wsId),
+      workModel: new WorkModel(ctx.serverDB, ctx.userId, wsId),
     },
   });
 });
@@ -85,11 +120,13 @@ export const documentRouter = router({
     .use(withScopedPermission('document:create'))
     .input(
       z.object({
-        content: z.string().optional(),
-        editorData: z.string().optional(),
+        content: z.string().max(DOCUMENT_CONTENT_MAX_LENGTH).optional(),
+        editorData: z.string().max(DOCUMENT_EDITOR_DATA_MAX_LENGTH).optional(),
         fileType: z.string().optional(),
         knowledgeBaseId: z.string().optional(),
         metadata: z.record(z.string(), z.any()).optional(),
+        /** The agent run writing this document; credits it to that run as Work. */
+        operationId: z.string().optional(),
         parentId: z.string().optional(),
         slug: z.string().optional(),
         title: z.string(),
@@ -99,32 +136,14 @@ export const documentRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      // Resolve parentId if it's a slug
-      let resolvedParentId = input.parentId;
-      if (input.parentId) {
-        const docBySlug = await ctx.documentModel.findBySlug(input.parentId);
-        if (docBySlug) {
-          resolvedParentId = docBySlug.id;
-        }
-      }
-
-      await assertCanCreateUnderParent(ctx, resolvedParentId);
-
-      // Parse editorData from JSON string to object
-      const editorData = input.editorData ? JSON.parse(input.editorData) : undefined;
-      const document = await ctx.documentService.createDocument({
-        ...input,
-        editorData,
-        parentId: resolvedParentId,
+      const { operationId, ...documentInput } = input;
+      const document = await createDocumentFromInput(ctx, documentInput);
+      await registerRunDocumentWork(ctx, {
+        changeType: 'created',
+        documentId: document.id,
+        operationId,
+        toolName: 'createDocument',
       });
-      if (ctx.workspaceId && document.visibility !== 'private') {
-        await new ResourcePermissionModel(ctx.serverDB, ctx.workspaceId).setAccessLevel(
-          'document',
-          document.id,
-          DEFAULT_RESOURCE_ACCESS_LEVELS.document,
-          ctx.userId,
-        );
-      }
       return document;
     }),
 
@@ -134,8 +153,8 @@ export const documentRouter = router({
       z.object({
         documents: z.array(
           z.object({
-            content: z.string().optional(),
-            editorData: z.string(),
+            content: z.string().max(DOCUMENT_CONTENT_MAX_LENGTH).optional(),
+            editorData: z.string().max(DOCUMENT_EDITOR_DATA_MAX_LENGTH).optional(),
             fileType: z.string().optional(),
             knowledgeBaseId: z.string().optional(),
             metadata: z.record(z.string(), z.any()).optional(),
@@ -160,11 +179,16 @@ export const documentRouter = router({
             }
           }
 
-          // Parse editorData from JSON string to object
-          const editorData = JSON.parse(doc.editorData);
+          const { content, editorData } = await resolveDocumentWrite({
+            content: doc.content,
+            editorData: doc.editorData ? JSON.parse(doc.editorData) : undefined,
+            fileType: doc.fileType,
+            title: doc.title,
+          });
 
           return {
             ...doc,
+            content,
             editorData,
             parentId: resolvedParentId,
           };
@@ -202,21 +226,11 @@ export const documentRouter = router({
     .use(withScopedPermission('document:delete'))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      if (ctx.workspaceId) {
-        await assertCanPerformResourceAction({
-          action: 'delete',
-          db: ctx.serverDB,
-          resourceId: input.id,
-          resourceType: 'document',
-          userId: ctx.userId,
-          workspaceId: ctx.workspaceId,
-        });
-      }
-      // Non-owner members may delete their own folder, but the recursive
-      // cascade must not take other members' descendants with it.
-      const result = await ctx.documentService.deleteDocument(input.id, {
-        restrictToCreator: isWorkspaceNonOwner(ctx),
-      });
+      const document = await ctx.documentModel.findById(input.id);
+      if (!document) throw new TRPCError({ code: 'NOT_FOUND', message: 'Document not found' });
+      await assertContentsNotInRestrictedKnowledgeBase(ctx, [input.id]);
+
+      const result = await ctx.documentService.deleteDocument(input.id);
       if (ctx.workspaceId) {
         await new ResourcePermissionModel(ctx.serverDB, ctx.workspaceId).removeAll(
           'document',
@@ -230,26 +244,21 @@ export const documentRouter = router({
     .use(withScopedPermission('document:delete'))
     .input(z.object({ ids: z.array(z.string()) }))
     .mutation(async ({ ctx, input }) => {
-      if (ctx.workspaceId) {
-        await Promise.all(
-          input.ids.map((id) =>
-            assertCanPerformResourceAction({
-              action: 'delete',
-              db: ctx.serverDB,
-              resourceId: id,
-              resourceType: 'document',
-              userId: ctx.userId,
-              workspaceId: ctx.workspaceId!,
-            }),
-          ),
-        );
+      const ids = [...new Set(input.ids)];
+      const documents = await ctx.documentModel.findByIds(ids);
+      const accessibleIds = new Set(documents.map((document) => document.id));
+      if (ids.some((id) => !accessibleIds.has(id))) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'One or more documents were not found or are not accessible',
+        });
       }
-      const result = await ctx.documentService.deleteDocuments(input.ids, {
-        restrictToCreator: isWorkspaceNonOwner(ctx),
-      });
+      await assertContentsNotInRestrictedKnowledgeBase(ctx, ids);
+
+      const result = await ctx.documentService.deleteDocuments(ids);
       if (ctx.workspaceId) {
         const permissionModel = new ResourcePermissionModel(ctx.serverDB, ctx.workspaceId);
-        await Promise.all(input.ids.map((id) => permissionModel.removeAll('document', id)));
+        await Promise.all(ids.map((id) => permissionModel.removeAll('document', id)));
       }
       return result;
     }),
@@ -257,10 +266,18 @@ export const documentRouter = router({
   getDocumentById: documentProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
-      const doc = await ctx.documentService.getDocumentById(input.id);
+      // KB-scoped documents inherit the KB's public visibility, so direct
+      // reads must honor the restricted-KB (member No-access) policy too.
+      await assertContentsNotInRestrictedKnowledgeBase(ctx, [input.id]);
+      const doc = await getDocumentForViewer(ctx, input.id);
       // `source` is a storage key for file-backed documents; sign it so PDF viewers
       // and downloads receive a usable URL. Absolute URLs (web sources) pass through.
-      if (!doc?.source || /^https?:\/\//i.test(doc.source)) return doc;
+      if (
+        !doc?.source ||
+        (doc.sourceType !== 'file' && !doc.fileId) ||
+        /^https?:\/\//i.test(doc.source)
+      )
+        return doc;
       const fileService = new FileService(ctx.serverDB, ctx.userId, ctx.workspaceId ?? undefined);
       return {
         ...doc,
@@ -275,6 +292,7 @@ export const documentRouter = router({
   listDocumentHistory: documentProcedure
     .input(listDocumentHistoryInputSchema)
     .query(async ({ ctx, input }) => {
+      await assertContentsNotInRestrictedKnowledgeBase(ctx, [input.documentId]);
       return ctx.documentService.listDocumentHistory(
         {
           ...input,
@@ -289,6 +307,7 @@ export const documentRouter = router({
   getDocumentHistoryItem: documentProcedure
     .input(getDocumentHistoryItemInputSchema)
     .query(async ({ ctx, input }) => {
+      await assertContentsNotInRestrictedKnowledgeBase(ctx, [input.documentId]);
       return ctx.documentService.getDocumentHistoryItem(input, {
         historySince: getFreeDocumentHistorySince(),
       });
@@ -297,6 +316,7 @@ export const documentRouter = router({
   compareDocumentHistoryItems: documentProcedure
     .input(compareDocumentHistoryItemsInputSchema)
     .query(async ({ ctx, input }) => {
+      await assertContentsNotInRestrictedKnowledgeBase(ctx, [input.documentId]);
       return ctx.documentService.compareDocumentHistoryItems(input, {
         historySince: getFreeDocumentHistorySince(),
       });
@@ -306,15 +326,7 @@ export const documentRouter = router({
     .use(withScopedPermission('document:update'))
     .input(saveDocumentHistoryInputSchema)
     .mutation(async ({ ctx, input }) => {
-      // Same write guard as `updateDocument` — history saves rewrite the
-      // document's editorData, so a view-level member must not reach it.
-      await assertCanEditResource({
-        db: ctx.serverDB,
-        resourceId: input.documentId,
-        resourceType: 'document',
-        userId: ctx.userId,
-        workspaceId: ctx.workspaceId ?? undefined,
-      });
+      await assertContentsNotInRestrictedKnowledgeBase(ctx, [input.documentId]);
 
       const editorData = JSON.parse(input.editorData);
       return ctx.documentService.saveDocumentHistory(
@@ -325,11 +337,38 @@ export const documentRouter = router({
       );
     }),
 
+  /**
+   * Store a page's live collaboration room as a version (manual save, accepting
+   * AI suggestions): the edits are already in the room, so there is no body to
+   * send. A page without a live room returns `recorded: false`, and the client
+   * saves it the usual way.
+   */
+  snapshotPageVersion: documentProcedure
+    .use(withScopedPermission('document:update'))
+    .input(z.object({ documentId: z.string(), saveSource: z.enum(['manual']) }))
+    .mutation(async ({ ctx, input }) => {
+      await assertContentsNotInRestrictedKnowledgeBase(ctx, [input.documentId]);
+      if ((await resolvePageAccess(ctx.serverDB, ctx.userId, input.documentId)) !== 'edit') {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'No permission to edit this page' });
+      }
+
+      const recorded = await snapshotPageThroughRoom(ctx.serverDB, input.documentId, {
+        saveSource: input.saveSource,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId ?? undefined,
+        writeSource: 'user',
+      });
+      return { recorded };
+    }),
+
   getFolderBreadcrumb: documentProcedure
     .input(z.object({ slug: z.string() }))
     .query(async ({ ctx, input }) => {
       const chain = [];
-      let currentFolder = await ctx.documentModel.findBySlug(input.slug);
+      // Folder URLs carry the id; older links still carry the slug.
+      let currentFolder =
+        (await ctx.documentModel.findBySlug(input.slug)) ??
+        (await ctx.documentModel.findById(input.slug));
 
       // Build chain from current folder to root
       while (currentFolder) {
@@ -358,6 +397,7 @@ export const documentRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertContentsNotInRestrictedKnowledgeBase(ctx, [input.id]);
       const lobeDocument = await ctx.documentService.parseDocument(input.id);
 
       return lobeDocument;
@@ -372,6 +412,7 @@ export const documentRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertContentsNotInRestrictedKnowledgeBase(ctx, [input.id]);
       const lobeDocument = await ctx.documentService.parseFile(input.id);
 
       return lobeDocument;
@@ -381,30 +422,31 @@ export const documentRouter = router({
     .input(
       z
         .object({
+          creator: z.enum(['others', 'self']).optional(),
           current: z.number().optional(),
           fileTypes: z.array(z.string()).optional(),
           pageSize: z.number().max(100).optional(),
+          sortBy: z.enum(['createdAt', 'title', 'updatedAt']).optional(),
           sourceTypes: z.array(z.string()).optional(),
+          standaloneOnly: z.boolean().optional(),
         })
         .optional(),
     )
     .query(async ({ ctx, input }) => {
-      return ctx.documentService.queryDocuments(input);
+      // KB pages are ordinary workspace-public documents, so listings must
+      // drop rows from restricted (member No-access) libraries. The exclusion
+      // runs inside the query so pagination and totals stay correct.
+      const excludeKnowledgeBaseIds = ctx.workspaceId
+        ? await getRestrictedKnowledgeBaseIds(ctx)
+        : [];
+      return ctx.documentService.queryDocuments({ ...input, excludeKnowledgeBaseIds });
     }),
 
   acquireDocumentLock: documentProcedure
     .use(withScopedPermission('document:update'))
     .input(z.object({ id: z.string(), ownerId: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
-      // The lock grants exclusive write access — a view-level member must not
-      // be able to seize it and starve legitimate editors.
-      await assertCanEditResource({
-        db: ctx.serverDB,
-        resourceId: input.id,
-        resourceType: 'document',
-        userId: ctx.userId,
-        workspaceId: ctx.workspaceId ?? undefined,
-      });
+      await assertContentsNotInRestrictedKnowledgeBase(ctx, [input.id]);
 
       return input.ownerId
         ? ctx.documentService.acquireDocumentLockWithOwner(input.id, input.ownerId)
@@ -415,6 +457,7 @@ export const documentRouter = router({
     .use(withScopedPermission('document:update'))
     .input(z.object({ id: z.string(), ownerId: z.string().optional() }))
     .query(async ({ ctx, input }) => {
+      await assertContentsNotInRestrictedKnowledgeBase(ctx, [input.id]);
       return ctx.documentService.getDocumentLock(input.id, input.ownerId);
     }),
 
@@ -422,6 +465,7 @@ export const documentRouter = router({
     .use(withScopedPermission('document:update'))
     .input(z.object({ id: z.string(), ownerId: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
+      await assertContentsNotInRestrictedKnowledgeBase(ctx, [input.id]);
       if (input.ownerId)
         await ctx.documentService.releaseDocumentLockWithOwner(input.id, input.ownerId);
       else await ctx.documentService.releaseDocumentLock(input.id);
@@ -429,39 +473,26 @@ export const documentRouter = router({
 
   updateDocument: documentProcedure
     .use(withScopedPermission('document:update'))
-    .input(updateDocumentInputSchema)
+    .input(
+      updateDocumentInputSchema.extend({
+        /** The agent run editing this document; an edit adds a Work version to that run. */
+        operationId: z.string().optional(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
-      // General-access write guard: a public document whose workspace level
-      // is `viewer` is read-only for everyone but the creator / owner.
-      await assertCanEditResource({
-        db: ctx.serverDB,
-        resourceId: input.id,
-        resourceType: 'document',
-        userId: ctx.userId,
-        workspaceId: ctx.workspaceId ?? undefined,
-      });
+      const { operationId, ...updateInput } = input;
+      const result = await updateDocumentFromInput(ctx, updateInput);
 
-      // A move mutates both the source and destination trees as well as the
-      // document. Only check when the parent really changes: several editor
-      // paths include the current parentId in ordinary metadata/autosave
-      // updates. `null` is an explicit detach and still leaves the source.
-      if (input.parentId !== undefined) {
-        const currentDocument = await ctx.documentModel.findById(input.id);
-        const currentParentId = currentDocument?.parentId ?? null;
-        const nextParentId = input.parentId ?? null;
-        if (currentParentId !== nextParentId) {
-          if (currentParentId) await assertCanCreateUnderParent(ctx, currentParentId);
-          if (nextParentId) await assertCanCreateUnderParent(ctx, nextParentId);
-        }
+      // Only a change to what the document says is a new deliverable version;
+      // a move or a file-type change is not.
+      if (result && (input.content !== undefined || input.title !== undefined)) {
+        await registerRunDocumentWork(ctx, {
+          changeType: 'updated',
+          documentId: input.id,
+          operationId,
+          toolName: 'updateDocument',
+        });
       }
-
-      const { id, editorData: editorDataString, ...params } = input;
-      // Parse editorData from JSON string to object if present
-      const editorData = editorDataString ? JSON.parse(editorDataString) : undefined;
-      const result = await ctx.documentService.updateDocument(id, {
-        ...params,
-        editorData,
-      });
 
       return result;
     }),
@@ -520,20 +551,6 @@ export const documentRouter = router({
         }
       }
 
-      // The transfer rehomes every descendant document and anchored file. A
-      // non-owner member may transfer their own root only when the entire
-      // subtree is theirs; workspace owners retain the administrative override.
-      if (
-        isWorkspaceNonOwner(ctx) &&
-        (await ctx.documentModel.subtreeHasForeignRows(input.documentId))
-      ) {
-        throw new TRPCError({
-          cause: { data: { code: TransferErrorCode.OwnerOnly } },
-          code: 'FORBIDDEN',
-          message: "Only workspace owners can transfer a document tree containing others' content",
-        });
-      }
-
       const additionalSize = await ctx.documentModel.countFileUsageInSubtree(input.documentId);
       await businessFileTransferStorageCheck({
         additionalSize,
@@ -541,18 +558,39 @@ export const documentRouter = router({
         targetWorkspaceId: input.targetWorkspaceId,
       });
 
-      const result = await ctx.documentModel.transferTo(
-        input.documentId,
-        input.targetWorkspaceId,
-        ctx.userId,
-        input.targetVisibility,
-      );
+      // The transfer rehomes every descendant document, anchored file, comment,
+      // and like. A non-owner member may transfer their own root only when the
+      // entire subtree is theirs; workspace owners retain the administrative
+      // override. The check runs INSIDE the transfer transaction (after the
+      // subtree rows are locked) so content committed between any preflight and
+      // the transfer cannot slip past the guard.
+      let result: Awaited<ReturnType<typeof ctx.documentModel.transferTo>>;
+      try {
+        result = await ctx.documentModel.transferTo(
+          input.documentId,
+          input.targetWorkspaceId,
+          ctx.userId,
+          input.targetVisibility,
+          { forbidForeignRows: isWorkspaceNonOwner(ctx) },
+        );
+      } catch (error) {
+        if (error instanceof Error && error.message === DOCUMENT_TRANSFER_FOREIGN_ROWS) {
+          throw new TRPCError({
+            cause: { data: { code: TransferErrorCode.OwnerOnly } },
+            code: 'FORBIDDEN',
+            message:
+              "Only workspace owners can transfer a document tree containing others' content",
+          });
+        }
+        throw error;
+      }
       if (ctx.workspaceId) {
         const sourcePermissionModel = new ResourcePermissionModel(ctx.serverDB, ctx.workspaceId);
         await Promise.all(
           result.documentIds.map((id) => sourcePermissionModel.removeAll('document', id)),
         );
       }
+      if (ctx.workspaceId && !input.targetWorkspaceId) dropPageRooms(result.documentIds);
       if (input.targetWorkspaceId && input.targetVisibility === 'public') {
         const targetPermissionModel = new ResourcePermissionModel(
           ctx.serverDB,
@@ -606,10 +644,15 @@ export const documentRouter = router({
 
       const result = await ctx.documentService.publishToWorkspace(input.id);
       if (ctx.workspaceId) {
-        await new ResourcePermissionModel(ctx.serverDB, ctx.workspaceId).setAccessLevel(
+        const permissionModel = new ResourcePermissionModel(ctx.serverDB, ctx.workspaceId);
+        // A level staged on the permission page while the document was still
+        // private must survive publishing — only fall back to the default
+        // when neither an explicit input nor a staged row exists.
+        const staged = await permissionModel.getAccessLevel('document', input.id);
+        await permissionModel.setAccessLevel(
           'document',
           input.id,
-          input.accessLevel ?? DEFAULT_RESOURCE_ACCESS_LEVELS.document,
+          input.accessLevel ?? staged ?? DEFAULT_RESOURCE_ACCESS_LEVELS.document,
           ctx.userId,
         );
       }
@@ -678,19 +721,21 @@ export const documentRouter = router({
       }
 
       const result = await ctx.documentService.setVisibility(input.id, input.visibility);
+      // A level staged on the permission page while the document was still
+      // private must survive publishing — only fall back to the default when
+      // neither an explicit input nor a staged row exists.
+      const staged =
+        input.visibility === 'public'
+          ? await permissionModel.getAccessLevel('document', input.id)
+          : null;
       const accessLevel =
         input.visibility === 'private'
           ? 'edit'
-          : (input.accessLevel ?? DEFAULT_RESOURCE_ACCESS_LEVELS.document);
+          : (input.accessLevel ?? staged ?? DEFAULT_RESOURCE_ACCESS_LEVELS.document);
       if (input.visibility === 'private') {
         await permissionModel.removeAll('document', input.id);
       } else {
-        await permissionModel.setAccessLevel(
-          'document',
-          input.id,
-          input.accessLevel ?? DEFAULT_RESOURCE_ACCESS_LEVELS.document,
-          ctx.userId,
-        );
+        await permissionModel.setAccessLevel('document', input.id, accessLevel, ctx.userId);
       }
       return {
         ...buildResourcePermissionState({

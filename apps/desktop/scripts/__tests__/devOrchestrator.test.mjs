@@ -11,7 +11,7 @@ class FakeChild extends EventEmitter {
 const createHarness = (overrides = {}) => {
   const spawned = [];
   const watchers = [];
-  const state = { bundlesExist: false, mtime: 1, portReady: false };
+  const state = { bundlesExist: false, mtime: Date.now() + 1, portReady: false };
 
   const options = {
     checkPort: vi.fn(async () => state.portReady),
@@ -22,6 +22,7 @@ const createHarness = (overrides = {}) => {
     log: vi.fn(),
     logError: vi.fn(),
     nodeBin: '/bin/node',
+    rmSync: vi.fn(),
     spawn: vi.fn((bin, args, opts) => {
       const child = new FakeChild();
       spawned.push({ args, bin, child, opts });
@@ -84,6 +85,19 @@ describe('createDevOrchestrator', () => {
     ]);
   });
 
+  it('wipes the stale dist before spawning the watch builds', () => {
+    const h = createHarness();
+    h.orchestrator.start();
+
+    expect(h.options.rmSync).toHaveBeenCalledWith('/repo/apps/desktop/dist', {
+      force: true,
+      recursive: true,
+    });
+    expect(h.options.rmSync.mock.invocationCallOrder[0]).toBeLessThan(
+      h.options.spawn.mock.invocationCallOrder[0],
+    );
+  });
+
   it('shuts everything down when a vite child exits early', () => {
     const h = createHarness();
     h.orchestrator.start();
@@ -123,11 +137,26 @@ describe('createDevOrchestrator', () => {
     h.state.portReady = true;
 
     await vi.advanceTimersByTimeAsync(600);
-    h.state.mtime = 2;
+    h.state.mtime += 1;
     await vi.advanceTimersByTimeAsync(600);
     expect(h.electronSpawns()).toHaveLength(0);
 
     await vi.advanceTimersByTimeAsync(1400);
+    expect(h.electronSpawns()).toHaveLength(1);
+  });
+
+  it('ignores bundles left over from a previous run until the watch build rewrites them', async () => {
+    const h = createHarness();
+    h.state.mtime = Date.now() - 1;
+    h.orchestrator.start();
+    h.state.bundlesExist = true;
+    h.state.portReady = true;
+
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(h.electronSpawns()).toHaveLength(0);
+
+    h.state.mtime = Date.now();
+    await vi.advanceTimersByTimeAsync(2000);
     expect(h.electronSpawns()).toHaveLength(1);
   });
 
@@ -168,6 +197,27 @@ describe('createDevOrchestrator', () => {
     expect(electron.kill).toHaveBeenCalledTimes(1);
   });
 
+  it('names every changed bundle in the restart log, once', async () => {
+    const h = createHarness();
+    h.orchestrator.start();
+    await h.becomeReady();
+
+    h.watchers[0]('change', 'index.js');
+    h.watchers[1]('change', 'index.js');
+    await vi.advanceTimersByTimeAsync(500);
+
+    const message = h.options.log.mock.calls.at(-1)[0];
+    expect(message).toContain('[desktop-dev] main/preload bundle changed');
+    expect(message).toContain('dist/main/index.js: change');
+    expect(message).toContain('dist/preload/index.js: change');
+
+    h.electronSpawns()[0].child.emit('exit', null);
+    h.watchers[0]('change', 'index.js');
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(h.options.log.mock.calls.at(-1)[0]).not.toContain('dist/preload/index.js');
+  });
+
   it('stops the watchers when electron is quit by hand', async () => {
     const h = createHarness();
     h.orchestrator.start();
@@ -189,12 +239,30 @@ describe('createDevOrchestrator', () => {
     h.orchestrator.shutdown(0);
     h.orchestrator.shutdown(1);
 
-    expect(h.options.exit).toHaveBeenCalledTimes(1);
-    expect(h.options.exit).toHaveBeenCalledWith(0);
-    expect(h.electronSpawns()[0].child.kill).toHaveBeenCalled();
+    expect(h.electronSpawns()[0].child.kill).toHaveBeenCalledTimes(1);
     for (const { child } of h.viteChildren()) {
       expect(child.kill).toHaveBeenCalled();
     }
+    // A group signal must not reach Electron too: its second SIGTERM is fatal.
+    expect(h.electronSpawns()[0].opts.detached).toBe(process.platform !== 'win32');
+    // Electron is still quitting: the launcher must outlive it.
+    expect(h.options.exit).not.toHaveBeenCalled();
+
+    h.electronSpawns()[0].child.emit('exit', 0);
+    expect(h.options.exit).toHaveBeenCalledTimes(1);
+    expect(h.options.exit).toHaveBeenCalledWith(0);
+  });
+
+  it('kills an electron whose quit hangs past the timeout', async () => {
+    const h = createHarness({ electronQuitTimeoutMs: 5000 });
+    h.orchestrator.start();
+    await h.becomeReady();
+
+    h.orchestrator.shutdown(0);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(h.electronSpawns()[0].child.kill).toHaveBeenLastCalledWith('SIGKILL');
+    expect(h.options.exit).toHaveBeenCalledWith(0);
   });
 
   it('fails with exit(1) when the initial build never produces bundles', async () => {

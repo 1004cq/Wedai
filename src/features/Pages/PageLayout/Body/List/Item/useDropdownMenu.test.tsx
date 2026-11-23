@@ -15,23 +15,32 @@ const CURRENT_USER_ID = vi.hoisted(() => 'user-1');
 
 const useDocumentTransferMenuItemMock = vi.hoisted(() => vi.fn(() => []));
 
+const favoriteMenuItemFor = vi.hoisted(
+  () => (target: unknown, _options?: unknown) =>
+    target ? { key: 'toggleFavorite', label: 'favorite.add', onClick: () => {} } : null,
+);
+
+const useFavoriteMenuItemMock = vi.hoisted(() => vi.fn(favoriteMenuItemFor));
+
 const storeMock = vi.hoisted(() => ({
   activeWorkspaceId: undefined as string | undefined,
   document: undefined as
-    { id: string; userId?: string; visibility?: 'private' | 'public' | null } | undefined,
+    | {
+        id: string;
+        metadata?: { emoji?: string };
+        title?: string;
+        userId?: string;
+        visibility?: 'private' | 'public' | null;
+      }
+    | undefined,
 }));
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string) => key,
-  }),
+vi.mock('@/features/Favorites', () => ({
+  useFavoriteMenuItem: useFavoriteMenuItemMock,
 }));
 
-vi.mock('@lobehub/ui', () => ({
-  Icon: () => null,
-}));
-
-vi.mock('antd', () => ({
+vi.mock('antd', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   App: {
     useApp: () => ({
       message: {
@@ -76,21 +85,13 @@ vi.mock('@/store/page', () => ({
     getDocumentById: (_id: string) => (_s: unknown) => storeMock.document,
     getFilteredDocuments: (_s: unknown) => (storeMock.document ? [storeMock.document] : []),
   },
-  usePageStore: Object.assign(
-    (selector: (state: Record<string, unknown>) => unknown) =>
-      selector({
-        duplicatePage: vi.fn(),
-        publishPageToWorkspace: vi.fn(),
-        removePage: vi.fn(),
-      }),
-    {
-      getState: () => ({
-        duplicatePage: vi.fn(),
-        publishPageToWorkspace: vi.fn(),
-        removePage: vi.fn(),
-      }),
-    },
-  ),
+  pageActions: {
+    duplicatePage: vi.fn(),
+    publishPageToWorkspace: vi.fn(),
+    removePage: vi.fn(),
+    setPageVisibility: vi.fn(),
+  },
+  usePageStore: (selector: (state: Record<string, unknown>) => unknown) => selector({}),
 }));
 
 vi.mock('@/store/user', () => ({
@@ -128,6 +129,7 @@ describe('Page list item dropdown menu', () => {
     permissionMock.edit_own_content = true;
     storeMock.activeWorkspaceId = undefined;
     storeMock.document = undefined;
+    useFavoriteMenuItemMock.mockImplementation(favoriteMenuItemFor);
   });
 
   it('labels the page transfer action as Move', () => {
@@ -136,6 +138,55 @@ describe('Page list item dropdown menu', () => {
     expect(useDocumentTransferMenuItemMock).toHaveBeenCalledWith('page-1', {
       transferLabel: 'pageEditor.menu.move',
     });
+  });
+
+  it('stops a menu click from reaching the row that opened it', () => {
+    // A page row is a link. If the menu click keeps bubbling the row navigates,
+    // which unmounts the inline rename field before it can be typed into.
+    const toggleEditing = vi.fn();
+    const { result } = renderHook(() => useDropdownMenu({ pageId: 'page-1', toggleEditing }));
+    const rename = getMenuItem(result.current(), 'rename');
+
+    const domEvent = { stopPropagation: vi.fn() };
+    (rename?.onClick as unknown as (info: { domEvent: typeof domEvent }) => void)({ domEvent });
+
+    expect(domEvent.stopPropagation).toHaveBeenCalledTimes(1);
+    expect(toggleEditing).toHaveBeenCalledWith(true);
+  });
+
+  it('keeps the row click from firing for destructive menu actions too', () => {
+    const { result } = renderHook(() =>
+      useDropdownMenu({ pageId: 'page-1', toggleEditing: vi.fn() }),
+    );
+
+    for (const key of ['duplicate', 'delete']) {
+      const domEvent = { stopPropagation: vi.fn() };
+      const item = getMenuItem(result.current(), key);
+
+      (item?.onClick as unknown as (info: { domEvent: typeof domEvent }) => void)({ domEvent });
+
+      expect(domEvent.stopPropagation).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('keeps the row click from firing for injected transfer actions', () => {
+    // Business builds hand these entries over with a plain `onClick`; they run
+    // through the same wrapper so "Move" cannot navigate the row either.
+    const transfer = vi.fn();
+    useDocumentTransferMenuItemMock.mockReturnValueOnce([
+      { key: 'move', label: 'Move', onClick: transfer },
+    ] as never);
+
+    const { result } = renderHook(() =>
+      useDropdownMenu({ pageId: 'page-1', toggleEditing: vi.fn() }),
+    );
+    const move = getMenuItem(result.current(), 'move');
+    const domEvent = { stopPropagation: vi.fn() };
+
+    (move?.onClick as unknown as (info: { domEvent: typeof domEvent }) => void)({ domEvent });
+
+    expect(domEvent.stopPropagation).toHaveBeenCalledTimes(1);
+    expect(transfer).toHaveBeenCalledTimes(1);
   });
 
   it('disables page management actions for workspace viewers', () => {
@@ -150,6 +201,17 @@ describe('Page list item dropdown menu', () => {
     expect(getMenuItem(items, 'rename')).toMatchObject({ disabled: true });
     expect(getMenuItem(items, 'duplicate')).toMatchObject({ disabled: true });
     expect(getMenuItem(items, 'delete')).toMatchObject({ disabled: true });
+  });
+
+  it("lets a workspace editor delete another member's page", () => {
+    storeMock.activeWorkspaceId = 'ws-1';
+    storeMock.document = { id: 'page-1', userId: 'another-member', visibility: 'public' };
+
+    const { result } = renderHook(() =>
+      useDropdownMenu({ pageId: 'page-1', toggleEditing: vi.fn() }),
+    );
+
+    expect(getMenuItem(result.current(), 'delete')).toMatchObject({ disabled: false });
   });
 
   it('exposes "publish to workspace" for private pages in workspace mode', () => {
@@ -199,5 +261,76 @@ describe('Page list item dropdown menu', () => {
     const items = result.current();
 
     expect(getMenuItem(items, 'publishToWorkspace')).toBeUndefined();
+  });
+
+  it('offers the same page favorite as the open page menu', () => {
+    storeMock.document = { id: 'page-1', metadata: { emoji: '📄' }, title: 'Roadmap' };
+
+    const { result } = renderHook(() =>
+      useDropdownMenu({ pageId: 'page-1', toggleEditing: vi.fn() }),
+    );
+
+    expect(useFavoriteMenuItemMock).toHaveBeenLastCalledWith(
+      {
+        icon: '📄',
+        path: '/page/page-1',
+        targetId: 'page-1',
+        title: 'Roadmap',
+        type: 'page',
+      },
+      { showHotkey: false },
+    );
+    expect(getMenuItem(result.current(), 'toggleFavorite')).toBeTruthy();
+  });
+
+  it('falls back to the untitled placeholder for a page without a title', () => {
+    storeMock.document = { id: 'page-1' };
+
+    renderHook(() => useDropdownMenu({ pageId: 'page-1', toggleEditing: vi.fn() }));
+
+    expect(useFavoriteMenuItemMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ icon: null, title: 'pageEditor.titlePlaceholder' }),
+      { showHotkey: false },
+    );
+  });
+
+  it('keeps the row click from firing when toggling the favorite', () => {
+    storeMock.document = { id: 'page-1', title: 'Roadmap' };
+    const toggle = vi.fn();
+    useFavoriteMenuItemMock.mockImplementation((target) =>
+      target ? { key: 'toggleFavorite', label: 'favorite.add', onClick: toggle } : null,
+    );
+
+    const { result } = renderHook(() =>
+      useDropdownMenu({ pageId: 'page-1', toggleEditing: vi.fn() }),
+    );
+    const favorite = getMenuItem(result.current(), 'toggleFavorite');
+    const domEvent = { stopPropagation: vi.fn() };
+
+    (favorite?.onClick as unknown as (info: { domEvent: typeof domEvent }) => void)({ domEvent });
+
+    expect(domEvent.stopPropagation).toHaveBeenCalledTimes(1);
+    expect(toggle).toHaveBeenCalledTimes(1);
+  });
+
+  it('has no favorite entry until the page is loaded', () => {
+    const { result } = renderHook(() =>
+      useDropdownMenu({ pageId: 'page-1', toggleEditing: vi.fn() }),
+    );
+
+    expect(getMenuItem(result.current(), 'toggleFavorite')).toBeUndefined();
+  });
+
+  it('has no favorite entry for a page that is still being created', () => {
+    // An optimistic row's client-minted id is swapped for the server id once
+    // creation lands; a favorite saved against it would point at no page.
+    storeMock.document = { id: 'temp-page-1', title: 'Draft' };
+
+    const { result } = renderHook(() =>
+      useDropdownMenu({ pageId: 'temp-page-1', toggleEditing: vi.fn() }),
+    );
+
+    expect(useFavoriteMenuItemMock).toHaveBeenLastCalledWith(undefined, { showHotkey: false });
+    expect(getMenuItem(result.current(), 'toggleFavorite')).toBeUndefined();
   });
 });

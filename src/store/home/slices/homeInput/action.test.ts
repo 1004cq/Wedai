@@ -320,7 +320,14 @@ describe('HomeInputActionImpl', () => {
       expect(navigateMock).toHaveBeenCalledWith('/group/group-new/profile');
       expect(sendMessageMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          context: { agentId: 'groupAgentBuilder', scope: 'group_agent_builder' },
+          context: {
+            agentId: 'groupAgentBuilder',
+            // Names the freshly created group so the builder topic is stamped
+            // with it, instead of relying on the not-yet-mounted group route to
+            // have set `chatStore.activeGroupId`.
+            editingGroupId: 'group-new',
+            scope: 'group_agent_builder',
+          },
           message: 'build a research group',
         }),
       );
@@ -335,6 +342,7 @@ describe('HomeInputActionImpl', () => {
         expect.objectContaining({
           context: {
             agentId: 'groupAgentBuilder',
+            editingGroupId: 'group-new',
             scope: 'group_agent_builder',
             workspaceSlug: 'team',
           },
@@ -370,7 +378,7 @@ describe('HomeInputActionImpl', () => {
       await action.sendAsWrite({ message: 'write me a doc' });
 
       expect(createDocumentMock).toHaveBeenCalled();
-      expect(navigateMock).toHaveBeenCalledWith('/page/doc-new');
+      expect(navigateMock).toHaveBeenCalledWith('/resource/page/doc-new');
       // The new editor has not mounted yet, so the doc id must travel in context
       // explicitly rather than relying on the page editor runtime singleton.
       expect(sendMessageMock).toHaveBeenCalledWith(

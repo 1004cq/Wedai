@@ -1,0 +1,136 @@
+'use client';
+
+import { Avatar, createModal, Flexbox, Icon } from '@lobehub/ui';
+import { McpIcon } from '@lobehub/ui/icons';
+import * as stylex from '@stylexjs/stylex';
+import { memo, type ReactNode, Suspense } from 'react';
+import { useTranslation } from 'react-i18next';
+
+import MCPTag from '@/components/Plugins/MCPTag';
+import PluginTag from '@/components/Plugins/PluginTag';
+import McpDetail from '@/features/MCP/MCPDetail';
+import McpDetailLoading from '@/features/MCP/MCPDetail/Loading';
+import { createPluginDetailModal } from '@/features/PluginDetailModal';
+import { useToolStore } from '@/store/tool';
+import { pluginSelectors } from '@/store/tool/selectors';
+import { type LobeToolType } from '@/types/tool/tool';
+
+import Actions from './Actions';
+import { RowMoreMenu } from './RowActions';
+import SkillListRow, { useSkillListVariant } from './SkillListRow';
+import { styles } from './style';
+
+interface McpSkillItemProps {
+  author?: string;
+  avatar?: string;
+  /** Feedback line under the title (list row only). */
+  description?: ReactNode;
+  identifier: string;
+  isSelected?: boolean;
+  onSelect?: () => void;
+  runtimeType?: string;
+  title: string;
+  type: LobeToolType;
+}
+
+const McpSkillItem = memo<McpSkillItemProps>(
+  ({ identifier, title, avatar, description, type, runtimeType, author, isSelected, onSelect }) => {
+    const { t } = useTranslation('plugin');
+    const isPage = useSkillListVariant() === 'page';
+    const iconSize = isPage ? 20 : 18;
+    const isMCP = runtimeType === 'mcp';
+    const isCustomPlugin = type === 'customPlugin';
+    const isCommunityMCP = isMCP && !isCustomPlugin;
+
+    const plugin = useToolStore(pluginSelectors.getToolManifestById(identifier));
+
+    const openDetail = () => {
+      if (isCommunityMCP) {
+        createModal({
+          content: (
+            <Suspense fallback={<McpDetailLoading />}>
+              <McpDetail noSettings identifier={identifier} />
+            </Suspense>
+          ),
+          footer: null,
+          title: t('dev.title.skillDetails'),
+          width: 800,
+        });
+        return;
+      }
+
+      if (isCustomPlugin) {
+        createPluginDetailModal({
+          id: identifier,
+          schema: plugin?.settings,
+          tab: 'info',
+        });
+      }
+    };
+
+    if (onSelect) {
+      return (
+        <SkillListRow
+          active={isSelected}
+          description={description}
+          extra={isPage ? <RowMoreMenu onOpenDetail={onSelect} /> : undefined}
+          summary={isPage ? author : undefined}
+          title={title}
+          icon={() =>
+            avatar && avatar !== 'MCP_AVATAR' ? (
+              <Avatar avatar={avatar} shape="square" size={iconSize} />
+            ) : (
+              <Icon icon={McpIcon} size={iconSize} />
+            )
+          }
+          onClick={onSelect}
+        />
+      );
+    }
+
+    return (
+      <>
+        <Flexbox
+          horizontal
+          align="center"
+          className={stylex.props(styles.container).className}
+          gap={8}
+          justify="space-between"
+          style={{
+            ...(isSelected ? { background: 'var(--lobe-color-primary-bg)', borderRadius: 6 } : {}),
+            ...(onSelect ? { cursor: 'pointer' } : {}),
+          }}
+          onClick={onSelect}
+        >
+          <Flexbox horizontal align="center" gap={8} style={{ flex: 1, overflow: 'hidden' }}>
+            <div {...stylex.props(styles.icon)}>
+              {avatar && avatar !== 'MCP_AVATAR' ? (
+                <Avatar avatar={avatar} shape={'square'} size={16} />
+              ) : (
+                <Icon icon={McpIcon} size={16} />
+              )}
+            </div>
+            {/* lobe-design-ignore LOBE-DIV-CLICK: legacy compact row; its Actions menu is the keyboard path to the same detail */}
+            <span {...stylex.props(styles.title)} onClick={onSelect ? undefined : openDetail}>
+              {title}
+            </span>
+          </Flexbox>
+          {!onSelect && (
+            <Flexbox horizontal align="center" gap={4}>
+              {isCustomPlugin ? (
+                <MCPTag showText={false} />
+              ) : (
+                <PluginTag author={author} isMCP={isMCP} type={type} />
+              )}
+              <Actions identifier={identifier} isMCP={isMCP} type={type} />
+            </Flexbox>
+          )}
+        </Flexbox>
+      </>
+    );
+  },
+);
+
+McpSkillItem.displayName = 'McpSkillItem';
+
+export default McpSkillItem;

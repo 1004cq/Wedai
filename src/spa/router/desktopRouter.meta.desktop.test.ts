@@ -1,7 +1,8 @@
-import { MessageSquarePlus } from 'lucide-react';
+import { HomeIcon, Image, ImageIcon, Video } from 'lucide-react';
 import { describe, expect, it } from 'vitest';
 
 import { matchRouteMeta } from '@/features/Electron/titlebar/TabBar/resolveRouteMeta';
+import { projectAcceptanceRouteMeta } from '@/features/Projects/routeMeta';
 
 import { mainAreaMetaRoutes } from './desktopRouter.config.desktop';
 
@@ -11,11 +12,11 @@ import { mainAreaMetaRoutes } from './desktopRouter.config.desktop';
 // meta tree that aliased those stubs would silently degrade every tab title to
 // brand and every icon to the Circle fallback on the packaged app.
 describe('mainAreaMetaRoutes (Electron adapter)', () => {
-  it('uses New Chat for the personal Home tab without changing its document title', () => {
+  it('uses Home for the personal Home tab and document title', () => {
     const { static: staticMeta } = matchRouteMeta(mainAreaMetaRoutes, '/');
 
-    expect(staticMeta.icon).toBe(MessageSquarePlus);
-    expect(staticMeta.tabTitleKey).toBe('navigation.newChat');
+    expect(staticMeta.icon).toBe(HomeIcon);
+    expect(staticMeta.tabTitleKey).toBe('navigation.home');
     expect(staticMeta.titleKey).toBe('navigation.home');
   });
 
@@ -24,6 +25,23 @@ describe('mainAreaMetaRoutes (Electron adapter)', () => {
 
     expect(staticMeta.titleKey).toBeDefined();
     expect(staticMeta.icon).toBeDefined();
+  });
+
+  it('uses the active resource category for the tab title and icon', () => {
+    const { static: staticMeta } = matchRouteMeta(mainAreaMetaRoutes, '/resource/drive/images');
+
+    expect(staticMeta.titleKey).toBe('navigation.resourceImages');
+    expect(staticMeta.icon).toBe(ImageIcon);
+  });
+
+  it.each([
+    ['/image', Image, 'navigation.image'],
+    ['/video', Video, 'navigation.video'],
+  ])('uses the generation page title and icon for %s', (path, icon, titleKey) => {
+    const { static: staticMeta } = matchRouteMeta(mainAreaMetaRoutes, path);
+
+    expect(staticMeta.icon).toBe(icon);
+    expect(staticMeta.titleKey).toBe(titleKey);
   });
 
   it('resolves a static agent meta and its DynamicMeta runner', () => {
@@ -40,5 +58,44 @@ describe('mainAreaMetaRoutes (Electron adapter)', () => {
 
     expect(staticMeta.titleKey).toBe('navigation.chat');
     expect(staticMeta.icon).toBeDefined();
+  });
+
+  it('resolves project conversation meta with a dynamic title runner', () => {
+    const matched = matchRouteMeta(mainAreaMetaRoutes, '/project/prj_1/topic/tpc_1');
+
+    expect(matched.static.titleKey).toBe('project:topics.title');
+    expect(matched.static.icon).toBeDefined();
+    expect(matched.meta?.DynamicMeta).toBeDefined();
+    expect(matched.params.projectId).toBe('prj_1');
+    expect(matched.params.topicId).toBe('tpc_1');
+  });
+
+  // Regression: the project acceptance section reused `acceptanceRouteMeta`,
+  // whose DynamicMeta cannot read an `:acceptanceId` here, so every project
+  // acceptance tab was persisted with the generic fallback title. Its own runner
+  // only adds the project avatar and publishes no title.
+  it('resolves project acceptance meta with its own static title, not the record runner', () => {
+    const matched = matchRouteMeta(mainAreaMetaRoutes, '/project/prj_1/acceptance');
+    const record = matchRouteMeta(mainAreaMetaRoutes, '/project/prj_1/acceptance/acc_1');
+
+    expect(matched.static.titleKey).toBe('project:sections.acceptance');
+    expect(matched.static.icon).toBeDefined();
+    expect(matched.meta).toBe(projectAcceptanceRouteMeta);
+    expect(matched.meta?.DynamicMeta).not.toBe(record.meta?.DynamicMeta);
+  });
+
+  it('resolves a project acceptance record with the acceptance title runner', () => {
+    const matched = matchRouteMeta(mainAreaMetaRoutes, '/project/prj_1/acceptance/acc_1');
+
+    expect(matched.static.titleKey).toBe('verify:acceptance.titleFallback');
+    expect(matched.meta?.DynamicMeta).toBeDefined();
+    expect(matched.params.acceptanceId).toBe('acc_1');
+  });
+
+  it('resolves project meta for workspace-scoped tab urls', () => {
+    const matched = matchRouteMeta(mainAreaMetaRoutes, '/team-x/project/prj_1/topic/tpc_1');
+
+    expect(matched.static.titleKey).toBe('project:topics.title');
+    expect(matched.params.projectId).toBe('prj_1');
   });
 });

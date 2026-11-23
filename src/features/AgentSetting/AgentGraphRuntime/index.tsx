@@ -1,55 +1,57 @@
 'use client';
 
-import type { ReasoningGraph } from '@lobechat/types';
-import { ReasoningGraphSchema } from '@lobechat/types';
-import { Alert, Flexbox, TextArea } from '@lobehub/ui';
-import { Button, Switch } from '@lobehub/ui/base-ui';
-import { createStaticStyles, cssVar } from 'antd-style';
+import type { AgentGraph, LobeAgentChatConfig } from '@lobechat/types';
+import { AgentGraphSchema } from '@lobechat/types/agent/graph';
+import { Alert, Button, Flexbox, Switch, TextArea } from '@lobehub/ui';
+import { cssVar } from '@lobehub/ui/stylex/cssVar.stylex';
+import * as stylex from '@stylexjs/stylex';
 import isEqual from 'fast-deep-equal';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { densityTokens } from '@/styles/density.stylex';
+
 import { useStore } from '../store';
 import { selectors } from '../store/selectors';
 
-const styles = createStaticStyles(({ css }) => ({
-  actions: css`
-    justify-content: flex-end;
-  `,
-  editor: css`
-    font-family: ${cssVar.fontFamilyCode};
-  `,
-  item: css`
-    padding: 16px;
-    border: 1px solid ${cssVar.colorBorderSecondary};
-    border-radius: ${cssVar.borderRadiusLG};
-    background: ${cssVar.colorBgContainer};
-  `,
-  itemDesc: css`
-    margin: 0;
-    font-size: 13px;
-    line-height: 1.5;
-    color: ${cssVar.colorTextSecondary};
-  `,
-  itemTitle: css`
-    margin: 0;
-    font-size: 14px;
-    font-weight: 600;
-    color: ${cssVar.colorText};
-  `,
-}));
+const styles = stylex.create({
+  actions: { justifyContent: 'flex-end' },
+  editor: { fontFamily: cssVar.fontFamilyCode },
+  item: {
+    padding: densityTokens['--lobe-density-card-padding'],
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: cssVar.colorBorderSecondary,
+    borderRadius: cssVar.borderRadiusLG,
+    backgroundColor: cssVar.colorBgContainer,
+    backgroundImage: 'none',
+  },
+  itemDesc: { margin: '0', fontSize: '13px', lineHeight: 1.5, color: cssVar.colorTextSecondary },
+  itemTitle: {
+    margin: '0',
+    fontSize: densityTokens['--lobe-density-font-size'],
+    fontWeight: 600,
+    color: cssVar.colorText,
+  },
+});
 
-const formatGraph = (graph?: ReasoningGraph | null) =>
-  graph ? JSON.stringify(graph, null, 2) : '';
+const formatGraph = (graph?: AgentGraph | null) => (graph ? JSON.stringify(graph, null, 2) : '');
 
 const AgentGraphRuntime = memo(() => {
   const { t } = useTranslation('setting');
   const config = useStore(selectors.currentAgentConfig, isEqual);
   const [disabled, updateConfig] = useStore((s) => [s.disabled, s.setAgentConfig]);
-  const initialEnabled = config.chatConfig?.enableGraphMode === true;
+  // Legacy rows may still store the graph on chatConfig until their next write
+  // migrates it. The server keeps running those via the legacy fallback, so the
+  // editor must show the effective config — otherwise an actively-running graph
+  // agent would render as disabled with an empty snapshot.
+  const legacyChatConfig = config.chatConfig as
+    (LobeAgentChatConfig & { enableGraphMode?: boolean; graph?: AgentGraph | null }) | undefined;
+  const initialEnabled =
+    config.agencyConfig?.enableGraphMode === true || legacyChatConfig?.enableGraphMode === true;
   const initialGraphText = useMemo(
-    () => formatGraph(config.chatConfig?.graph),
-    [config.chatConfig?.graph],
+    () => formatGraph(config.agencyConfig?.graph ?? legacyChatConfig?.graph),
+    [config.agencyConfig?.graph, legacyChatConfig?.graph],
   );
 
   const [enabled, setEnabled] = useState(initialEnabled);
@@ -74,7 +76,7 @@ const AgentGraphRuntime = memo(() => {
       return;
     }
 
-    let graph: ReasoningGraph | undefined;
+    let graph: AgentGraph | undefined;
 
     if (trimmedGraphText) {
       let parsedGraph: unknown;
@@ -86,7 +88,7 @@ const AgentGraphRuntime = memo(() => {
         return;
       }
 
-      const graphResult = ReasoningGraphSchema.safeParse(parsedGraph);
+      const graphResult = AgentGraphSchema.safeParse(parsedGraph);
 
       if (!graphResult.success) {
         setError(
@@ -106,7 +108,7 @@ const AgentGraphRuntime = memo(() => {
 
     try {
       await updateConfig({
-        chatConfig: { enableGraphMode: enabled, graph: graph ?? null },
+        agencyConfig: { enableGraphMode: enabled, graph: graph ?? null },
       });
     } finally {
       setSaving(false);
@@ -115,10 +117,10 @@ const AgentGraphRuntime = memo(() => {
 
   return (
     <Flexbox gap={16} width={'100%'}>
-      <Flexbox horizontal align={'center'} className={styles.item} gap={16}>
+      <Flexbox horizontal align={'center'} className={stylex.props(styles.item).className} gap={16}>
         <Flexbox flex={1} gap={4}>
-          <h3 className={styles.itemTitle}>{t('settingGraphRuntime.enabled.title')}</h3>
-          <p className={styles.itemDesc}>{t('settingGraphRuntime.enabled.desc')}</p>
+          <h3 {...stylex.props(styles.itemTitle)}>{t('settingGraphRuntime.enabled.title')}</h3>
+          <p {...stylex.props(styles.itemDesc)}>{t('settingGraphRuntime.enabled.desc')}</p>
         </Flexbox>
         <Switch
           checked={enabled}
@@ -130,13 +132,13 @@ const AgentGraphRuntime = memo(() => {
         />
       </Flexbox>
 
-      <Flexbox className={styles.item} gap={12}>
+      <Flexbox className={stylex.props(styles.item).className} gap={12}>
         <Flexbox gap={4}>
-          <h3 className={styles.itemTitle}>{t('settingGraphRuntime.snapshot.title')}</h3>
-          <p className={styles.itemDesc}>{t('settingGraphRuntime.snapshot.desc')}</p>
+          <h3 {...stylex.props(styles.itemTitle)}>{t('settingGraphRuntime.snapshot.title')}</h3>
+          <p {...stylex.props(styles.itemDesc)}>{t('settingGraphRuntime.snapshot.desc')}</p>
         </Flexbox>
         <TextArea
-          className={styles.editor}
+          className={stylex.props(styles.editor).className}
           disabled={disabled}
           placeholder={t('settingGraphRuntime.snapshot.placeholder')}
           rows={16}
@@ -150,7 +152,7 @@ const AgentGraphRuntime = memo(() => {
 
       {error && <Alert showIcon title={error} type="error" />}
 
-      <Flexbox horizontal className={styles.actions}>
+      <Flexbox horizontal className={stylex.props(styles.actions).className}>
         <Button
           disabled={disabled || !isDirty}
           loading={saving}

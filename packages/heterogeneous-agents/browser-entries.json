@@ -1,0 +1,9 @@
+[
+  ".",
+  "./claudeCodePermission/shared",
+  "./client",
+  "./codexAppServerArgs",
+  "./codexPlanMode",
+  "./errors",
+  "./quota"
+]

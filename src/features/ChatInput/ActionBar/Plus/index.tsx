@@ -1,338 +1,121 @@
 'use client';
 
 import { validateVideoFileSize } from '@lobechat/utils/client';
-import type { IconProps } from '@lobehub/ui';
-import { Icon, Popover, Tag } from '@lobehub/ui';
-import { toast } from '@lobehub/ui/base-ui';
-import { GlobeOffIcon, SkillsIcon } from '@lobehub/ui/icons';
-import { Upload } from 'antd';
-import { css, cssVar, cx } from 'antd-style';
+import { Icon, toast, Upload } from '@lobehub/ui';
+import { cssVar } from '@lobehub/ui/stylex/cssVar.stylex';
+import * as stylex from '@stylexjs/stylex';
 import {
-  Brain,
   CheckIcon,
-  ChevronRight,
-  Cloud,
-  CloudCog,
   FileUp,
-  Globe,
   LibraryBig,
   PlusIcon,
-  SearchCheck,
   Settings2Icon,
   TargetIcon,
   TypeIcon,
 } from 'lucide-react';
-import type { ReactNode } from 'react';
-import { memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, Suspense, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useInRouterContext, useLocation } from 'react-router';
 
 import { openAttachKnowledgeModal } from '@/features/LibraryModal';
-import { useIsDark } from '@/hooks/useIsDark';
+import { useMediaUploadAbility } from '@/hooks/useMediaUploadAbility';
 import { useModelSupportToolUse } from '@/hooks/useModelSupportToolUse';
-import { useVisualMediaUploadAbility } from '@/hooks/useVisualMediaUploadAbility';
 import { useAgentStore } from '@/store/agent';
-import { agentSelectors, chatConfigByIdSelectors } from '@/store/agent/selectors';
-import { aiModelSelectors, aiProviderSelectors, useAiInfraStore } from '@/store/aiInfra';
-import { useChatStore } from '@/store/chat';
-import { useFileStore } from '@/store/file';
+import { agentSelectors } from '@/store/agent/selectors';
 import { useGlobalStore } from '@/store/global';
 import { systemStatusSelectors } from '@/store/global/selectors';
-import {
-  featureFlagsSelectors,
-  serverConfigSelectors,
-  useServerConfigStore,
-} from '@/store/serverConfig';
-import { useUserStore } from '@/store/user';
-import { labPreferSelectors, settingsSelectors } from '@/store/user/selectors';
+import { featureFlagsSelectors, useServerConfigStore } from '@/store/serverConfig';
+import { useDensityTokens } from '@/styles/density';
+import { densityTokens } from '@/styles/density.stylex';
 
-import { useGoalArmStore } from '../../../Conversation/ChatInput/VerifyTray/goalArmStore';
-import { openTopicGoalModal } from '../../../Conversation/ChatInput/VerifyTray/useTopicChecklist';
 import { useAgentId } from '../../hooks/useAgentId';
 import { useChatInputResourceAccess } from '../../hooks/useChatInputResourceAccess';
+import { useChatInputUpload } from '../../hooks/useChatInputUpload';
 import { useEffectiveModel } from '../../hooks/useEffectiveModel';
-import { useUpdateAgentConfig } from '../../hooks/useUpdateAgentConfig';
+import { useLargeFileLocalPath } from '../../hooks/useLargeFileLocalPath';
+import { insertGoalTag } from '../../InputEditor/ActionTag/goalTag';
 import { useChatInputStore } from '../../store';
 import { type ActionDropdownMenuItems } from '../components/ActionDropdown';
 import { ChatInputAction } from '../components/ChatInputAction';
+import SubmenuChevron from '../components/SubmenuChevron';
 import { useControls as useKnowledgeControls } from '../Knowledge/useControls';
-import { useMemoryEnabled } from '../Memory/useMemoryEnabled';
-import { useControls as useToolsControls } from '../Tools/useControls';
+import { usePopupToolsMenuItem } from './usePopupToolsMenuItem';
+import { useSkillsMenuItem } from './useSkillsMenuItem';
+import { useToolsMenuItem } from './useToolsMenuItem';
 
-const hotArea = css`
-  &::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background-color: transparent;
-  }
-`;
-
-const activeLabel = css`
-  display: flex;
-  gap: 16px;
-  align-items: center;
-  justify-content: space-between;
-
-  width: 100%;
-
-  color: inherit;
-
-  span {
-    overflow: hidden;
-    min-width: 0;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-`;
-
-const searchOptionRow = css`
-  display: flex;
-  gap: 10px;
-  align-items: center;
-
-  width: 100%;
-  min-width: 220px;
-  max-width: 320px;
-
-  .title {
-    line-height: 1.25;
-  }
-
-  .desc {
-    margin-block-start: 3px;
-
-    font-size: 12px;
-    line-height: 1.35;
-    color: ${cssVar.colorTextDescription};
-    white-space: normal;
-  }
-`;
-
-const searchIconBox = css`
-  display: flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-
-  width: 36px;
-  height: 36px;
-  border: 1px solid ${cssVar.colorBorderSecondary};
-  border-radius: 8px;
-
-  background: ${cssVar.colorBgContainer};
-`;
-
-const labelWithChip = css`
-  display: inline-flex;
-  gap: 8px;
-  align-items: center;
-`;
-
-const countChip = css`
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-
-  min-width: 18px;
-  height: 18px;
-  padding-block: 0;
-  padding-inline: 6px;
-  border-radius: 9px;
-
-  font-size: 11px;
-  line-height: 18px;
-  color: ${cssVar.colorTextSecondary};
-
-  background: ${cssVar.colorFillSecondary};
-`;
-
-const gatewayModeLabel = css`
-  display: inline-flex;
-  gap: 8px;
-  align-items: center;
-  min-width: 0;
-
-  .title {
-    overflow: hidden;
-    min-width: 0;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-`;
-
-const gatewayModeInfoCard = css`
-  overflow: hidden;
-  width: 280px;
-  border-radius: 8px;
-
-  .cover {
-    display: block;
-
-    width: 100%;
-    height: 148px;
-
-    object-fit: cover;
-    background: ${cssVar.colorFillTertiary};
-  }
-
-  .body {
-    padding: 12px;
-  }
-
-  .title {
-    font-size: 14px;
-    font-weight: 600;
-    line-height: 1.35;
-  }
-
-  .desc {
-    margin-block-start: 6px;
-    font-size: 12px;
-    line-height: 1.5;
-    color: ${cssVar.colorTextSecondary};
-  }
-`;
-
-const activeIcon = (icon: IconProps['icon'], active?: boolean): IconProps['icon'] =>
-  active ? <Icon color={cssVar.colorInfo} icon={icon} size={16} /> : icon;
-
-type DropdownItemWithPopover = NonNullable<ActionDropdownMenuItems>[number] & {
-  label?: ReactNode;
-  popoverContent?: unknown;
-};
-
-const CLOSE_TOOL_DETAIL_POPOVER_EVENT = 'lobe-chat-tool-detail-popover-close';
-
-interface PopoverLabelProps {
-  label: ReactNode;
-  popoverContent: ReactNode;
-  // Distance from the label cell's right edge. Switch-type rows reserve a
-  // trailing toggle, so bump this to push the popover clear of the toggle and
-  // out to the right of the whole menu instead of overlapping it.
-  sideOffset?: number;
-}
-
-const PopoverLabel = memo<PopoverLabelProps>(({ label, popoverContent, sideOffset = 10 }) => {
-  const [open, setOpen] = useState(false);
-  const suppressUntilRef = useRef(0);
-
-  useEffect(() => {
-    const close = () => {
-      suppressUntilRef.current = Date.now() + 600;
-      setOpen(false);
-    };
-    window.addEventListener(CLOSE_TOOL_DETAIL_POPOVER_EVENT, close);
-
-    return () => window.removeEventListener(CLOSE_TOOL_DETAIL_POPOVER_EVENT, close);
-  }, []);
-
-  const handleOpenChange = useCallback((nextOpen: boolean) => {
-    if (nextOpen && Date.now() < suppressUntilRef.current) return;
-
-    setOpen(nextOpen);
-  }, []);
-
-  return (
-    <Popover
-      arrow={false}
-      content={popoverContent}
-      mouseEnterDelay={0.25}
-      open={open}
-      placement={'rightTop'}
-      positionerProps={{ sideOffset }}
-      styles={{ content: { padding: 0 } }}
-      onOpenChange={handleOpenChange}
-    >
-      <span
-        style={{ display: 'block', width: '100%' }}
-        onClickCapture={() => setOpen(false)}
-        onContextMenuCapture={() => setOpen(false)}
-      >
-        {label}
-      </span>
-    </Popover>
-  );
+const styles = stylex.create({
+  activeLabel: {
+    display: 'flex',
+    gap: densityTokens['--lobe-density-section-gap'],
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    color: 'inherit',
+  },
+  activeLabelText: {
+    overflow: 'hidden',
+    minWidth: '0',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  countChip: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: '18px',
+    height: '18px',
+    paddingBlock: '0',
+    paddingInline: '6px',
+    borderRadius: '9px',
+    fontSize: '11px',
+    lineHeight: '18px',
+    color: cssVar.colorTextSecondary,
+    backgroundColor: cssVar.colorFillSecondary,
+    backgroundImage: 'none',
+  },
+  hotArea: {
+    '::before': {
+      content: '""',
+      position: 'absolute',
+      inset: 0,
+      backgroundColor: 'transparent',
+    },
+  },
+  labelWithChip: { display: 'inline-flex', gap: '8px', alignItems: 'center' },
 });
 
-PopoverLabel.displayName = 'PopoverLabel';
-
-const wrapPopoverLabel = (label: ReactNode, popoverContent?: unknown) => {
-  if (!popoverContent) return label;
-
-  return <PopoverLabel label={label} popoverContent={popoverContent as ReactNode} />;
-};
-
-const stripPopoverContent = (items?: ActionDropdownMenuItems): ActionDropdownMenuItems =>
-  items?.map((item) => {
-    if (!item) return item;
-    if ('type' in item && item.type === 'divider') return item;
-
-    const nextItem = { ...(item as DropdownItemWithPopover) };
-    const popoverContent = nextItem.popoverContent;
-    delete nextItem.popoverContent;
-
-    if ('children' in nextItem && nextItem.children) {
-      return {
-        ...nextItem,
-        children: stripPopoverContent(nextItem.children),
-      } as ActionDropdownMenuItems[number];
-    }
-
-    if ('label' in nextItem) {
-      nextItem.label = wrapPopoverLabel(nextItem.label, popoverContent);
-    }
-
-    return nextItem;
-  }) ?? [];
-
-const usePlusMenuItems = ({ close }: { close: () => void }): ActionDropdownMenuItems => {
+const usePlusMenuItemsBase = ({
+  close,
+  toolsMenuItem,
+}: {
+  close: () => void;
+  toolsMenuItem: ActionDropdownMenuItems[number];
+}): ActionDropdownMenuItems => {
   const { t } = useTranslation('chat');
   const { t: tEditor } = useTranslation('editor');
   const { t: tSetting } = useTranslation('setting');
-  const { t: tVerify } = useTranslation('verify');
-  const isDark = useIsDark();
   const agentId = useAgentId();
   const { canConfigureResource } = useChatInputResourceAccess();
-  const { updateAgentChatConfig } = useUpdateAgentConfig();
 
-  // Topic acceptance (lab): a "new acceptance item" entry in the "+" menu, so a
-  // topic's checklist starts from here instead of an always-on strip above the
-  // composer. Global stores only — Plus renders on surfaces without conversation
-  // context.
-  const enableTopicAcceptance = useUserStore(labPreferSelectors.enableTopicAcceptance);
-  const activeTopicId = useChatStore((s) => s.activeTopicId);
-
-  const upload = useFileStore((s) => s.uploadChatFiles);
+  const upload = useChatInputUpload();
   const { enableKnowledgeBase } = useServerConfigStore(featureFlagsSelectors);
-  const enableGatewayMode = useServerConfigStore(serverConfigSelectors.enableGatewayMode);
-  const defaultDisableGatewayMode = useUserStore(
-    (s) => settingsSelectors.defaultAgentConfig(s).chatConfig?.disableGatewayMode,
-  );
 
   const { model, provider } = useEffectiveModel(agentId);
   const isAgentModeEnabled = useAgentStore(agentSelectors.isAgentModeEnabled);
-  const [showRightPanel, workingSidebarTab, setWorkingSidebarTab, toggleRightPanel] =
-    useGlobalStore((s) => [
+  const [showRightPanel, workingSidebarTab, openWorkingSidebar, toggleRightPanel] = useGlobalStore(
+    (s) => [
       systemStatusSelectors.showRightPanel(s),
       s.status.workingSidebarTab,
-      s.setWorkingSidebarTab,
+      s.openWorkingSidebar,
       s.toggleRightPanel,
-    ]);
-  const isParamsPanelActive = Boolean(showRightPanel) && workingSidebarTab === 'params';
-  const skillActivateMode = useAgentStore((s) =>
-    chatConfigByIdSelectors.getSkillActivateModeById(agentId)(s),
+    ],
   );
-  const [searchMode, useModelBuiltinSearch, disableGatewayMode] = useAgentStore((s) => [
-    chatConfigByIdSelectors.getSearchModeById(agentId)(s),
-    chatConfigByIdSelectors.getUseModelBuiltinSearchById(agentId)(s),
-    chatConfigByIdSelectors.getChatConfigById(agentId)(s).disableGatewayMode,
-  ]);
-  const isGatewayModeEnabled = (disableGatewayMode ?? defaultDisableGatewayMode) !== true;
+  const isParamsPanelActive = Boolean(showRightPanel) && workingSidebarTab === 'params';
 
-  const isMemoryEnabled = useMemoryEnabled(agentId);
   const [showTypoBar, setShowTypoBar] = useChatInputStore((s) => [s.showTypoBar, s.setShowTypoBar]);
   const editor = useChatInputStore((s) => s.editor);
-  const { canUploadImage, canUploadVideo, canUploadAudio } = useVisualMediaUploadAbility(
+  const routeLargeFilesToLocalPaths = useLargeFileLocalPath(agentId, editor);
+  const { canUploadImage, canUploadVideo, canUploadAudio } = useMediaUploadAbility(
     model,
     provider,
     agentId,
@@ -348,56 +131,7 @@ const usePlusMenuItems = ({ close }: { close: () => void }): ActionDropdownMenuI
     items: knowledgeItems,
   } = useKnowledgeControls({ openAttachKnowledgeModal: handleOpenKnowledge });
   const closeDropdown = useCallback(() => close(), [close]);
-  const {
-    autoCount: skillAutoCount,
-    marketFooter: skillMarketFooter,
-    marketHeader: skillMarketHeader,
-    marketItems: skillItems,
-    pinnedCount: skillPinnedCount,
-  } = useToolsControls({ closeDropdown });
-
-  const isModelBuiltinSearchInternal = useAiInfraStore(
-    aiModelSelectors.isModelBuiltinSearchInternal(model, provider),
-  );
-  const isModelHasBuiltinSearch = useAiInfraStore(
-    aiModelSelectors.isModelHasBuiltinSearchConfig(model, provider),
-  );
-  const isProviderHasBuiltinSearch = useAiInfraStore(
-    aiProviderSelectors.isProviderHasBuiltinSearchConfig(provider),
-  );
-  const showProviderSearch =
-    !isModelBuiltinSearchInternal && (isModelHasBuiltinSearch || isProviderHasBuiltinSearch);
-
-  // Derived active search option
-  const activeSearchOption: 'off' | 'app' | 'provider' =
-    searchMode === 'off' ? 'off' : useModelBuiltinSearch ? 'provider' : 'app';
-
-  const handleToggleMemory = useCallback(
-    async (enabled: boolean) => {
-      await updateAgentChatConfig({ memory: { enabled } });
-    },
-    [updateAgentChatConfig],
-  );
-
-  const handleSelectSearch = useCallback(
-    async (option: 'off' | 'app' | 'provider') => {
-      if (option === 'off') {
-        await updateAgentChatConfig({ searchMode: 'off', useModelBuiltinSearch: false });
-      } else if (option === 'app') {
-        await updateAgentChatConfig({ searchMode: 'auto', useModelBuiltinSearch: false });
-      } else {
-        await updateAgentChatConfig({ searchMode: 'auto', useModelBuiltinSearch: true });
-      }
-    },
-    [updateAgentChatConfig],
-  );
-
-  const handleToggleGatewayMode = useCallback(
-    async (checked: boolean) => {
-      await updateAgentChatConfig({ disableGatewayMode: checked ? false : true });
-    },
-    [updateAgentChatConfig],
-  );
+  const skillsMenuItem = useSkillsMenuItem(closeDropdown);
 
   const handleToggleParams = useCallback(() => {
     close();
@@ -405,72 +139,29 @@ const usePlusMenuItems = ({ close }: { close: () => void }): ActionDropdownMenuI
       toggleRightPanel(false);
       return;
     }
-    setWorkingSidebarTab('params');
-    toggleRightPanel(true);
-  }, [close, isParamsPanelActive, setWorkingSidebarTab, toggleRightPanel]);
+    openWorkingSidebar('params');
+  }, [close, isParamsPanelActive, openWorkingSidebar, toggleRightPanel]);
 
   const items = useMemo<ActionDropdownMenuItems>(() => {
     const renderActive = (label: string, active: boolean) =>
       active ? (
-        <div className={cx(activeLabel)}>
-          <span>{label}</span>
+        <div {...stylex.props(styles.activeLabel)}>
+          <span {...stylex.props(styles.activeLabelText)}>{label}</span>
           <Icon icon={CheckIcon} size={14} />
         </div>
       ) : (
         label
       );
 
-    const renderSearchOption = (
-      icon: ReactNode,
-      title: string,
-      description: string,
-      active: boolean,
-    ) => (
-      <div className={cx(searchOptionRow)}>
-        <div className={cx(searchIconBox)}>{icon}</div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="title">{title}</div>
-          {description && <div className="desc">{description}</div>}
-        </div>
-        {active && <Icon icon={CheckIcon} size={14} />}
-      </div>
-    );
-
-    const renderLabelWithCount = (label: string, count: number, prefix?: string) =>
-      count > 0 || prefix ? (
-        <span className={cx(labelWithChip)}>
+    const renderLabelWithCount = (label: string, count: number) =>
+      count > 0 ? (
+        <span {...stylex.props(styles.labelWithChip)}>
           <span>{label}</span>
-          <span className={cx(countChip)}>{prefix ? `${prefix} | ${count}` : count}</span>
+          <span {...stylex.props(styles.countChip)}>{count}</span>
         </span>
       ) : (
         label
       );
-
-    const renderGatewayModeLabel = () => (
-      <span className={cx(gatewayModeLabel)}>
-        {/* Brand name — same in every language, so no i18n. */}
-        <span className="title">Agent Gateway</span>
-        <Tag color={'info'} size={'small'} variant={'filled'}>
-          {t('gatewayMode.beta')}
-        </Tag>
-      </span>
-    );
-
-    const gatewayModeInfo = (
-      <div className={cx(gatewayModeInfoCard)}>
-        <img
-          alt=""
-          className="cover"
-          src={isDark ? '/images/agent_gateway_dark.webp' : '/images/agent_gateway_light.webp'}
-        />
-        <div className="body">
-          <div className="title">{t('gatewayMode.cardTitle')}</div>
-          <div className="desc">{t('gatewayMode.desc')}</div>
-        </div>
-      </div>
-    );
-
-    const skillMenuItems = stripPopoverContent(skillItems as ActionDropdownMenuItems);
 
     const uploadItems: ActionDropdownMenuItems = [
       {
@@ -481,8 +172,7 @@ const usePlusMenuItems = ({ close }: { close: () => void }): ActionDropdownMenuI
         label: (
           <Upload
             multiple
-            showUploadList={false}
-            beforeUpload={async (file) => {
+            beforeUpload={(file) => {
               if (file.type.startsWith('image') && !canUploadImage) return false;
               if (file.type.startsWith('video') && !canUploadVideo) return false;
               if (file.type.startsWith('audio') && !canUploadAudio) return false;
@@ -496,156 +186,36 @@ const usePlusMenuItems = ({ close }: { close: () => void }): ActionDropdownMenuI
                 );
                 return false;
               }
+              return true;
+            }}
+            onFiles={async (files) => {
               close();
               editor?.focus();
-              await upload([file], agentId);
-              return false;
+              const filesToUpload = routeLargeFilesToLocalPaths(files);
+              if (filesToUpload.length > 0) await upload(filesToUpload, agentId);
             }}
           >
-            <div className={cx(hotArea)}>{t('upload.action.fileOrImageUpload')}</div>
+            <div {...stylex.props(styles.hotArea)}>{t('upload.action.fileOrImageUpload')}</div>
           </Upload>
         ),
       },
     ];
 
-    // In auto mode every installed skill is callable, so show pinned + auto.
-    // In manual mode only the pinned ones are active, so show pinned only.
-    const activeSkillCount =
-      skillActivateMode === 'auto' ? skillPinnedCount + skillAutoCount : skillPinnedCount;
-
     const toolsItems: ActionDropdownMenuItems =
-      isAgentModeEnabled && enableFC
-        ? [
-            {
-              children: skillMenuItems,
-              // Trailing chevron (replaces base-ui's default triangle submenu arrow,
-              // which is hidden via the .lobe-submenu-chevron rule in ActionDropdown).
-              extra: <Icon className="lobe-submenu-chevron" icon={ChevronRight} size={16} />,
-              footer: skillMarketFooter,
-              header: skillMarketHeader,
-              icon: SkillsIcon,
-              key: 'tools',
-              label: renderLabelWithCount(
-                tSetting('tools.title'),
-                activeSkillCount,
-                tSetting(
-                  skillActivateMode === 'auto'
-                    ? 'tools.skillActivateMode.auto.title'
-                    : 'tools.skillActivateMode.manual.title',
-                ),
-              ),
-            } as ActionDropdownMenuItems[number],
-          ]
-        : [];
+      isAgentModeEnabled && enableFC ? [toolsMenuItem] : [];
 
-    // Agent Gateway sits below the formatting toolbar (grouped with advanced
-    // params), gated on the resource-configuration permission.
-    const gatewayItem: ActionDropdownMenuItems =
-      canConfigureResource && enableGatewayMode
-        ? [
-            {
-              checked: isGatewayModeEnabled,
-              icon: Cloud,
-              key: 'gateway-mode',
-              label: (
-                <PopoverLabel
-                  label={renderGatewayModeLabel()}
-                  popoverContent={gatewayModeInfo}
-                  // Clear the trailing toggle so the card sits to the right of the whole menu.
-                  sideOffset={64}
-                />
-              ),
-              onCheckedChange: handleToggleGatewayMode,
-              type: 'switch',
-            } as ActionDropdownMenuItems[number],
-          ]
-        : [];
+    // Memory and web search are activation entries of the Tools popover now: they
+    // live in its "Auto" group, can be disabled there, and carry their own settings,
+    // so this menu only owns the route to them.
+    // Selecting a skill adds composer context; unlike tool configuration, it
+    // does not require resource-edit permission or model function calling.
+    const coreItems: ActionDropdownMenuItems = [
+      ...(canConfigureResource ? toolsItems : []),
+      skillsMenuItem,
+    ];
 
-    // Memory / Web Search / Skills form one group (no dividers between them),
-    // hidden entirely when the user can't configure resources.
-    const coreItems: ActionDropdownMenuItems = canConfigureResource
-      ? [
-          // Memory toggle — trailing switch; toggle by clicking the switch or the whole row
-          {
-            checked: Boolean(isMemoryEnabled),
-            icon: Brain,
-            key: 'memory',
-            label: t('memory.title'),
-            onCheckedChange: handleToggleMemory,
-            type: 'switch',
-          },
-          // Web search: simple toggle when 2 options, submenu when 3
-          ...(showProviderSearch
-            ? [
-                {
-                  children: [
-                    {
-                      key: 'search-off',
-                      label: renderSearchOption(
-                        <Icon icon={GlobeOffIcon} size={18} />,
-                        t('plus.search.off'),
-                        t('plus.search.offDesc'),
-                        activeSearchOption === 'off',
-                      ),
-                      onClick: () => handleSelectSearch('off'),
-                    },
-                    {
-                      key: 'search-app',
-                      label: renderSearchOption(
-                        <Icon
-                          color={activeSearchOption === 'app' ? cssVar.colorInfo : undefined}
-                          icon={SearchCheck}
-                          size={18}
-                        />,
-                        t('plus.search.appSearch'),
-                        t('plus.search.appSearchDesc'),
-                        activeSearchOption === 'app',
-                      ),
-                      onClick: () => handleSelectSearch('app'),
-                    },
-                    {
-                      key: 'search-provider',
-                      label: renderSearchOption(
-                        <Icon
-                          color={activeSearchOption === 'provider' ? cssVar.colorInfo : undefined}
-                          icon={CloudCog}
-                          size={18}
-                        />,
-                        t('plus.search.modelSearch'),
-                        t('plus.search.modelSearchDesc'),
-                        activeSearchOption === 'provider',
-                      ),
-                      onClick: () => handleSelectSearch('provider'),
-                    },
-                  ],
-                  extra: <Icon className="lobe-submenu-chevron" icon={ChevronRight} size={16} />,
-                  icon: activeIcon(
-                    activeSearchOption === 'off' ? GlobeOffIcon : Globe,
-                    activeSearchOption !== 'off',
-                  ),
-                  key: 'search-group',
-                  label: t('search.title'),
-                } as ActionDropdownMenuItems[number],
-              ]
-            : [
-                // Web search toggle — trailing switch; toggle by clicking the switch or the whole row
-                {
-                  checked: activeSearchOption !== 'off',
-                  icon: Globe,
-                  key: 'search-toggle',
-                  label: t('search.title'),
-                  onCheckedChange: (checked: boolean) =>
-                    handleSelectSearch(checked ? 'app' : 'off'),
-                  type: 'switch',
-                } as ActionDropdownMenuItems[number],
-              ]),
-          // Skills (with "Add Skills..." merged in) stays in the same group.
-          ...toolsItems,
-        ]
-      : [];
-
-    // Formatting toolbar is always available; Agent Gateway + advanced params
-    // only when the user can configure resources.
+    // Formatting toolbar is always available; advanced params only when the
+    // user can configure resources.
     const formatItems: ActionDropdownMenuItems = [
       // Formatting toolbar toggle — trailing switch; toggle by clicking the switch or the whole row
       {
@@ -656,8 +226,6 @@ const usePlusMenuItems = ({ close }: { close: () => void }): ActionDropdownMenuI
         onCheckedChange: (checked: boolean) => setShowTypoBar(checked),
         type: 'switch',
       },
-      // Agent Gateway directly below the formatting toolbar.
-      ...gatewayItem,
       // Advanced parameter settings — only when resources can be configured.
       ...(canConfigureResource
         ? [
@@ -692,7 +260,7 @@ const usePlusMenuItems = ({ close }: { close: () => void }): ActionDropdownMenuI
             ],
             // Trailing chevron (replaces base-ui's default triangle submenu arrow,
             // which is hidden via the .lobe-submenu-chevron rule in ActionDropdown).
-            extra: <Icon className="lobe-submenu-chevron" icon={ChevronRight} size={16} />,
+            extra: <SubmenuChevron />,
             footer: canConfigureResource ? knowledgeFooter : undefined,
             icon: LibraryBig,
             key: 'attachments',
@@ -704,34 +272,28 @@ const usePlusMenuItems = ({ close }: { close: () => void }): ActionDropdownMenuI
         ]
       : uploadItems;
 
-    // Before a topic exists there is nothing to persist a goal onto, so the
-    // entry *arms* the goal (the next message becomes it); once a topic exists
-    // it opens the editor directly.
-    const acceptanceItems: ActionDropdownMenuItems = enableTopicAcceptance
-      ? [
-          {
-            icon: TargetIcon,
-            key: 'set-topic-goal',
-            label: tVerify('acceptance.tray.menuSetGoal'),
-            onClick: () => {
-              if (activeTopicId) {
-                void openTopicGoalModal(activeTopicId);
-              } else if (agentId) {
-                // Arm only — the persistent "armed" chip above the composer is the
-                // feedback now (the next message becomes the goal), not a toast.
-                useGoalArmStore.getState().arm(agentId);
-              }
-            },
-          },
-        ]
-      : [];
+    // Goal creation has one canonical entry: drop the goal chip at the head of
+    // the composer. The agent then plans and calls builtin-goal.createGoal,
+    // regardless of whether this conversation already has a topic.
+    const goalItems: ActionDropdownMenuItems = [
+      {
+        icon: TargetIcon,
+        key: 'set-topic-goal',
+        // Same string as the chip it inserts: one label for the affordance,
+        // so the menu row and the chip can never drift apart.
+        label: tEditor('slash.goal'),
+        onClick: () => {
+          insertGoalTag(editor, tEditor('slash.goal'));
+        },
+      },
+    ];
 
     // Grouped with a single divider only between non-empty groups:
-    // [attachments] | [memory · search · skills] | [set goal] | [formatting · gateway · params]
+    // [attachments] | [tools · skills] | [set goal] | [formatting · params]
     const menuGroups: ActionDropdownMenuItems[] = [
       attachmentsItems,
       coreItems,
-      acceptanceItems,
+      goalItems,
       formatItems,
     ];
     return menuGroups
@@ -739,89 +301,108 @@ const usePlusMenuItems = ({ close }: { close: () => void }): ActionDropdownMenuI
       .flatMap((group, index) => (index === 0 ? group : [{ type: 'divider' as const }, ...group]));
   }, [
     agentId,
-    activeSearchOption,
-    activeTopicId,
     canConfigureResource,
-    enableTopicAcceptance,
-    tVerify,
     canUploadImage,
     canUploadVideo,
     canUploadAudio,
     editor,
     enableFC,
-    enableGatewayMode,
     enableKnowledgeBase,
-    handleSelectSearch,
-    handleToggleGatewayMode,
-    handleToggleMemory,
     handleToggleParams,
     isAgentModeEnabled,
-    isDark,
-    isGatewayModeEnabled,
-    isMemoryEnabled,
     isParamsPanelActive,
     knowledgeEnabledCount,
     setShowTypoBar,
-    showProviderSearch,
     showTypoBar,
-    skillActivateMode,
-    skillAutoCount,
-    skillPinnedCount,
     knowledgeItems,
     knowledgeFooter,
     t,
     tEditor,
     tSetting,
-    skillItems,
-    skillMarketFooter,
-    skillMarketHeader,
+    skillsMenuItem,
+    toolsMenuItem,
     upload,
+    routeLargeFilesToLocalPaths,
     close,
   ]);
 
   return items;
 };
 
+const useMainPlusMenuItems = ({ close }: { close: () => void }): ActionDropdownMenuItems => {
+  const closeDropdown = useCallback(() => close(), [close]);
+  const toolsMenuItem = useToolsMenuItem(closeDropdown);
+
+  return usePlusMenuItemsBase({ close, toolsMenuItem });
+};
+
+const usePopupPlusMenuItems = ({ close }: { close: () => void }): ActionDropdownMenuItems => {
+  const closeDropdown = useCallback(() => close(), [close]);
+  const toolsMenuItem = usePopupToolsMenuItem(closeDropdown);
+
+  return usePlusMenuItemsBase({ close, toolsMenuItem });
+};
+
 /**
  * The trigger stays hook-free: every store subscription and the whole item tree
- * live in `usePlusMenuItems`, which ActionDropdown only invokes from inside the
- * popup — so opening a conversation no longer pays for a menu nobody opened.
+ * live in `useMainPlusMenuItems` / `usePopupPlusMenuItems`, which ActionDropdown
+ * only invokes from inside the popup — so opening a conversation no longer pays
+ * for a menu nobody opened.
  */
-const PlusAction = memo(() => {
+const PlusActionBase = memo<{ isPopup: boolean }>(({ isPopup }) => {
   const { t } = useTranslation('chat');
+  const { controlHeight, iconSize } = useDensityTokens();
 
   return (
     <ChatInputAction
       icon={PlusIcon}
-      size={{ blockSize: 32, borderRadius: 16, size: 18 }}
-      title={t('plus.tooltip')}
+      size={{ blockSize: controlHeight, borderRadius: controlHeight / 2, size: iconSize }}
+      title={t('plus.contextTooltip')}
       tooltipProps={{ placement: 'top' }}
       dropdown={{
-        menu: { useItems: usePlusMenuItems },
-        minWidth: 220,
+        menu: { useItems: isPopup ? usePopupPlusMenuItems : useMainPlusMenuItems },
+        minWidth: 196,
         placement: 'topLeft',
       }}
     />
   );
 });
 
+PlusActionBase.displayName = 'PlusActionBase';
+
+const PlusActionInRouter = memo(() => {
+  const { pathname } = useLocation();
+
+  return <PlusActionBase isPopup={pathname.startsWith('/popup')} />;
+});
+
+PlusActionInRouter.displayName = 'PlusActionInRouter';
+
+const PlusAction = memo(() => {
+  const inRouter = useInRouterContext();
+
+  return inRouter ? <PlusActionInRouter /> : <PlusActionBase isPopup={false} />;
+});
+
 PlusAction.displayName = 'PlusAction';
 
-const Plus = memo(() => (
-  <Suspense
-    fallback={
-      <ChatInputAction
-        disabled
-        icon={PlusIcon}
-        size={{ blockSize: 32, borderRadius: 16, size: 18 }}
-        title=""
-      />
-    }
-  >
-    <PlusAction />
-  </Suspense>
-));
+const Plus = () => {
+  const { controlHeight, iconSize } = useDensityTokens();
 
-Plus.displayName = 'Plus';
+  return (
+    <Suspense
+      fallback={
+        <ChatInputAction
+          disabled
+          icon={PlusIcon}
+          size={{ blockSize: controlHeight, borderRadius: controlHeight / 2, size: iconSize }}
+          title=""
+        />
+      }
+    >
+      <PlusAction />
+    </Suspense>
+  );
+};
 
 export default Plus;

@@ -5,14 +5,17 @@
  * the same SKILL.md cwd as single calls — an unshared copy is exactly how the
  * batch path silently dropped these fields once already.
  */
-export const resolveRunProjectSkills = (metadata?: {
-  operationSkillSet?: { skills?: { location?: string; name: string; source?: string }[] };
-}): { location: string; name: string; source: 'device' | 'project' }[] =>
-  (metadata?.operationSkillSet?.skills ?? [])
+export const resolveRunProjectSkills = (plan?: {
+  skills?: {
+    skills?: { description?: string; location?: string; name: string; source?: string }[];
+  };
+}): { description?: string; location: string; name: string; source: 'device' | 'project' }[] =>
+  (plan?.skills?.skills ?? [])
     .filter(
       (skill) => (skill.source === 'project' || skill.source === 'device') && !!skill.location,
     )
     .map((skill) => ({
+      ...(skill.description ? { description: skill.description } : {}),
       location: skill.location as string,
       name: skill.name,
       source: skill.source === 'device' ? ('device' as const) : ('project' as const),

@@ -35,8 +35,9 @@ export interface SkillMeta {
   location?: string;
   name: string;
   /**
-   * Skill origin. `project` skills are discovered on the device filesystem and
-   * loaded on demand via the readFile tool (see `location`).
+   * Skill origin. `project` and `device` skills are discovered on the device
+   * filesystem and loaded on demand via `activateSkill` (`location` gives their
+   * absolute SKILL.md path).
    */
   source?: SkillSource;
 }
@@ -45,14 +46,30 @@ export interface SkillMeta {
  * Skill Context Provider Configuration
  */
 export interface SkillContextProviderConfig {
+  /**
+   * Whether the run was sent the `activateSkill` tool. Without it the prompt
+   * keeps the readFile route into filesystem skills. Defaults to true.
+   */
+  canActivateSkill?: boolean;
   enabled?: boolean;
   enabledSkills?: SkillMeta[];
 }
 
 /**
+ * Select the activated skills whose full content gets injected into the system
+ * prompt by SkillContextProvider.
+ *
+ * Exported so ActivationResultTrimProcessor can decide, with the exact same
+ * predicate, whether an activateSkill tool result's full content is already
+ * carried by the system prompt and can therefore be trimmed from history.
+ */
+export const selectActivatedSkills = (enabledSkills?: SkillMeta[]): SkillMeta[] =>
+  (enabledSkills ?? []).filter((s) => s.activated && s.content);
+
+/**
  * Skill Context Provider
  * Injects lightweight skill metadata into the system prompt so the LLM knows
- * which skills are available and can invoke them via `runSkill`.
+ * which skills are available and can invoke them via `activateSkill`.
  */
 export class SkillContextProvider extends BaseSystemRoleProvider {
   readonly name = 'SkillContextProvider';
@@ -75,7 +92,7 @@ export class SkillContextProvider extends BaseSystemRoleProvider {
     }
 
     // Separate activated skills (inject content directly) from available skills (list only)
-    const activatedSkills = enabledSkills.filter((s) => s.activated && s.content);
+    const activatedSkills = selectActivatedSkills(enabledSkills);
     const availableSkills = enabledSkills.filter((s) => !s.activated);
 
     const contentParts: string[] = [];
@@ -96,7 +113,9 @@ export class SkillContextProvider extends BaseSystemRoleProvider {
         source: skill.source,
       }));
 
-      const availableSkillsContent = skillsPrompts(skills);
+      const availableSkillsContent = skillsPrompts(skills, {
+        canActivateSkill: this.config.canActivateSkill,
+      });
       if (availableSkillsContent) {
         contentParts.push(availableSkillsContent);
       }

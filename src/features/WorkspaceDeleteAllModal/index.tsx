@@ -1,7 +1,14 @@
 'use client';
 
-import { Checkbox, Flexbox, Text } from '@lobehub/ui';
-import { Button, createModal, type ModalInstance, useModalContext } from '@lobehub/ui/base-ui';
+import {
+  Button,
+  Checkbox,
+  createModal,
+  Flexbox,
+  type ModalInstance,
+  Text,
+  useModalContext,
+} from '@lobehub/ui';
 import { memo, useCallback, useState } from 'react';
 
 interface WorkspaceDeleteAllModalContentProps {

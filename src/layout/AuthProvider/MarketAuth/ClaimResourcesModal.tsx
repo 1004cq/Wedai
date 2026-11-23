@@ -1,14 +1,13 @@
 'use client';
 
-import { Flexbox, Text } from '@lobehub/ui';
-import { toast } from '@lobehub/ui/base-ui';
-import { Checkbox, List } from 'antd';
-import { cssVar } from 'antd-style';
+import { Checkbox, cssVar, Flexbox, Text, toast } from '@lobehub/ui';
 import { Package, Wrench } from 'lucide-react';
 import { memo, useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import ImperativeModal from '@/components/ImperativeModal';
+import InlineErrorText from '@/components/InlineErrorText';
+import { type InlineErrorState, toInlineError } from '@/components/InlineErrorText/errorDetail';
 import { usePermission } from '@/hooks/usePermission';
 import { lambdaClient } from '@/libs/trpc/client';
 
@@ -30,6 +29,7 @@ export const ClaimResourcesModal = memo<ClaimResourcesModalProps>(
     const [selectedPlugins, setSelectedPlugins] = useState<Set<string>>(() => new Set());
     const [selectedSkills, setSelectedSkills] = useState<Set<string>>(() => new Set());
     const [isClaiming, setIsClaiming] = useState(false);
+    const [claimError, setClaimError] = useState<InlineErrorState | null>(null);
 
     useEffect(() => {
       if (!open) {
@@ -43,6 +43,7 @@ export const ClaimResourcesModal = memo<ClaimResourcesModalProps>(
     }, [open, resources]);
 
     const togglePlugin = useCallback((id: string) => {
+      setClaimError(null);
       setSelectedPlugins((prev) => {
         const next = new Set(prev);
         if (next.has(id)) {
@@ -55,6 +56,7 @@ export const ClaimResourcesModal = memo<ClaimResourcesModalProps>(
     }, []);
 
     const toggleSkill = useCallback((id: string) => {
+      setClaimError(null);
       setSelectedSkills((prev) => {
         const next = new Set(prev);
         if (next.has(id)) {
@@ -77,6 +79,7 @@ export const ClaimResourcesModal = memo<ClaimResourcesModalProps>(
       }
 
       setIsClaiming(true);
+      setClaimError(null);
       try {
         await lambdaClient.market.socialProfile.claimResources.mutate({
           pluginIds,
@@ -94,10 +97,13 @@ export const ClaimResourcesModal = memo<ClaimResourcesModalProps>(
         onClose();
       } catch (error) {
         console.error('[ClaimResources] Failed to claim:', error);
-        toast.error(
-          t('claimResources.error', {
-            defaultValue: 'Failed to claim resources. Please try again.',
-          }),
+        setClaimError(
+          toInlineError(
+            t('claimResources.failedRetry', {
+              defaultValue: "Couldn't claim these resources. Check your network and try again.",
+            }),
+            error,
+          ),
         );
       } finally {
         setIsClaiming(false);
@@ -108,6 +114,7 @@ export const ClaimResourcesModal = memo<ClaimResourcesModalProps>(
 
     const renderItem = (
       item: ClaimableResource,
+      index: number,
       selected: boolean,
       onToggle: () => void,
       icon: React.ReactNode,
@@ -116,26 +123,30 @@ export const ClaimResourcesModal = memo<ClaimResourcesModalProps>(
       const displayName = item.name || item.parsedUrl?.fullName || item.identifier;
 
       return (
-        <List.Item
+        <Flexbox
+          horizontal
+          align="center"
+          gap={12}
+          key={item.id}
           style={{
+            borderBlockStart: index > 0 ? `1px solid ${cssVar.colorSplit}` : undefined,
             cursor: 'pointer',
             padding: '8px 12px',
+            width: '100%',
           }}
           onClick={onToggle}
         >
-          <Flexbox horizontal align="center" gap={12} style={{ width: '100%' }}>
-            <Checkbox checked={selected} />
-            {icon}
-            <Flexbox flex={1} gap={2}>
-              <Text style={{ fontSize: 14 }}>{displayName}</Text>
-              {item.description && (
-                <Text style={{ fontSize: 12 }} type="secondary">
-                  {item.description}
-                </Text>
-              )}
-            </Flexbox>
+          <Checkbox checked={selected} />
+          {icon}
+          <Flexbox flex={1} gap={2}>
+            <Text style={{ fontSize: 14 }}>{displayName}</Text>
+            {item.description && (
+              <Text style={{ fontSize: 12 }} type="secondary">
+                {item.description}
+              </Text>
+            )}
           </Flexbox>
-        </List.Item>
+        </Flexbox>
       );
     };
 
@@ -166,20 +177,22 @@ export const ClaimResourcesModal = memo<ClaimResourcesModalProps>(
             <Text style={{ fontSize: 13 }} type="secondary">
               {t('claimResources.pluginSection', { defaultValue: 'Plugins' })}
             </Text>
-            <List
-              bordered
-              dataSource={resources.plugins}
-              size="small"
-              style={{ borderRadius: cssVar.borderRadiusLG }}
-              renderItem={(item) =>
+            <Flexbox
+              style={{
+                border: `1px solid ${cssVar.colorBorder}`,
+                borderRadius: cssVar.borderRadiusLG,
+              }}
+            >
+              {resources.plugins.map((item, index) =>
                 renderItem(
                   item,
+                  index,
                   selectedPlugins.has(String(item.id)),
                   () => togglePlugin(String(item.id)),
                   <Package size={18} style={{ color: cssVar.colorTextSecondary }} />,
-                )
-              }
-            />
+                ),
+              )}
+            </Flexbox>
           </Flexbox>
         )}
 
@@ -188,20 +201,22 @@ export const ClaimResourcesModal = memo<ClaimResourcesModalProps>(
             <Text style={{ fontSize: 13 }} type="secondary">
               {t('claimResources.skillSection', { defaultValue: 'Skills' })}
             </Text>
-            <List
-              bordered
-              dataSource={resources.skills}
-              size="small"
-              style={{ borderRadius: cssVar.borderRadiusLG }}
-              renderItem={(item) =>
+            <Flexbox
+              style={{
+                border: `1px solid ${cssVar.colorBorder}`,
+                borderRadius: cssVar.borderRadiusLG,
+              }}
+            >
+              {resources.skills.map((item, index) =>
                 renderItem(
                   item,
+                  index,
                   selectedSkills.has(String(item.id)),
                   () => toggleSkill(String(item.id)),
                   <Wrench size={18} style={{ color: cssVar.colorTextSecondary }} />,
-                )
-              }
-            />
+                ),
+              )}
+            </Flexbox>
           </Flexbox>
         )}
 
@@ -212,6 +227,12 @@ export const ClaimResourcesModal = memo<ClaimResourcesModalProps>(
               defaultValue: `${totalSelected} item(s) selected`,
             })}
           </Text>
+        )}
+
+        {claimError && (
+          <div style={{ marginTop: 12 }}>
+            <InlineErrorText detail={claimError.detail}>{claimError.summary}</InlineErrorText>
+          </div>
         )}
       </ImperativeModal>
     );

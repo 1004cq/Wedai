@@ -11,12 +11,17 @@ export interface RecommendedSkillItem {
 
 export const RECOMMENDED_SKILLS: RecommendedSkillItem[] = [
   // Builtin skills
+  { id: 'lobe-agent', type: RecommendedSkillType.Builtin },
+  { id: 'lobe-skill-store', type: RecommendedSkillType.Builtin },
   { id: 'lobe-artifacts', type: RecommendedSkillType.Builtin },
   { id: 'lobe-user-memory', type: RecommendedSkillType.Builtin },
   { id: 'lobe-cloud-sandbox', type: RecommendedSkillType.Builtin },
   { id: 'lobe-task', type: RecommendedSkillType.Builtin },
   { id: 'lobe-agent-documents', type: RecommendedSkillType.Builtin },
   { id: 'lobe-message', type: RecommendedSkillType.Builtin },
+  // Opt-in chat image/video generation: default-installed so Tools can pin them without Skill Store first.
+  { id: 'lobe-image-generation', type: RecommendedSkillType.Builtin },
+  { id: 'lobe-video-generation', type: RecommendedSkillType.Builtin },
   // LobeHub skills
   { id: 'notion', type: RecommendedSkillType.Lobehub },
   { id: 'posthog', type: RecommendedSkillType.Lobehub },

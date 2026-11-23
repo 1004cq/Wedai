@@ -3,8 +3,10 @@ import OpenAI from 'openai';
 import type { Mock } from 'vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import * as nonStreamToStreamModule from '../../core/openaiCompatibleFactory/nonStreamToStream';
-import * as streamsModule from '../../core/streams';
+import * as nonStreamToStreamModule from '../../core/protocols/openaiChatCompletions/nonStreamToStream';
+import * as chatCompletionsStreamModule from '../../core/protocols/openaiChatCompletions/stream';
+import * as responsesStreamModule from '../../core/protocols/openaiResponses/stream';
+import { AgentRuntimeErrorType } from '../../types/error';
 import * as debugStreamModule from '../../utils/debugStream';
 import * as getModelPricingModule from '../../utils/getModelPricing';
 import { LobeAzureOpenAI } from './index';
@@ -77,8 +79,7 @@ describe('LobeAzureOpenAI', () => {
 
     describe('streaming response', () => {
       it('should use responses API and append web_search tool when enabledSearch is true', async () => {
-        const mockProdStream = new ReadableStream() as any;
-        const mockDebugStream = new ReadableStream() as any;
+        const mockStream = new ReadableStream() as any;
         const mockPricing = { units: [] };
 
         instance = new LobeAzureOpenAI({
@@ -90,11 +91,11 @@ describe('LobeAzureOpenAI', () => {
         vi.spyOn(instance['client'].chat.completions, 'create').mockResolvedValue(
           new ReadableStream() as any,
         );
-        vi.spyOn(instance['client'].responses, 'create').mockResolvedValue({
-          tee: () => [mockProdStream, mockDebugStream],
-        } as any);
+        vi.spyOn(instance['client'].responses, 'create').mockResolvedValue(mockStream);
         vi.spyOn(getModelPricingModule, 'getModelPricing').mockResolvedValue(mockPricing as any);
-        vi.spyOn(streamsModule, 'OpenAIResponsesStream').mockReturnValue(new ReadableStream());
+        vi.spyOn(responsesStreamModule, 'OpenAIResponsesStream').mockReturnValue(
+          new ReadableStream(),
+        );
 
         await instance.chat({
           enabledSearch: true,
@@ -121,8 +122,8 @@ describe('LobeAzureOpenAI', () => {
           expect.arrayContaining([expect.objectContaining({ type: 'web_search' })]),
         );
 
-        expect(streamsModule.OpenAIResponsesStream).toHaveBeenCalledWith(
-          mockProdStream,
+        expect(responsesStreamModule.OpenAIResponsesStream).toHaveBeenCalledWith(
+          mockStream,
           expect.objectContaining({
             inputStartAt: expect.any(Number),
             payload: expect.objectContaining({
@@ -136,14 +137,13 @@ describe('LobeAzureOpenAI', () => {
       });
 
       it('should preserve GPT-5.6 Pro mode and Max effort in Responses payloads', async () => {
-        const mockProdStream = new ReadableStream() as any;
-        const mockDebugStream = new ReadableStream() as any;
+        const mockStream = new ReadableStream() as any;
 
-        vi.spyOn(instance['client'].responses, 'create').mockResolvedValue({
-          tee: () => [mockProdStream, mockDebugStream],
-        } as any);
+        vi.spyOn(instance['client'].responses, 'create').mockResolvedValue(mockStream);
         vi.spyOn(getModelPricingModule, 'getModelPricing').mockResolvedValue(undefined);
-        vi.spyOn(streamsModule, 'OpenAIResponsesStream').mockReturnValue(new ReadableStream());
+        vi.spyOn(responsesStreamModule, 'OpenAIResponsesStream').mockReturnValue(
+          new ReadableStream(),
+        );
 
         await instance.chat({
           messages: [{ content: 'Review this migration.', role: 'user' }],
@@ -162,9 +162,35 @@ describe('LobeAzureOpenAI', () => {
         });
       });
 
+      it('should prune the sampling params GPT-6 Astra rejects on the Responses API', async () => {
+        const mockStream = new ReadableStream() as any;
+        vi.spyOn(instance['client'].responses, 'create').mockResolvedValue(mockStream);
+        vi.spyOn(getModelPricingModule, 'getModelPricing').mockResolvedValue(undefined);
+        vi.spyOn(responsesStreamModule, 'OpenAIResponsesStream').mockReturnValue(
+          new ReadableStream(),
+        );
+
+        await instance.chat({
+          messages: [{ content: 'Review this migration.', role: 'system' }],
+          model: 'gpt-6-astra',
+          reasoning_effort: 'xhigh',
+          stream: true,
+          temperature: 0.7,
+          top_p: 0.9,
+        } as any);
+
+        const createCall = (instance['client'].responses.create as Mock).mock.calls[0][0];
+
+        expect(createCall.model).toBe('gpt-6-astra');
+        expect(createCall.reasoning).toEqual({ effort: 'xhigh', summary: 'auto' });
+        expect(createCall.input[0].role).toBe('developer');
+        expect(createCall.temperature).toBeUndefined();
+        expect(createCall.top_logprobs).toBeUndefined();
+        expect(createCall.top_p).toBeUndefined();
+      });
+
       it('should use deploymentName for Azure Responses API requests while keeping logical model for pricing', async () => {
-        const mockProdStream = new ReadableStream() as any;
-        const mockDebugStream = new ReadableStream() as any;
+        const mockStream = new ReadableStream() as any;
         const mockPricing = { units: [] };
 
         instance = new LobeAzureOpenAI({
@@ -176,11 +202,11 @@ describe('LobeAzureOpenAI', () => {
         vi.spyOn(instance['client'].chat.completions, 'create').mockResolvedValue(
           new ReadableStream() as any,
         );
-        vi.spyOn(instance['client'].responses, 'create').mockResolvedValue({
-          tee: () => [mockProdStream, mockDebugStream],
-        } as any);
+        vi.spyOn(instance['client'].responses, 'create').mockResolvedValue(mockStream);
         vi.spyOn(getModelPricingModule, 'getModelPricing').mockResolvedValue(mockPricing as any);
-        vi.spyOn(streamsModule, 'OpenAIResponsesStream').mockReturnValue(new ReadableStream());
+        vi.spyOn(responsesStreamModule, 'OpenAIResponsesStream').mockReturnValue(
+          new ReadableStream(),
+        );
 
         await instance.chat({
           deploymentName: 'prod-gpt-54',
@@ -197,8 +223,8 @@ describe('LobeAzureOpenAI', () => {
         expect(createCall.reasoning).toEqual({ summary: 'auto' });
         expect(createCall.deploymentName).toBeUndefined();
 
-        expect(streamsModule.OpenAIResponsesStream).toHaveBeenCalledWith(
-          mockProdStream,
+        expect(responsesStreamModule.OpenAIResponsesStream).toHaveBeenCalledWith(
+          mockStream,
           expect.objectContaining({
             payload: expect.objectContaining({
               apiMode: 'responses',
@@ -211,8 +237,7 @@ describe('LobeAzureOpenAI', () => {
       });
 
       it('should strip unsupported params for Azure reasoning models and include usage in stream options', async () => {
-        const mockProdStream = new ReadableStream() as any;
-        const mockDebugStream = new ReadableStream() as any;
+        const mockStream = new ReadableStream() as any;
         const mockPricing = { units: [] };
 
         instance = new LobeAzureOpenAI({
@@ -221,11 +246,9 @@ describe('LobeAzureOpenAI', () => {
           id: 'lobehub',
         });
 
-        vi.spyOn(instance['client'].chat.completions, 'create').mockResolvedValue({
-          tee: () => [mockProdStream, mockDebugStream],
-        } as any);
+        vi.spyOn(instance['client'].chat.completions, 'create').mockResolvedValue(mockStream);
         vi.spyOn(getModelPricingModule, 'getModelPricing').mockResolvedValue(mockPricing as any);
-        vi.spyOn(streamsModule, 'OpenAIStream').mockReturnValue(new ReadableStream());
+        vi.spyOn(chatCompletionsStreamModule, 'OpenAIStream').mockReturnValue(new ReadableStream());
 
         await instance.chat({
           frequency_penalty: 0.4,
@@ -261,8 +284,8 @@ describe('LobeAzureOpenAI', () => {
           'lobehub',
           undefined,
         );
-        expect(streamsModule.OpenAIStream).toHaveBeenCalledWith(
-          mockProdStream,
+        expect(chatCompletionsStreamModule.OpenAIStream).toHaveBeenCalledWith(
+          mockStream,
           expect.objectContaining({
             inputStartAt: expect.any(Number),
             payload: expect.objectContaining({
@@ -277,12 +300,9 @@ describe('LobeAzureOpenAI', () => {
       });
 
       it('should handle multiple data chunks correctly', async () => {
-        const mockProdStream = new ReadableStream() as any;
-        const mockDebugStream = new ReadableStream() as any;
-        vi.spyOn(instance['client'].chat.completions, 'create').mockResolvedValue({
-          tee: () => [mockProdStream, mockDebugStream],
-        } as any);
-        vi.spyOn(streamsModule, 'OpenAIStream').mockReturnValue(
+        const mockStream = new ReadableStream() as any;
+        vi.spyOn(instance['client'].chat.completions, 'create').mockResolvedValue(mockStream);
+        vi.spyOn(chatCompletionsStreamModule, 'OpenAIStream').mockReturnValue(
           new ReadableStream({
             start(controller) {
               controller.enqueue(new TextEncoder().encode('event: text\ndata: "你好！"\n\n'));
@@ -303,8 +323,8 @@ describe('LobeAzureOpenAI', () => {
         });
 
         expect(result).toBeInstanceOf(Response);
-        expect(streamsModule.OpenAIStream).toHaveBeenCalledWith(
-          mockProdStream,
+        expect(chatCompletionsStreamModule.OpenAIStream).toHaveBeenCalledWith(
+          mockStream,
           expect.objectContaining({
             inputStartAt: expect.any(Number),
             payload: expect.objectContaining({
@@ -356,13 +376,76 @@ describe('LobeAzureOpenAI', () => {
         temperature: 0.6,
         model: 'o1-preview',
         messages: [{ role: 'user', content: '你好' }],
+        stream: true,
       });
 
       // Assert
+      expect(instance['client'].chat.completions.create).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'o1-preview', stream: false }),
+        expect.anything(),
+      );
       expect(nonStreamToStreamModule.transformResponseToStream).toHaveBeenCalled();
     });
 
     describe('Error', () => {
+      it('should classify a Responses API remote media download timeout as retryable', async () => {
+        const message =
+          'Unable to download content from the provided URL before the timeout. Check that the URL is publicly accessible and responds promptly, or upload the file and provide a file_id instead.';
+        const apiError = new OpenAI.APIError(
+          400,
+          {
+            code: 'invalid_value',
+            error: {
+              code: 'invalid_value',
+              message,
+              param: 'url',
+              type: 'invalid_request_error',
+            },
+            param: 'url',
+            status: 400,
+            type: 'invalid_request_error',
+          },
+          message,
+          new Headers(),
+        );
+
+        (instance['client'].responses.create as Mock).mockRejectedValue(apiError);
+
+        await expect(
+          instance.chat({
+            messages: [{ content: 'Describe this image', role: 'user' }],
+            model: 'gpt-5.4-mini',
+            temperature: 0,
+          }),
+        ).rejects.toMatchObject({
+          errorType: AgentRuntimeErrorType.RemoteMediaDownloadTimeout,
+          provider: 'azure',
+        });
+      });
+
+      it('should classify a Responses API image count limit error for route fallback', async () => {
+        const message = 'Exceeded maximum number of images (50) allowed in the request.';
+        const apiError = new OpenAI.APIError(
+          400,
+          { code: null, message, param: 'input', type: 'invalid_request_error' },
+          message,
+          new Headers(),
+        );
+
+        (instance['client'].responses.create as Mock).mockRejectedValue(apiError);
+
+        await expect(
+          instance.chat({
+            messages: [{ content: 'Describe these images', role: 'user' }],
+            model: 'gpt-5.4-mini',
+            temperature: 0,
+          }),
+        ).rejects.toMatchObject({
+          errorType: AgentRuntimeErrorType.ExceededImageLimit,
+          provider: 'azure',
+        });
+      });
+
       it('should return AzureBizError with DeploymentNotFound error', async () => {
         // Arrange
         const error = {
@@ -435,7 +518,7 @@ describe('LobeAzureOpenAI', () => {
 
         process.env.DEBUG_AZURE_CHAT_COMPLETION = '1';
         vi.spyOn(debugStreamModule, 'debugStream').mockImplementation(() => Promise.resolve());
-        vi.spyOn(streamsModule, 'OpenAIStream').mockReturnValue(new ReadableStream());
+        vi.spyOn(chatCompletionsStreamModule, 'OpenAIStream').mockReturnValue(new ReadableStream());
 
         // Act
         await instance.chat({
@@ -449,6 +532,125 @@ describe('LobeAzureOpenAI', () => {
 
         // Restore
         delete process.env.DEBUG_AZURE_CHAT_COMPLETION;
+      });
+    });
+  });
+
+  describe('transcribe', () => {
+    const file = new File([new Uint8Array([1, 2, 3])], 'speech.m4a', { type: 'audio/mp4' });
+
+    /** The SDK probes FormData support with a `data:` fetch before the real POST. */
+    const getTranscriptionRequest = (fetch: Mock): [string, RequestInit] => {
+      const calls = fetch.mock.calls.filter(([, init]) => init?.method === 'POST');
+      expect(calls).toHaveLength(1);
+      return calls[0] as [string, RequestInit];
+    };
+
+    beforeEach(() => {
+      vi.spyOn(getModelPricingModule, 'getModelPricing').mockResolvedValue(undefined);
+    });
+
+    const createTranscribeInstance = (
+      fetch: Mock,
+      options: { baseURL?: string; modelIdMapping?: Record<string, string> } & Record<
+        string,
+        unknown
+      > = {},
+    ) =>
+      new LobeAzureOpenAI({
+        apiKey: 'test_key',
+        fetch,
+        maxRetries: 0,
+        ...options,
+        baseURL: options.baseURL ?? 'https://test.cognitiveservices.azure.com/',
+      });
+
+    it('should call the deployments transcription path with api-version and api-key', async () => {
+      const fetch = vi.fn().mockResolvedValue(
+        Response.json({
+          text: '你好世界',
+          usage: { input_tokens: 151, output_tokens: 12, total_tokens: 163, type: 'tokens' },
+        }),
+      );
+      const onUsage = vi.fn();
+      const runtime = createTranscribeInstance(fetch);
+
+      const result = await runtime.transcribe({ file, model: 'gpt-4o-transcribe' }, { onUsage });
+
+      expect(result).toEqual({ text: '你好世界' });
+      const [url, init] = getTranscriptionRequest(fetch);
+      const requestURL = new URL(url);
+      expect(requestURL.origin + requestURL.pathname).toBe(
+        'https://test.cognitiveservices.azure.com/openai/deployments/gpt-4o-transcribe/audio/transcriptions',
+      );
+      expect(requestURL.searchParams.get('api-version')).toBe('2025-03-01-preview');
+      expect(new Headers(init.headers).get('api-key')).toBe('test_key');
+      expect(onUsage).toHaveBeenCalledWith(
+        expect.objectContaining({ inputAudioTokens: 151, totalInputTokens: 151 }),
+      );
+    });
+
+    it('should use the mapped deployment name and keep a custom openai path prefix', async () => {
+      const fetch = vi.fn().mockResolvedValue(Response.json({ text: 'ok' }));
+      const runtime = createTranscribeInstance(fetch, {
+        baseURL: 'https://test.openai.azure.com/openai/v1/',
+        modelIdMapping: { 'gpt-4o-mini-transcribe': 'prod-mini-transcribe' },
+      });
+
+      await runtime.transcribe({ file, model: 'gpt-4o-mini-transcribe' });
+
+      const requestURL = new URL(getTranscriptionRequest(fetch)[0]);
+      expect(requestURL.pathname).toBe(
+        '/openai/deployments/prod-mini-transcribe/audio/transcriptions',
+      );
+    });
+
+    it('should forward client options such as dangerouslyAllowBrowser (client BYOK path)', async () => {
+      // The OpenAI SDK refuses to construct a client in a browser without this flag.
+      vi.stubGlobal('window', { document: {} });
+      try {
+        const fetch = vi.fn().mockResolvedValue(Response.json({ text: 'ok' }));
+        const runtime = createTranscribeInstance(fetch, { dangerouslyAllowBrowser: true });
+
+        await expect(runtime.transcribe({ file, model: 'gpt-4o-transcribe' })).resolves.toEqual({
+          text: 'ok',
+        });
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('should keep chat requests on the v1 surface', async () => {
+      const fetch = vi.fn().mockResolvedValue(Response.json({ text: 'ok' }));
+      const runtime = createTranscribeInstance(fetch);
+
+      await runtime.transcribe({ file, model: 'gpt-4o-transcribe' });
+
+      expect(runtime.baseURL).toBe('https://test.cognitiveservices.azure.com/openai/v1');
+      expect(runtime.client.baseURL).toBe('https://test.cognitiveservices.azure.com/openai/v1');
+    });
+
+    it('should attach the deployment id and deployments endpoint to DeploymentNotFound errors', async () => {
+      const fetch = vi
+        .fn()
+        .mockResolvedValue(
+          Response.json(
+            { error: { code: 'DeploymentNotFound', message: 'Deployment not found' } },
+            { status: 404 },
+          ),
+        );
+      const runtime = createTranscribeInstance(fetch, {
+        modelIdMapping: { 'gpt-4o-transcribe': 'prod-transcribe' },
+      });
+
+      await expect(runtime.transcribe({ file, model: 'gpt-4o-transcribe' })).rejects.toMatchObject({
+        error: expect.objectContaining({
+          code: 'DeploymentNotFound',
+          deployId: 'prod-transcribe',
+        }),
+        // Transcription bypasses the `/openai/v1` baseURL, so the error must not report it.
+        endpoint: 'https://***.cognitiveservices.azure.com/openai',
+        provider: 'azure',
       });
     });
   });
@@ -631,6 +833,21 @@ describe('LobeAzureOpenAI', () => {
       expect(spy).toHaveBeenCalledTimes(2);
       const arg = vi.mocked(editSpy).mock.calls[0][0] as any;
       expect(arg).toHaveProperty('image');
+    });
+
+    it('should send GIF output fields and keep the GIF MIME type', async () => {
+      const generateSpy = vi
+        .spyOn(instance['client'].images, 'generate')
+        .mockResolvedValue({ data: [{ b64_json: 'R0lGODlh' }], output_format: 'gif' } as any);
+
+      const res = await instance.createImage({
+        model: 'gpt-image-2.6-flare',
+        params: { frameCount: 4, frameDurationMs: 300, outputFormat: 'gif', prompt: 'gif' },
+      });
+
+      const arg = vi.mocked(generateSpy).mock.calls[0][0] as any;
+      expect(arg).toMatchObject({ frame_count: 4, frame_duration_ms: 300, output_format: 'gif' });
+      expect(res).toEqual({ imageUrl: 'data:image/gif;base64,R0lGODlh' });
     });
 
     it('should not include image in generate options', async () => {

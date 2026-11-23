@@ -14,7 +14,7 @@ const fixtureRoutes: RouteObject[] = [
     children: [
       {
         handle: {
-          meta: { tabTitleKey: 'navigation.newChat', titleKey: 'navigation.home' },
+          meta: { tabTitleKey: 'navigation.home', titleKey: 'navigation.home' },
         },
         index: true,
       },
@@ -45,6 +45,60 @@ describe('resolveTab', () => {
     expect(resolved.meta.title).toBe('Cached Agent');
     expect(resolved.meta.avatar).toBe('a.png');
     expect(resolved.meta.icon).toBe(MessageSquare);
+  });
+
+  it('carries a project avatar seed from the snapshot and the live meta', () => {
+    const cold = resolveTab(fixtureRoutes, tab('/agent/abc', { avatarSeed: 'Alpha' }), false, t);
+    expect(cold.meta.avatarSeed).toBe('Alpha');
+
+    const live = resolveTab(
+      fixtureRoutes,
+      tab('/agent/abc', { avatarSeed: 'Old name' }),
+      true,
+      t,
+      { avatarSeed: 'Alpha' },
+      '/agent/abc',
+    );
+    expect(live.meta.avatarSeed).toBe('Alpha');
+  });
+
+  it('carries the agent avatar identity from the snapshot', () => {
+    const cold = resolveTab(
+      fixtureRoutes,
+      tab('/agent/abc', {
+        avatar: '/avatars/agent-default.png',
+        avatarKind: 'agent',
+        avatarSeed: 'abc',
+      }),
+      false,
+      t,
+    );
+    expect(cold.meta.avatarKind).toBe('agent');
+    expect(cold.meta.avatarSeed).toBe('abc');
+  });
+
+  it('carries the workspace avatar kind from the snapshot', () => {
+    const cold = resolveTab(
+      fixtureRoutes,
+      tab('/agent/abc', { avatarKind: 'workspace', title: 'Acme' }),
+      false,
+      t,
+    );
+    expect(cold.meta.avatarKind).toBe('workspace');
+    expect(cold.meta.avatar).toBeUndefined();
+  });
+
+  it('active tab: a live null avatar hides the cached one', () => {
+    const resolved = resolveTab(
+      fixtureRoutes,
+      tab('/agent/abc', { avatar: 'logo.png', avatarSeed: 'Alpha' }),
+      true,
+      t,
+      { avatar: null, avatarSeed: 'Alpha' },
+      '/agent/abc',
+    );
+    expect(resolved.meta.avatar).toBeUndefined();
+    expect(resolved.meta.avatarSeed).toBe('Alpha');
   });
 
   it('active tab: live dynamic meta overlays the snapshot', () => {
@@ -100,9 +154,9 @@ describe('resolveTab', () => {
     expect(resolved.meta.title).toBe('navigation.chat');
   });
 
-  it('prefers the Electron tab title over the document title', () => {
+  it('uses Home as the Electron tab title for the Home route', () => {
     const resolved = resolveTab(fixtureRoutes, tab('/'), false, t);
-    expect(resolved.meta.title).toBe('navigation.newChat');
+    expect(resolved.meta.title).toBe('navigation.home');
   });
 
   it('uses the generic fallback when neither snapshot nor static meta exists', () => {

@@ -1,6 +1,6 @@
 import { BUILTIN_AGENT_SLUGS } from '@lobechat/builtin-agents';
 import { VerifyToolIdentifier } from '@lobechat/builtin-tool-verify';
-import type { VerifyCheckItem } from '@lobechat/types';
+import { RequestTrigger, type VerifyCheckItem } from '@lobechat/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createVerifierAgentRunner } from '../agentVerifier';
@@ -24,14 +24,18 @@ const execParams = (): any => {
 };
 
 vi.mock('@/database/models/agent', () => ({
-  AgentModel: vi.fn().mockImplementation(() => ({
-    existsById: existsByIdMock,
-    getBuiltinAgent: getBuiltinAgentMock,
-  })),
+  AgentModel: vi.fn().mockImplementation(function () {
+    return {
+      existsById: existsByIdMock,
+      getBuiltinAgent: getBuiltinAgentMock,
+    };
+  }),
 }));
 // The runner dynamically imports AiAgentService to break a static cycle.
 vi.mock('@/server/services/aiAgent', () => ({
-  AiAgentService: vi.fn().mockImplementation(() => ({ execAgent: execAgentMock })),
+  AiAgentService: vi.fn().mockImplementation(function () {
+    return { execAgent: execAgentMock };
+  }),
 }));
 vi.mock('../verifierTerminal', () => ({
   settleVerifierCheckFromTerminal: settleVerifierCheckFromTerminalMock,
@@ -106,6 +110,17 @@ describe('createVerifierAgentRunner', () => {
     expect(params.provider).toBe('openai');
     // The builtin verify agent already declares the tool — not re-injected.
     expect(params.additionalPluginIds).toBeUndefined();
+  });
+
+  it('attributes the verifier run to the verify trigger', async () => {
+    getBuiltinAgentMock.mockResolvedValue({ id: 'builtin-verify' });
+
+    const runner = createVerifierAgentRunner(baseParams)!;
+    await runner(runnerArgs);
+
+    // Without a trigger, LobeHub-routed model calls throw RouteAttemptMissingContext
+    // in development and record trigger=null in production spend logs.
+    expect(execParams().trigger).toBe(RequestTrigger.Verify);
   });
 
   it('registers a verifier-terminal hook for local and queued completion handling', async () => {

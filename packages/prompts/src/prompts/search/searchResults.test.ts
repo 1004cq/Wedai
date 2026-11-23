@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { searchResultsPrompt } from './searchResults';
+import { EMPTY_SEARCH_RESULTS_PROMPT, searchResultsPrompt } from './searchResults';
 
 describe('searchResultsPrompt', () => {
   it('should return explicit empty message for empty results', () => {
     const result = searchResultsPrompt([]);
-    expect(result).toBe('<searchResults>No results found.</searchResults>');
+    expect(result).toBe(EMPTY_SEARCH_RESULTS_PROMPT);
+    expect(result).toContain('No results found.');
+    expect(result).toContain('do not resend the same query');
+    expect(result).toContain('retry in English');
+    expect(result).toContain('Stop after 2–3 rewrites');
   });
 
   it('should convert basic search results to compact XML format', () => {

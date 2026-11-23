@@ -9,16 +9,6 @@ const { ipcMainHandleMock } = vi.hoisted(() => ({
   ipcMainHandleMock: vi.fn(),
 }));
 
-// Mock logger
-vi.mock('@/utils/logger', () => ({
-  createLogger: () => ({
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  }),
-}));
-
 // Mock undici - create mocks directly using vi.fn()
 vi.mock('undici', () => ({
   fetch: vi.fn(),
@@ -50,6 +40,21 @@ const mockApp = {
   storeManager: mockStoreManager,
 } as unknown as App;
 
+const createValidProxySettings = (): NetworkProxySettings => ({
+  enableProxy: true,
+  proxyType: 'http',
+  proxyServer: 'proxy.example.com',
+  proxyPort: '8080',
+  proxyRequireAuth: false,
+  proxyBypass: 'localhost,127.0.0.1,::1',
+});
+
+const createSuccessfulResponse = () => ({
+  ok: true,
+  status: 200,
+  statusText: 'OK',
+});
+
 describe('NetworkProxyCtr', () => {
   let networkProxyCtr: NetworkProxyCtr;
 
@@ -66,30 +71,25 @@ describe('NetworkProxyCtr', () => {
     networkProxyCtr = new NetworkProxyCtr(mockApp);
 
     // Set default return values for undici mocks
-    vi.mocked(mockUndici.Agent).mockReturnValue({});
-    vi.mocked(mockUndici.ProxyAgent).mockReturnValue({});
+    // `Agent`/`ProxyAgent` are constructed with `new`, so their implementations must
+    // be constructable (vitest 5 rejects arrow functions / `mockReturnValue` here).
+    vi.mocked(mockUndici.Agent).mockImplementation(function () {
+      return {};
+    });
+    vi.mocked(mockUndici.ProxyAgent).mockImplementation(function () {
+      return {};
+    });
     vi.mocked(mockUndici.getGlobalDispatcher).mockReturnValue({
       destroy: vi.fn().mockResolvedValue(undefined),
     });
     vi.mocked(mockUndici.setGlobalDispatcher).mockReturnValue(undefined);
 
     // Set default return value for fetch mock
-    vi.mocked(mockUndici.fetch).mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: 'OK',
-    });
+    vi.mocked(mockUndici.fetch).mockResolvedValue(createSuccessfulResponse());
   });
 
   describe('ProxyConfigValidator', () => {
-    const validConfig: NetworkProxySettings = {
-      enableProxy: true,
-      proxyType: 'http',
-      proxyServer: 'proxy.example.com',
-      proxyPort: '8080',
-      proxyRequireAuth: false,
-      proxyBypass: 'localhost,127.0.0.1,::1',
-    };
+    const validConfig: NetworkProxySettings = createValidProxySettings();
 
     it('should validate enabled proxy config with all required fields', () => {
       // Indirectly test validation logic by testing public methods
@@ -146,14 +146,7 @@ describe('NetworkProxyCtr', () => {
 
   describe('getDesktopSettings', () => {
     it('should return stored proxy settings', async () => {
-      const expectedSettings: NetworkProxySettings = {
-        enableProxy: true,
-        proxyType: 'http',
-        proxyServer: 'proxy.example.com',
-        proxyPort: '8080',
-        proxyRequireAuth: false,
-        proxyBypass: 'localhost,127.0.0.1,::1',
-      };
+      const expectedSettings: NetworkProxySettings = createValidProxySettings();
 
       mockStoreManager.get.mockReturnValue(expectedSettings);
 
@@ -182,14 +175,7 @@ describe('NetworkProxyCtr', () => {
   });
 
   describe('setProxySettings', () => {
-    const validConfig: NetworkProxySettings = {
-      enableProxy: true,
-      proxyType: 'http',
-      proxyServer: 'proxy.example.com',
-      proxyPort: '8080',
-      proxyRequireAuth: false,
-      proxyBypass: 'localhost,127.0.0.1,::1',
-    };
+    const validConfig: NetworkProxySettings = createValidProxySettings();
 
     it('should save valid proxy settings', async () => {
       mockStoreManager.get.mockReturnValue({
@@ -229,11 +215,7 @@ describe('NetworkProxyCtr', () => {
 
   describe('testProxyConnection', () => {
     it('should return success for successful connection', async () => {
-      const mockResponse = {
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-      };
+      const mockResponse = createSuccessfulResponse();
 
       vi.mocked(mockUndici.fetch).mockResolvedValueOnce(mockResponse);
 
@@ -263,21 +245,10 @@ describe('NetworkProxyCtr', () => {
   });
 
   describe('testProxyConfig', () => {
-    const validConfig: NetworkProxySettings = {
-      enableProxy: true,
-      proxyType: 'http',
-      proxyServer: 'proxy.example.com',
-      proxyPort: '8080',
-      proxyRequireAuth: false,
-      proxyBypass: 'localhost,127.0.0.1,::1',
-    };
+    const validConfig: NetworkProxySettings = createValidProxySettings();
 
     it('should return success for valid config and successful connection', async () => {
-      const mockResponse = {
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-      };
+      const mockResponse = createSuccessfulResponse();
 
       vi.mocked(mockUndici.fetch).mockResolvedValueOnce(mockResponse);
 
@@ -305,11 +276,7 @@ describe('NetworkProxyCtr', () => {
         enableProxy: false,
       };
 
-      const mockResponse = {
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-      };
+      const mockResponse = createSuccessfulResponse();
 
       vi.mocked(mockUndici.fetch).mockResolvedValueOnce(mockResponse);
 
@@ -330,14 +297,7 @@ describe('NetworkProxyCtr', () => {
 
   describe('beforeAppReady', () => {
     it('should apply stored proxy settings on app ready', async () => {
-      const storedConfig: NetworkProxySettings = {
-        enableProxy: true,
-        proxyType: 'http',
-        proxyServer: 'proxy.example.com',
-        proxyPort: '8080',
-        proxyRequireAuth: false,
-        proxyBypass: 'localhost,127.0.0.1,::1',
-      };
+      const storedConfig: NetworkProxySettings = createValidProxySettings();
 
       mockStoreManager.get.mockReturnValue(storedConfig);
 
@@ -377,14 +337,7 @@ describe('NetworkProxyCtr', () => {
 
   describe('ProxyUrlBuilder', () => {
     it('should build URL without authentication', () => {
-      const config: NetworkProxySettings = {
-        enableProxy: true,
-        proxyType: 'http',
-        proxyServer: 'proxy.example.com',
-        proxyPort: '8080',
-        proxyRequireAuth: false,
-        proxyBypass: 'localhost,127.0.0.1,::1',
-      };
+      const config: NetworkProxySettings = createValidProxySettings();
 
       // Indirectly test URL building by testing proxy settings
       expect(() => networkProxyCtr.setProxySettings(config)).not.toThrow();

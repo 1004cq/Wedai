@@ -2,10 +2,10 @@
  * @vitest-environment happy-dom
  */
 import { render, screen, waitFor } from '@testing-library/react';
-import { type ReactNode, useEffect } from 'react';
+import { type ReactNode, useEffect, useLayoutEffect } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { setPostRenderReady } from '@/spa/atoms/app';
+import { getAppPainted, setAppPainted, setPostRenderReady } from '@/spa/atoms/app';
 import { setDevDockUnlocked } from '@/utils/devDockUnlock';
 
 import type SPAGlobalProviderComponent from './index';
@@ -13,49 +13,21 @@ import { type DevDockLayout as DevDockLayoutComponent } from './index';
 
 let SPAGlobalProvider: typeof SPAGlobalProviderComponent;
 let DevDockLayout: typeof DevDockLayoutComponent;
-const { canAccessDevDock, devDockRenderError } = vi.hoisted(() => ({
+const { canAccessDevDock, devDockRenderError, initializeBuiltin } = vi.hoisted(() => ({
   canAccessDevDock: vi.fn(() => false),
   devDockRenderError: { current: null as Error | null },
+  initializeBuiltin: vi.fn(() => null),
 }));
 
-vi.mock('@lobehub/ui', async () => {
+vi.mock('@lobehub/ui', async (importOriginal) => {
   const React = await import('react');
-  const Passthrough = ({ children }: { children?: ReactNode }) =>
-    React.createElement(React.Fragment, null, children);
 
   return {
+    ...(await importOriginal<object>()),
     ContextMenuHost: () => React.createElement('div', { 'data-testid': 'context-menu-host' }),
-    ModalHost: () => React.createElement('div', { 'data-testid': 'legacy-modal-host' }),
-    TooltipGroup: Passthrough,
     setContextMenuInterceptor: vi.fn(),
-  };
-});
-
-vi.mock('@lobehub/ui/base-ui', async () => {
-  const React = await import('react');
-
-  return {
     ModalHost: () => React.createElement('div', { 'data-testid': 'base-modal-host' }),
     ToastHost: () => React.createElement('div', { 'data-testid': 'toast-host' }),
-  };
-});
-
-vi.mock('antd-style', async () => {
-  const React = await import('react');
-
-  return {
-    StyleProvider: ({ children }: { children?: ReactNode }) =>
-      React.createElement(React.Fragment, null, children),
-  };
-});
-
-vi.mock('motion/react', async () => {
-  const React = await import('react');
-
-  return {
-    LazyMotion: ({ children }: { children?: ReactNode }) =>
-      React.createElement(React.Fragment, null, children),
-    domMax: {},
   };
 });
 
@@ -119,15 +91,6 @@ vi.mock('@/layout/GlobalProvider/AppTheme', async () => {
   };
 });
 
-vi.mock('@/layout/GlobalProvider/CacheHydrationGate', async () => {
-  const React = await import('react');
-
-  return {
-    default: ({ children }: { children?: ReactNode }) =>
-      React.createElement(React.Fragment, null, children),
-  };
-});
-
 vi.mock('@/layout/GlobalProvider/DynamicFavicon', () => ({
   default: () => <div data-testid="dynamic-favicon" />,
 }));
@@ -164,6 +127,7 @@ vi.mock('@/layout/GlobalProvider/ServerVersionOutdatedAlert', () => ({
 }));
 
 vi.mock('@/layout/GlobalProvider/StoreInitialization', () => ({
+  BuiltinAgentInitialization: initializeBuiltin,
   default: () => null,
 }));
 
@@ -195,14 +159,47 @@ describe('SPAGlobalProvider', () => {
     const loadedModule = await import('./index');
     SPAGlobalProvider = loadedModule.default;
     DevDockLayout = loadedModule.DevDockLayout;
-  });
+  }, 30_000);
 
   beforeEach(() => {
+    initializeBuiltin.mockClear();
+    setAppPainted(false);
     canAccessDevDock.mockReturnValue(false);
     devDockRenderError.current = null;
     setDevDockUnlocked(false);
     Reflect.deleteProperty(window, '__SERVER_CONFIG__');
     setPostRenderReady(false);
+  });
+
+  it('renders the app and signals first paint on the first commit, with no cache hydration wait', () => {
+    render(
+      <SPAGlobalProvider>
+        <div data-testid="spa-route-content" />
+      </SPAGlobalProvider>,
+    );
+
+    expect(screen.getByTestId('spa-route-content')).toBeInTheDocument();
+    expect(initializeBuiltin).toHaveBeenCalled();
+    expect(getAppPainted()).toBe(true);
+  });
+
+  it('reports the first paint only after the route content has committed', () => {
+    let paintedWhenContentCommitted: boolean | undefined;
+    const RouteContent = () => {
+      useLayoutEffect(() => {
+        paintedWhenContentCommitted = getAppPainted();
+      }, []);
+      return null;
+    };
+
+    render(
+      <SPAGlobalProvider>
+        <RouteContent />
+      </SPAGlobalProvider>,
+    );
+
+    expect(paintedWhenContentCommitted).toBe(false);
+    expect(getAppPainted()).toBe(true);
   });
 
   afterEach(() => {
@@ -330,7 +327,6 @@ describe('SPAGlobalProvider', () => {
       </SPAGlobalProvider>,
     );
 
-    expect(screen.getByTestId('legacy-modal-host')).toBeInTheDocument();
     expect(screen.getByTestId('base-modal-host')).toBeInTheDocument();
     expect(screen.getByTestId('toast-host')).toBeInTheDocument();
     expect(screen.getByTestId('context-menu-host')).toBeInTheDocument();

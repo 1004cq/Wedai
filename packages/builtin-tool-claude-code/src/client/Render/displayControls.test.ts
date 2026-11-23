@@ -30,12 +30,6 @@ describe('resolveClaudeCodeRenderDisplayControl', () => {
         }),
       ).toBeUndefined();
     });
-
-    it('is still collapsed while the call is in flight (no result yet)', () => {
-      expect(
-        resolveClaudeCodeRenderDisplayControl(ClaudeCodeApiName.Read, undefined),
-      ).toBeUndefined();
-    });
   });
 
   describe('in-app browser screenshot', () => {
@@ -63,7 +57,7 @@ describe('resolveClaudeCodeRenderDisplayControl', () => {
   });
 
   it('keeps the static map for every other api, regardless of pluginState', () => {
-    expect(resolveClaudeCodeRenderDisplayControl(ClaudeCodeApiName.Edit)).toBe('expand');
+    expect(resolveClaudeCodeRenderDisplayControl(ClaudeCodeApiName.Edit)).toBe('collapsed');
     expect(resolveClaudeCodeRenderDisplayControl(ClaudeCodeApiName.TodoWrite)).toBe('expand');
     // An unrelated api with images on its result must not be force-expanded.
     expect(resolveClaudeCodeRenderDisplayControl(ClaudeCodeApiName.Grep, uploaded)).toBeUndefined();

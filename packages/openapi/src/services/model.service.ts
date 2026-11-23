@@ -5,6 +5,7 @@ import type { LobeChatDatabase } from '@/database/type';
 
 import { BaseService } from '../common/base.service';
 import { processPaginationConditions } from '../helpers/pagination';
+import { projectPublicModel } from '../helpers/public-fields';
 import type { ServiceResult } from '../types';
 import type {
   CreateModelRequest,
@@ -54,7 +55,7 @@ export class ModelService extends BaseService {
       if (permissionWhere) conditions.push(permissionWhere);
 
       // Handle ModelsListQuery-specific parameters
-      const { page, pageSize, keyword, provider, type, enabled } = request;
+      const { keyword, provider, type, enabled } = request;
 
       // If a keyword is provided, add it to the query conditions
       if (keyword) {
@@ -89,7 +90,7 @@ export class ModelService extends BaseService {
       const finalWhereCondition = conditions.length > 0 ? and(...conditions) : undefined;
 
       // Calculate offset
-      const { limit, offset } = processPaginationConditions({ page, pageSize });
+      const { limit, offset } = processPaginationConditions(request);
 
       // Execute query and count in parallel
       const [result, totalResult] = await Promise.all([
@@ -103,7 +104,9 @@ export class ModelService extends BaseService {
       ]);
 
       return {
-        models: result.map((model) => ({ ...model, type: normalizeModelType(model.type) })),
+        models: result.map((model) =>
+          projectPublicModel({ ...model, type: normalizeModelType(model.type) }),
+        ),
         total: totalResult[0]?.count ?? 0,
       };
     } catch (error) {
@@ -137,7 +140,7 @@ export class ModelService extends BaseService {
         throw this.createNotFoundError(`模型 ${providerId}/${modelId} 不存在`);
       }
 
-      return { ...model, type: normalizeModelType(model.type) };
+      return projectPublicModel({ ...model, type: normalizeModelType(model.type) });
     } catch (error) {
       this.handleServiceError(error, '获取模型详情');
     }
@@ -194,7 +197,7 @@ export class ModelService extends BaseService {
           })
           .returning();
 
-        return created;
+        return projectPublicModel(created);
       });
     } catch (error) {
       this.handleServiceError(error, '创建模型');
@@ -264,7 +267,7 @@ export class ModelService extends BaseService {
           throw this.createBusinessError('更新模型失败');
         }
 
-        return updated;
+        return projectPublicModel(updated);
       });
     } catch (error) {
       this.handleServiceError(error, '更新模型');

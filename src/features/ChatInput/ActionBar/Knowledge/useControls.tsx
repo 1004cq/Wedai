@@ -1,6 +1,7 @@
 import { type ItemType } from '@lobehub/ui';
 import { Icon } from '@lobehub/ui';
-import { createStaticStyles, cssVar, cx } from 'antd-style';
+import { cssVar } from '@lobehub/ui/stylex/cssVar.stylex';
+import * as stylex from '@stylexjs/stylex';
 import isEqual from 'fast-deep-equal';
 import { LibraryBig } from 'lucide-react';
 import type { ReactNode } from 'react';
@@ -10,6 +11,7 @@ import FileIcon from '@/components/FileIcon';
 import RepoIcon from '@/components/LibIcon';
 import { useAgentStore } from '@/store/agent';
 import { agentByIdSelectors } from '@/store/agent/selectors';
+import { densityTokens, sidebarRow } from '@/styles/density.stylex';
 
 import { useAgentId } from '../../hooks/useAgentId';
 import CheckboxItem from '../components/CheckboxWithLoading';
@@ -19,44 +21,32 @@ import CheckboxItem from '../components/CheckboxWithLoading';
 // growing past it.
 const labelMaxWidth = 'min(210px, 45vw)';
 
-const styles = createStaticStyles(({ css }) => ({
-  viewMore: css`
-    cursor: pointer;
-
-    display: flex;
-    gap: 12px;
-    align-items: center;
-
-    /* width 320 + margin-inline -12 anchors the submenu to 320px (matching the skill
-       submenu) and lets the row span full width; padding-inline 12 lines its icon/text
-       up with the menu items above. */
-    width: 320px;
-    min-height: 32px;
-
-    /* The footer wrapper adds padding-block: 8px top & bottom; the top keeps it separated
-       from the list, but the bottom leaves a dead gap against the popup edge — cancel it. */
-    margin-block-end: -8px;
-    margin-inline: -12px;
-    padding-inline: 12px;
-    border: 0;
-    border-radius: 6px;
-
-    font-size: 14px;
-    color: ${cssVar.colorText};
-
-    background: transparent;
-
-    transition: background 150ms ${cssVar.motionEaseOut};
-
-    &:hover {
-      background: ${cssVar.colorFillTertiary};
-    }
-  `,
-  viewMoreLabel: css`
-    flex: 1;
-    text-align: start;
-  `,
-}));
+const styles = stylex.create({
+  viewMore: {
+    cursor: 'pointer',
+    display: 'flex',
+    gap: densityTokens['--lobe-density-content-gap'],
+    alignItems: 'center',
+    // width 320 + margin-inline -12 anchors the submenu to 320px (matching the skill
+    // submenu) and lets the row span full width; padding-inline 12 lines its icon/text
+    // up with the menu items above.
+    width: '320px',
+    minHeight: sidebarRow.controlHeight,
+    // The footer wrapper adds padding-block: 8px top & bottom; the top keeps it separated
+    // from the list, but the bottom leaves a dead gap against the popup edge — cancel it.
+    marginBlockEnd: '-8px',
+    marginInline: '-12px',
+    paddingInline: densityTokens['--lobe-density-content-gap'],
+    borderStyle: 'none',
+    borderRadius: sidebarRow.radius,
+    fontSize: sidebarRow.textFontSize,
+    color: cssVar.colorText,
+    backgroundColor: { 'default': 'transparent', ':hover': cssVar.colorFillTertiary },
+    backgroundImage: { 'default': 'none', ':hover': 'none' },
+    transition: `background 150ms ${cssVar.motionEaseOut}`,
+  },
+  viewMoreLabel: { flex: '1', textAlign: 'start' },
+});
 
 export interface KnowledgeControls {
   enabledCount: number;
@@ -127,20 +117,24 @@ export const useControls = ({
     ...fileItems,
   ];
 
-  const footer =
-    relatedGroups.length > 0 ? (
-      <button
-        className={cx(styles.viewMore)}
-        type="button"
-        onClick={(event) => {
-          event.stopPropagation();
-          openAttachKnowledgeModal();
-        }}
-      >
-        <Icon color={cssVar.colorTextSecondary} icon={LibraryBig} size={14} />
-        <span className={cx(styles.viewMoreLabel)}>{t('knowledgeBase.viewMore')}</span>
-      </button>
-    ) : null;
+  // The footer is the only entry into the full library / file picker, so it stays
+  // rendered when nothing is attached yet — otherwise the submenu shows "no related
+  // files or libraries" with no way to attach the first one.
+  const footer = (
+    <button
+      {...stylex.props(styles.viewMore)}
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        openAttachKnowledgeModal();
+      }}
+    >
+      <Icon color={cssVar.colorTextSecondary} icon={LibraryBig} size={14} />
+      <span {...stylex.props(styles.viewMoreLabel)}>
+        {relatedGroups.length > 0 ? t('knowledgeBase.viewMore') : t('knowledgeBase.related.browse')}
+      </span>
+    </button>
+  );
 
   return { enabledCount, footer, items: relatedGroups } satisfies KnowledgeControls;
 };

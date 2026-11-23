@@ -9,8 +9,15 @@ import debug from 'debug';
 
 import type { LobeRuntimeAI } from '../../core/BaseAI';
 import { buildGoogleMessages, buildGoogleTools } from '../../core/contextBuilders/google';
+import {
+  finalizeProviderResponse,
+  initializeProviderDiagnostics,
+  observeProviderAsyncIterable,
+  recordProviderError,
+} from '../../core/providerDiagnostics';
 import { GoogleGenerativeAIStream } from '../../core/streams';
 import { LOBE_ERROR_KEY } from '../../core/streams/google';
+import { convertGoogleAIUsage } from '../../core/usageConverters/google-ai';
 import type {
   ASROptions,
   ASRPayload,
@@ -24,13 +31,19 @@ import type {
 } from '../../types';
 import { AgentRuntimeErrorType } from '../../types/error';
 import type { CreateImagePayload, CreateImageResponse } from '../../types/image';
-import type { CreateVideoPayload, CreateVideoResponse } from '../../types/video';
+import type { ProviderResponseDiagnostics } from '../../types/providerDiagnostics';
+import type { TextToSpeechOptions, TextToSpeechPayload } from '../../types/tts';
+import type {
+  CreateVideoPayload,
+  CreateVideoResult,
+  VideoGenerationCapabilities,
+} from '../../types/video';
 import { AgentRuntimeError } from '../../utils/createError';
 import { debugStream } from '../../utils/debugStream';
 import { getModelPricing } from '../../utils/getModelPricing';
 import { parseGoogleErrorMessage } from '../../utils/googleErrorParser';
 import type { ModelIdMappingOptions } from '../../utils/modelIdMapping';
-import { withMappedModelId } from '../../utils/modelIdMapping';
+import { resolveMappedModelId, withMappedModelId } from '../../utils/modelIdMapping';
 import { StreamingResponse } from '../../utils/response';
 import {
   createSignatureChannelId,
@@ -38,8 +51,10 @@ import {
   getRuntimeSignatureScopeSource,
 } from '../../utils/signatureScope';
 import { createGoogleImage } from './createImage';
-import { createGoogleVideo, pollGoogleVideoOperation } from './createVideo';
+import { createGeminiSpeech } from './createSpeech';
+import { createGoogleVideo, isGeminiOmniVideoModel, pollGoogleVideoOperation } from './createVideo';
 import { createGoogleGenerateObject, createGoogleGenerateObjectWithTools } from './generateObject';
+import { handleGoogleVideoWebhook } from './handleCreateVideoWebhook';
 import {
   isGemini3OrAbove,
   isGoogleImageResponseModel,
@@ -47,9 +62,11 @@ import {
   shouldDisableGoogleSystemInstruction,
   shouldDisableGoogleThinkingConfig,
   shouldOmitDeprecatedGoogleGenerationParams,
+  shouldOmitGoogleSamplingParams,
   shouldUseGoogleImageSearchTypes,
   supportsGoogleSearchOnImageResponseModel,
 } from './modelId';
+import { recordGoogleGenerateContentResponse } from './providerDiagnostics';
 import { resolveGoogleThinkingConfig } from './thinkingResolver';
 import { createGoogleTranscription } from './transcribe';
 
@@ -148,6 +165,8 @@ export class LobeGoogleAI implements LobeRuntimeAI {
   }
 
   async chat(rawPayload: ChatStreamPayload, options?: ChatMethodOptions) {
+    let providerResponseDiagnostics: ProviderResponseDiagnostics | undefined;
+
     try {
       const payload = this.buildPayload(rawPayload);
       const { model, thinkingBudget, thinkingLevel, imageAspectRatio, imageResolution } = payload;
@@ -227,7 +246,7 @@ export class LobeGoogleAI implements LobeRuntimeAI {
         systemInstruction: shouldDisableGoogleSystemInstruction(model)
           ? undefined
           : (payload.system as string),
-        ...(shouldOmitDeprecatedGenerationParams
+        ...(shouldOmitDeprecatedGenerationParams || shouldOmitGoogleSamplingParams(requestModel)
           ? {}
           : {
               temperature: isImageResponseModel
@@ -253,6 +272,13 @@ export class LobeGoogleAI implements LobeRuntimeAI {
       const key = this.isVertexAi
         ? 'DEBUG_VERTEX_AI_CHAT_COMPLETION'
         : 'DEBUG_GOOGLE_CHAT_COMPLETION';
+      providerResponseDiagnostics = initializeProviderDiagnostics({
+        apiMode: this.isVertexAi ? 'vertex_generate_content' : 'google_generate_content',
+        diagnostics: options?.diagnostics,
+        endpoint: this.baseURL,
+        payload: finalPayload,
+        sentAt: Date.now(),
+      });
 
       if (process.env[key] === '1') {
         log('[requestPayload]');
@@ -260,11 +286,19 @@ export class LobeGoogleAI implements LobeRuntimeAI {
       }
 
       const geminiStreamResponse = await this.client.models.generateContentStream(finalPayload);
+      const observedGeminiStream = observeProviderAsyncIterable(
+        geminiStreamResponse,
+        providerResponseDiagnostics,
+        recordGoogleGenerateContentResponse,
+        controller.signal,
+      );
 
-      const googleStream = this.createEnhancedStream(geminiStreamResponse, controller.signal);
-      const [prod, useForDebug] = googleStream.tee();
+      const googleStream = this.createEnhancedStream(observedGeminiStream, controller.signal);
+      let prod = googleStream;
 
       if (process.env[key] === '1') {
+        const [productionStream, useForDebug] = googleStream.tee();
+        prod = productionStream;
         debugStream(useForDebug).catch();
       }
 
@@ -281,6 +315,8 @@ export class LobeGoogleAI implements LobeRuntimeAI {
       return StreamingResponse(stream, { headers: options?.headers });
     } catch (e) {
       const err = e as Error;
+      recordProviderError(providerResponseDiagnostics, err);
+      await finalizeProviderResponse(providerResponseDiagnostics, options?.signal);
 
       // Remove previous silent handling, throw error uniformly
       if (isAbortError(err)) {
@@ -316,12 +352,32 @@ export class LobeGoogleAI implements LobeRuntimeAI {
     });
   }
 
-  async createVideo(payload: CreateVideoPayload): Promise<CreateVideoResponse> {
-    return createGoogleVideo(
-      this.client,
-      this.provider,
-      withMappedModelId(payload, this.modelIdMappingOptions),
-    );
+  async createVideo(payload: CreateVideoPayload): Promise<CreateVideoResult> {
+    const requestPayload = withMappedModelId(payload, this.modelIdMappingOptions);
+
+    if (this.isVertexAi && isGeminiOmniVideoModel(requestPayload.model)) {
+      throw AgentRuntimeError.createVideo({
+        error: {
+          message: 'Gemini Omni Flash is only supported by the Gemini Developer API',
+        },
+        errorType: AgentRuntimeErrorType.ProviderBizError,
+        provider: this.provider,
+      });
+    }
+
+    return createGoogleVideo(this.client, this.provider, requestPayload);
+  }
+
+  getVideoGenerationCapabilities(model: string): VideoGenerationCapabilities {
+    const requestModel = resolveMappedModelId(model, this.modelIdMappingOptions);
+
+    if (isGeminiOmniVideoModel(requestModel)) {
+      return { completionModes: ['polling', 'webhook'] };
+    }
+
+    return {
+      completionModes: ['polling'],
+    };
   }
 
   /**
@@ -330,11 +386,18 @@ export class LobeGoogleAI implements LobeRuntimeAI {
    */
   async transcribe(payload: ASRPayload, options?: ASROptions): Promise<ASRResponse> {
     try {
-      return await createGoogleTranscription(
+      const { text, usageMetadata } = await createGoogleTranscription(
         this.client,
         withMappedModelId(payload, this.modelIdMappingOptions),
         options,
       );
+
+      if (options?.onUsage && usageMetadata) {
+        const pricing = await getModelPricing(payload.model, this.provider, options.pricingContext);
+        await options.onUsage(convertGoogleAIUsage(usageMetadata, pricing));
+      }
+
+      return { text };
     } catch (e) {
       const err = e as Error;
 
@@ -354,8 +417,25 @@ export class LobeGoogleAI implements LobeRuntimeAI {
     }
   }
 
+  /**
+   * Text-to-speech with Gemini TTS models (`responseModalities: AUDIO`). Gemini returns
+   * 16-bit PCM, which is encoded to the requested `mp3` / `wav` / `pcm` output.
+   * @see https://ai.google.dev/gemini-api/docs/speech-generation
+   */
+  textToSpeech(payload: TextToSpeechPayload, options?: TextToSpeechOptions) {
+    return createGeminiSpeech(this.client, payload, {
+      ...options,
+      ...this.modelIdMappingOptions,
+      provider: this.provider,
+    });
+  }
+
   async handlePollVideoStatus(inferenceId: string) {
     return pollGoogleVideoOperation(this.client, inferenceId, this.provider, this.apiKey!);
+  }
+
+  async handleCreateVideoWebhook(payload: Parameters<typeof handleGoogleVideoWebhook>[0]) {
+    return handleGoogleVideoWebhook(payload);
   }
 
   /**

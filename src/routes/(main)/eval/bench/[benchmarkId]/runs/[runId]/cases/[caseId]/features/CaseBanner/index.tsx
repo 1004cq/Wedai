@@ -2,8 +2,7 @@
 
 import type { EvalRunTopicResult } from '@lobechat/types';
 import { formatCost, formatShortenNumber } from '@lobechat/utils';
-import { ActionIcon, Flexbox, Text } from '@lobehub/ui';
-import { createStaticStyles, cssVar } from 'antd-style';
+import { ActionIcon, createStaticStyles, cssVar, Flexbox, Text } from '@lobehub/ui';
 import {
   ArrowLeft,
   ChevronLeft,
@@ -15,6 +14,8 @@ import {
 } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
+
+import { densityVars } from '@/styles/densityVars';
 
 const styles = createStaticStyles(({ css }) => ({
   backLink: css`
@@ -42,8 +43,8 @@ const styles = createStaticStyles(({ css }) => ({
     }
   `,
   header: css`
-    padding-block: 16px;
-    padding-inline: 16px;
+    padding-block: ${densityVars.cardPadding};
+    padding-inline: ${densityVars.cardPadding};
     border-block-end: 1px solid ${cssVar.colorBorderSecondary};
   `,
   metricCard: css`

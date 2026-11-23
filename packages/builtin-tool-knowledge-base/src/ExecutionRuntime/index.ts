@@ -1,4 +1,10 @@
-import { formatSearchResults, promptFileContents, promptNoSearchResults } from '@lobechat/prompts';
+import {
+  formatSearchResults,
+  promptFileContents,
+  promptNoKnowledgeBaseInScope,
+  promptNoSearchResults,
+} from '@lobechat/prompts';
+import { sliceReadWindow } from '@lobechat/prompts/textWindow';
 import type { BuiltinServerRuntimeOutput } from '@lobechat/types';
 
 import type {
@@ -22,6 +28,8 @@ import type {
   RemoveFilesArgs,
   SearchKnowledgeBaseArgs,
   SearchKnowledgeBaseState,
+  UpdateDocumentArgs,
+  UpdateDocumentState,
   ViewKnowledgeBaseArgs,
   ViewKnowledgeBaseState,
 } from '../types';
@@ -31,6 +39,8 @@ interface FileContentResult {
   error?: string;
   fileId: string;
   filename: string;
+  /** Original character count when the stored text was cut at parse time. */
+  originalCharCount?: number;
   preview?: string;
   totalCharCount?: number;
   totalLineCount?: number;
@@ -69,6 +79,28 @@ interface DocumentResult {
   id: string;
 }
 
+interface DocumentDetailResult {
+  fileType: string;
+  id: string;
+  knowledgeBaseId?: string | null;
+  parentId?: string | null;
+  /** `file` = parsed upload, `web` = crawled page; both are derived text, not editable notes. */
+  sourceType?: string | null;
+  title?: string | null;
+}
+
+/** The only document type this tool edits: notes written as text, not parsed uploads. */
+const EDITABLE_DOCUMENT_FILE_TYPE = 'custom/document';
+
+/**
+ * Parsed uploads are stored as `custom/document` too, so the file type alone
+ * cannot tell them from notes; their source type can.
+ */
+const DERIVED_DOCUMENT_SOURCE_TYPES = new Set(['file', 'web']);
+
+/** Upper bound on the ancestor walk; deeper (or already looping) trees are refused. */
+const MAX_PARENT_DEPTH = 64;
+
 interface RagService {
   getFileContents: (fileIds: string[], signal?: AbortSignal) => Promise<FileContentResult[]>;
   semanticSearchForChat: (
@@ -79,6 +111,12 @@ interface RagService {
     documents?: any[];
     errors?: { bm25?: string; vector?: string };
     fileResults: any[];
+    /**
+     * Knowledge base IDs the search actually covered, when the service
+     * resolves the scope itself (server runtime: agent + task project KBs).
+     * An empty array means there was nothing to search.
+     */
+    searchedKnowledgeBaseIds?: string[];
   }>;
 }
 
@@ -103,6 +141,15 @@ interface DocumentService {
     knowledgeBaseId?: string;
     parentId?: string;
     title: string;
+  }) => Promise<DocumentResult>;
+  /** Resolves only documents the caller can access; `undefined` otherwise. */
+  getDocumentById: (id: string) => Promise<DocumentDetailResult | undefined>;
+  /** Fields left `undefined` must stay unchanged. */
+  updateDocument: (params: {
+    content?: string;
+    id: string;
+    parentId?: string;
+    title?: string;
   }) => Promise<DocumentResult>;
 }
 
@@ -269,10 +316,35 @@ export class KnowledgeBaseExecutionRuntime {
     try {
       const { query, topK = 20 } = args;
 
+      const noScopeOutput = (): BuiltinServerRuntimeOutput => ({
+        content: promptNoKnowledgeBaseInScope(query),
+        state: {
+          chunks: [],
+          documents: [],
+          fileResults: [],
+          scope: 'none',
+          totalResults: 0,
+        } satisfies SearchKnowledgeBaseState,
+        success: true,
+      });
+
+      // Caller already resolved the scope (client: the agent's enabled KBs)
+      // and it is empty — there is nothing to search, and reporting "no
+      // relevant files" would make the model believe the content is missing.
+      if (options?.knowledgeBaseIds && options.knowledgeBaseIds.length === 0) {
+        return noScopeOutput();
+      }
+
       const result = await this.ragService.semanticSearchForChat(
         { knowledgeIds: options?.knowledgeBaseIds, query, topK },
         options?.signal,
       );
+
+      // Service resolved the scope itself (server runtime) and found none.
+      if (result.searchedKnowledgeBaseIds && result.searchedKnowledgeBaseIds.length === 0) {
+        return noScopeOutput();
+      }
+
       const chunks = result.chunks ?? [];
       const fileResults = result.fileResults ?? [];
       const documents = result.documents ?? [];
@@ -320,23 +392,54 @@ export class KnowledgeBaseExecutionRuntime {
     options?: { signal?: AbortSignal },
   ): Promise<BuiltinServerRuntimeOutput> {
     try {
-      const { fileIds } = args;
+      const { fileIds, limit, offset } = args;
 
       if (!fileIds || fileIds.length === 0) {
         return { content: 'Error: No file IDs provided', success: false };
       }
 
       const fileContents = await this.ragService.getFileContents(fileIds, options?.signal);
-      const formattedContent = promptFileContents(fileContents);
+
+      // Return one bounded window per file rather than the whole document: a
+      // whole-file read is the single largest context item in KB conversations
+      // and is what pushes tool results past the archive threshold.
+      const windows = fileContents.map((file) => {
+        if (file.error) return { file, window: undefined };
+        return { file, window: sliceReadWindow(file.content, { limit, offset }) };
+      });
+
+      const formattedContent = promptFileContents(
+        windows.map(({ file, window }) =>
+          window
+            ? {
+                content: window.content,
+                fileId: file.fileId,
+                filename: file.filename,
+                originalChars: file.originalCharCount,
+                range: window,
+              }
+            : {
+                content: file.content,
+                error: file.error,
+                fileId: file.fileId,
+                filename: file.filename,
+              },
+        ),
+      );
 
       const state: ReadKnowledgeState = {
-        files: fileContents.map((file) => ({
+        files: windows.map(({ file, window }) => ({
+          endLine: window?.endLine,
           error: file.error,
           fileId: file.fileId,
           filename: file.filename,
-          preview: file.preview,
-          totalCharCount: file.totalCharCount,
-          totalLineCount: file.totalLineCount,
+          // Preview what this window actually returned, so a paged read shows
+          // its own first lines on the card instead of the file head.
+          preview: window ? window.content.split('\n').slice(0, 5).join('\n') : file.preview,
+          startLine: window?.startLine,
+          totalCharCount: file.totalCharCount ?? window?.totalChars,
+          totalLineCount: file.totalLineCount ?? window?.totalLines,
+          truncated: window?.truncated,
         })),
       };
 
@@ -432,6 +535,136 @@ export class KnowledgeBaseExecutionRuntime {
     } catch (e) {
       return {
         content: `Error creating document: ${(e as Error).message}`,
+        error: e,
+        success: false,
+      };
+    }
+  }
+
+  async updateDocument(args: UpdateDocumentArgs): Promise<BuiltinServerRuntimeOutput> {
+    try {
+      if (!this.documentService) {
+        return { content: 'Document service is not available.', success: false };
+      }
+      // The knowledge base check below is part of the access guard; never skip it.
+      if (!this.knowledgeBaseService) {
+        return { content: 'Knowledge base service is not available.', success: false };
+      }
+
+      const documentId = args.documentId?.trim();
+      if (!documentId) {
+        return { content: 'Error: documentId is required.', success: false };
+      }
+
+      // Models often fill optional fields with "" — that means "leave unchanged",
+      // never "erase the body" or "rename to nothing".
+      const content = args.content || undefined;
+      const title = args.title?.trim() ? args.title.trim() : undefined;
+      const parentId = args.parentId?.trim() || undefined;
+
+      if (content === undefined && title === undefined && parentId === undefined) {
+        return {
+          content: 'Error: Nothing to update. Provide at least one of title, content or parentId.',
+          success: false,
+        };
+      }
+
+      const document = await this.documentService.getDocumentById(documentId);
+      if (!document) {
+        return {
+          content: `Document "${documentId}" not found, or you do not have access to it.`,
+          success: false,
+        };
+      }
+
+      if (!document.knowledgeBaseId) {
+        return {
+          content: `Document "${documentId}" is not in a knowledge base, so it cannot be edited with this tool.`,
+          success: false,
+        };
+      }
+
+      if (
+        document.fileType !== EDITABLE_DOCUMENT_FILE_TYPE ||
+        DERIVED_DOCUMENT_SOURCE_TYPES.has(document.sourceType ?? '')
+      ) {
+        return {
+          content: `Document "${documentId}" is an uploaded file or imported web page, not a note, so it cannot be edited. Only documents created as notes (createDocument) can be edited; create a new document instead if needed.`,
+          success: false,
+        };
+      }
+
+      const knowledgeBase = await this.knowledgeBaseService.getKnowledgeBaseById(
+        document.knowledgeBaseId,
+      );
+      if (!knowledgeBase) {
+        return {
+          content: `Document "${documentId}" belongs to a knowledge base you do not have access to.`,
+          success: false,
+        };
+      }
+
+      if (parentId) {
+        if (parentId === documentId) {
+          return { content: 'Error: A document cannot be moved under itself.', success: false };
+        }
+        const parent = await this.documentService.getDocumentById(parentId);
+        if (!parent || parent.knowledgeBaseId !== document.knowledgeBaseId) {
+          return {
+            content: `Parent "${parentId}" not found in knowledge base \`${document.knowledgeBaseId}\`. The new parent must be a folder or document in the same knowledge base.`,
+            success: false,
+          };
+        }
+
+        // Neither the shared write flow nor the model checks ancestry, so a move
+        // under one of the document's own descendants would persist a loop: both
+        // drop out of the tree and subtree walks never terminate.
+        let ancestorId = parent.parentId ?? undefined;
+        let depth = 0;
+        while (ancestorId) {
+          if (ancestorId === documentId) {
+            return {
+              content: `Error: "${parentId}" is inside document "${documentId}", so the document cannot be moved under it.`,
+              success: false,
+            };
+          }
+          if (++depth > MAX_PARENT_DEPTH) {
+            return {
+              content: `Error: Could not verify where "${parentId}" sits in the knowledge base (nesting is too deep), so the document was not moved.`,
+              success: false,
+            };
+          }
+          const ancestor = await this.documentService.getDocumentById(ancestorId);
+          ancestorId = ancestor?.parentId ?? undefined;
+        }
+      }
+
+      const result = await this.documentService.updateDocument({
+        content,
+        id: documentId,
+        parentId,
+        title,
+      });
+
+      if (!result?.id) {
+        return { content: 'Error: Failed to update document.', success: false };
+      }
+
+      const changes: string[] = [];
+      if (content !== undefined) changes.push(`content replaced (${content.length} characters)`);
+      if (title !== undefined) changes.push(`renamed to "${title}"`);
+      if (parentId !== undefined) changes.push(`moved under \`${parentId}\``);
+
+      const state: UpdateDocumentState = { id: result.id };
+
+      return {
+        content: `Document "${title ?? document.title ?? documentId}" (\`${result.id}\`) updated: ${changes.join('; ')}.`,
+        state,
+        success: true,
+      };
+    } catch (e) {
+      return {
+        content: `Error updating document: ${(e as Error).message}`,
         error: e,
         success: false,
       };

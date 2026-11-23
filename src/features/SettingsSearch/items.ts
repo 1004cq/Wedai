@@ -1,16 +1,27 @@
+import { LAB_FEATURES } from '@/features/Settings/labs/features';
 import { SettingsTabs } from '@/store/global/initialState';
+import type { WorkspaceSettingsTabs } from '@/types/workspaceSettings';
+
+/**
+ * Tab key the search indexes by. Personal tabs and the workspace-only tabs
+ * share one namespace: tabs whose page is the same on both surfaces use the
+ * personal key (the workspace sidebar maps e.g. `statistics` → `stats`).
+ */
+export type SettingsSearchTab = SettingsTabs | WorkspaceSettingsTabs;
 
 export interface SettingsSearchContext {
   disableEmailPassword: boolean;
   enableBusinessFeatures: boolean;
+  enableChannels: boolean;
   enableComposio: boolean;
   enableGatewayMode: boolean;
-  enableSTT: boolean;
   /** Whether the signed-in user has an email on their profile */
   hasEmail: boolean;
   hideDocs: boolean;
   isDesktop: boolean;
   isLogin: boolean;
+  /** Whether this is the mobile SPA (touch keyboards have no send-key choice) */
+  isMobile: boolean;
   /** Whether the app is running on Windows (for Windows-only settings) */
   isWindows: boolean;
   showAiImage: boolean;
@@ -30,7 +41,7 @@ export interface SettingsSearchItem {
   labelKey: string;
   /** i18n namespace of `labelKey` / `descKey`, defaults to `setting` */
   ns?: 'auth' | 'electron' | 'labs' | 'setting' | 'spend' | 'subscription';
-  tab: SettingsTabs;
+  tab: SettingsSearchTab;
   /**
    * Extra visibility gate mirroring the target item's own render condition
    * (tab visibility is already handled via useCategory). Defaults to visible.
@@ -46,10 +57,13 @@ export interface SettingsSearchItem {
  * technical terms — it must always stay searchable; localized keywords enrich
  * on top of this floor.
  */
-export const TAB_SEARCH_EN_KEYWORDS: Partial<Record<SettingsTabs, string[]>> = {
+// Keyed by `SettingsSearchTab` values. Typed as `string`: the two tab enums
+// share values ('about', 'skill', …), which TypeScript rejects as record keys.
+export const TAB_SEARCH_EN_KEYWORDS: Partial<Record<string, string[]>> = {
   [SettingsTabs.About]: ['about', 'version', 'changelog', 'feedback', 'help'],
   [SettingsTabs.Advanced]: ['advanced', 'developer', 'diagnostics'],
-  [SettingsTabs.APIKey]: ['api key', 'apikey', 'token', 'secret'],
+  [SettingsTabs.APIKey]: ['api', 'api key', 'apikey', 'token', 'secret', 'personal key'],
+  [SettingsTabs.Labels]: ['label', 'labels', 'tag', 'tags', 'group', 'grouping'],
   [SettingsTabs.Appearance]: [
     'appearance',
     'theme',
@@ -58,17 +72,69 @@ export const TAB_SEARCH_EN_KEYWORDS: Partial<Record<SettingsTabs, string[]>> = {
     'font',
     'language',
     'color',
+    'background',
   ],
   [SettingsTabs.Billing]: ['billing', 'payment', 'invoice', 'card', 'transaction'],
-  [SettingsTabs.Connector]: ['connectors', 'integrations', 'mcp', 'oauth'],
+  [SettingsTabs.Conversation]: [
+    'conversation',
+    'chat',
+    'chat preferences',
+    'reply language',
+    'send key',
+    'voice message',
+    'follow up',
+    'follow-up suggestions',
+    'input suggestions',
+    'input completion',
+    'autocomplete',
+    'font size',
+    'code theme',
+    'mermaid',
+  ],
+  [SettingsTabs.Automations]: [
+    'automations',
+    'events',
+    'event subscriptions',
+    'subscriptions',
+    'triggers',
+  ],
+  [SettingsTabs.Webhooks]: ['webhooks', 'webhook url', 'callback', 'http trigger'],
   [SettingsTabs.Credits]: ['credits', 'balance', 'top up', 'recharge', 'buy credits'],
   [SettingsTabs.Creds]: ['credentials', 'secrets', 'oauth'],
   [SettingsTabs.Devices]: ['devices', 'sessions', 'logged in devices'],
   [SettingsTabs.Hotkey]: ['hotkey', 'shortcut', 'keyboard'],
   [SettingsTabs.Labs]: ['labs', 'experiment', 'beta', 'preview', 'developer'],
   [SettingsTabs.Memory]: ['memory', 'memories', 'personalization'],
-  [SettingsTabs.Messenger]: ['messenger', 'chat platform', 'bot'],
-  [SettingsTabs.Notification]: ['notification', 'email', 'push', 'alerts'],
+  [SettingsTabs.SubscriptionAccounts]: [
+    'subscription accounts',
+    'claude code',
+    'codex',
+    'kimi code',
+    'quota',
+    'load balancing',
+  ],
+  [SettingsTabs.Environments]: [
+    'sandbox',
+    'environments',
+    'credentials',
+    'secrets',
+    'vault',
+    'instances',
+    'setup script',
+    'repository',
+  ],
+  [SettingsTabs.Notification]: [
+    'notification',
+    'email',
+    'push',
+    'alerts',
+    'inbox',
+    'telegram',
+    'slack',
+    'discord',
+    'wechat',
+  ],
+  [SettingsTabs.OAuthApps]: ['oauth', 'oauth apps', 'developer apps'],
   [SettingsTabs.Plans]: ['subscription', 'plan', 'upgrade', 'pricing', 'membership'],
   [SettingsTabs.Profile]: [
     'profile',
@@ -84,29 +150,31 @@ export const TAB_SEARCH_EN_KEYWORDS: Partial<Record<SettingsTabs, string[]>> = {
     'provider',
     'model',
     'llm',
+    'api',
     'api key',
     'apikey',
     'byok',
     'bring your own key',
     'endpoint',
+    'model provider',
+    'language model',
+    'custom provider',
   ],
-  [SettingsTabs.Proxy]: ['proxy', 'network', 'connection'],
+  [SettingsTabs.Proxy]: ['proxy', 'network', 'connection', 'proxy settings'],
   [SettingsTabs.Referral]: ['referral', 'invite', 'rewards', 'bonus'],
   [SettingsTabs.ServiceModel]: [
     'service model',
     'model assignment',
     'topic naming',
     'translation',
-    'tts',
-    'voice',
-    'speech',
     'image',
     'image generation',
     'embedding',
     'prompt rewrite',
     'suggestion',
+    'search',
+    'search model',
   ],
-  [SettingsTabs.Skill]: ['skill', 'skills', 'plugins', 'tools'],
   [SettingsTabs.Stats]: ['analytics', 'statistics', 'stats'],
   [SettingsTabs.Storage]: [
     'storage',
@@ -116,10 +184,21 @@ export const TAB_SEARCH_EN_KEYWORDS: Partial<Record<SettingsTabs, string[]>> = {
     'backup',
     'reset',
     'clear data',
+    'clear storage',
+    'knowledge base',
     'account deletion',
     'delete account',
   ],
-  [SettingsTabs.SystemTools]: ['system tools', 'built-in tools'],
+  [SettingsTabs.Trash]: ['trash', 'recycle bin', 'deleted', 'restore', 'undelete', 'recover'],
+  [SettingsTabs.SystemTools]: [
+    'system tools',
+    'built-in tools',
+    'system',
+    'node',
+    'python',
+    'cli',
+    'environment',
+  ],
   [SettingsTabs.Usage]: ['usage', 'consumption', 'quota', 'spend', 'statistics'],
 };
 
@@ -130,30 +209,34 @@ export const TAB_SEARCH_EN_KEYWORDS: Partial<Record<SettingsTabs, string[]>> = {
  * "积分", and "文件" (files) should hit Storage ("数据存储"). Each locale
  * carries its own synonym set, layered on top of TAB_SEARCH_EN_KEYWORDS.
  */
-export const TAB_SEARCH_KEYWORDS_KEYS: Partial<Record<SettingsTabs, string>> = {
+export const TAB_SEARCH_KEYWORDS_KEYS: Partial<Record<string, string>> = {
   [SettingsTabs.About]: 'settingsSearch.tabKeywords.about',
   [SettingsTabs.Advanced]: 'settingsSearch.tabKeywords.advanced',
   [SettingsTabs.APIKey]: 'settingsSearch.tabKeywords.apikey',
   [SettingsTabs.Appearance]: 'settingsSearch.tabKeywords.appearance',
+  [SettingsTabs.Automations]: 'settingsSearch.tabKeywords.automations',
+  [SettingsTabs.Webhooks]: 'settingsSearch.tabKeywords.webhooks',
   [SettingsTabs.Billing]: 'settingsSearch.tabKeywords.billing',
-  [SettingsTabs.Connector]: 'settingsSearch.tabKeywords.connector',
+  [SettingsTabs.Conversation]: 'settingsSearch.tabKeywords.conversation',
   [SettingsTabs.Credits]: 'settingsSearch.tabKeywords.credits',
   [SettingsTabs.Creds]: 'settingsSearch.tabKeywords.creds',
   [SettingsTabs.Devices]: 'settingsSearch.tabKeywords.devices',
+  [SettingsTabs.Labels]: 'settingsSearch.tabKeywords.labels',
   [SettingsTabs.Hotkey]: 'settingsSearch.tabKeywords.hotkey',
+  [SettingsTabs.Labs]: 'settingsSearch.tabKeywords.labs',
   [SettingsTabs.Memory]: 'settingsSearch.tabKeywords.memory',
-  [SettingsTabs.Messenger]: 'settingsSearch.tabKeywords.messenger',
   [SettingsTabs.Notification]: 'settingsSearch.tabKeywords.notification',
+  [SettingsTabs.OAuthApps]: 'settingsSearch.tabKeywords.oauthApps',
   [SettingsTabs.Plans]: 'settingsSearch.tabKeywords.plans',
   [SettingsTabs.Profile]: 'settingsSearch.tabKeywords.profile',
   [SettingsTabs.Provider]: 'settingsSearch.tabKeywords.provider',
   [SettingsTabs.Proxy]: 'settingsSearch.tabKeywords.proxy',
   [SettingsTabs.Referral]: 'settingsSearch.tabKeywords.referral',
   [SettingsTabs.ServiceModel]: 'settingsSearch.tabKeywords.serviceModel',
-  [SettingsTabs.Skill]: 'settingsSearch.tabKeywords.skill',
   [SettingsTabs.Stats]: 'settingsSearch.tabKeywords.stats',
   [SettingsTabs.Storage]: 'settingsSearch.tabKeywords.storage',
   [SettingsTabs.SystemTools]: 'settingsSearch.tabKeywords.systemTools',
+  [SettingsTabs.Trash]: 'settingsSearch.tabKeywords.trash',
   [SettingsTabs.Usage]: 'settingsSearch.tabKeywords.usage',
 };
 
@@ -258,17 +341,10 @@ export const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
     tab: SettingsTabs.Appearance,
   },
   {
-    anchor: 'appearance-context-menu',
-    descKey: 'settingAppearance.contextMenuMode.desc',
-    keywords: ['context menu', 'right click'],
-    labelKey: 'settingAppearance.contextMenuMode.title',
-    tab: SettingsTabs.Appearance,
-  },
-  {
-    anchor: 'appearance-response-language',
-    descKey: 'settingCommon.responseLanguage.desc',
-    keywords: ['response language', 'reply'],
-    labelKey: 'settingCommon.responseLanguage.title',
+    anchor: 'appearance-density',
+    descKey: 'settingAppearance.density.desc',
+    keywords: ['density', 'compact', 'loose', 'spacing', 'row height', 'sidebar'],
+    labelKey: 'settingAppearance.density.title',
     tab: SettingsTabs.Appearance,
   },
   {
@@ -284,13 +360,6 @@ export const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
     tab: SettingsTabs.Appearance,
   },
   {
-    anchor: 'appearance-font-size',
-    descKey: 'settingChatAppearance.fontSize.desc',
-    keywords: ['font', 'size', 'text'],
-    labelKey: 'settingChatAppearance.fontSize.title',
-    tab: SettingsTabs.Appearance,
-  },
-  {
     anchor: 'appearance-app-tray',
     keywords: ['tray', 'menu bar', 'menubar'],
     labelKey: 'settingAppearance.appTray.title',
@@ -298,12 +367,178 @@ export const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
     visible: (ctx) => ctx.isDesktop,
   },
   {
-    anchor: 'appearance-terminal-font',
-    descKey: 'settingAppearance.terminal.fontFamily.desc',
-    keywords: ['terminal font', 'monospace', 'font family'],
-    labelKey: 'settingAppearance.terminal.fontFamily.title',
+    anchor: 'advanced-diagnostics',
+    descKey: 'settingAbout.diagnostics.bundle.desc',
+    keywords: ['diagnostics', 'export', 'logs', 'report', 'bug', 'feedback', 'zip'],
+    labelKey: 'settingAbout.diagnostics.bundle.title',
+    tab: SettingsTabs.Advanced,
+    visible: (ctx) => ctx.isDesktop,
+  },
+  {
+    anchor: 'advanced-debug-logs',
+    descKey: 'settingAbout.debugLogs.desc',
+    keywords: ['debug', 'logs', 'log level', 'diagnostics', 'troubleshoot'],
+    labelKey: 'settingAbout.debugLogs.title',
+    tab: SettingsTabs.Advanced,
+    visible: (ctx) => ctx.isDesktop,
+  },
+  {
+    anchor: 'advanced-remote-debugging',
+    descKey: 'settingAbout.remoteDebugging.desc',
+    keywords: ['remote debugging', 'cdp', 'devtools', 'diagnostics', 'debug port'],
+    labelKey: 'settingAbout.remoteDebugging.title',
+    tab: SettingsTabs.Advanced,
+    visible: (ctx) => ctx.isDesktop,
+  },
+  {
+    anchor: 'appearance-font-family',
+    descKey: 'settingAppearance.font.fontFamily.desc',
+    keywords: ['font', 'font family', 'typeface', 'interface font'],
+    labelKey: 'settingAppearance.font.fontFamily.title',
     tab: SettingsTabs.Appearance,
     visible: (ctx) => ctx.isDesktop,
+  },
+  {
+    anchor: 'appearance-font-fallback',
+    descKey: 'settingAppearance.font.fallback.desc',
+    keywords: ['fallback font', 'font stack', 'cjk font', 'chinese font', 'font family'],
+    labelKey: 'settingAppearance.font.fallback.title',
+    tab: SettingsTabs.Appearance,
+    visible: (ctx) => ctx.isDesktop,
+  },
+  {
+    anchor: 'appearance-monospace-font',
+    descKey: 'settingAppearance.font.monospace.desc',
+    keywords: ['terminal font', 'monospace', 'code font', 'font family'],
+    labelKey: 'settingAppearance.font.monospace.title',
+    tab: SettingsTabs.Appearance,
+    visible: (ctx) => ctx.isDesktop,
+  },
+  {
+    anchor: 'appearance-monospace-font-fallback',
+    descKey: 'settingAppearance.font.monospaceFallback.desc',
+    keywords: ['fallback font', 'monospace', 'code font', 'terminal font'],
+    labelKey: 'settingAppearance.font.monospaceFallback.title',
+    tab: SettingsTabs.Appearance,
+    visible: (ctx) => ctx.isDesktop,
+  },
+  {
+    anchor: 'appearance-font-antialiasing',
+    descKey: 'settingAppearance.font.antialiasing.desc',
+    keywords: ['font', 'antialiasing', 'smoothing', 'text', 'rendering'],
+    labelKey: 'settingAppearance.font.antialiasing.title',
+    tab: SettingsTabs.Appearance,
+  },
+  // Conversation
+  {
+    anchor: 'conversation-response-language',
+    descKey: 'settingCommon.responseLanguage.desc',
+    keywords: ['response language', 'reply', 'language'],
+    labelKey: 'settingCommon.responseLanguage.title',
+    tab: SettingsTabs.Conversation,
+  },
+  {
+    anchor: 'conversation-auto-scroll',
+    descKey: 'settingChatAppearance.autoScrollOnStreaming.desc',
+    keywords: ['auto scroll', 'scroll', 'streaming'],
+    labelKey: 'settingChatAppearance.autoScrollOnStreaming.title',
+    tab: SettingsTabs.Conversation,
+  },
+  {
+    anchor: 'conversation-workflow-expand',
+    keywords: ['tool calls', 'workflow', 'expand', 'steps', 'streaming'],
+    labelKey: 'settingChatAppearance.workflowStreamingExpand.title',
+    tab: SettingsTabs.Conversation,
+  },
+  {
+    anchor: 'conversation-image-read-preview',
+    descKey: 'settingChatAppearance.showImageReadPreview.desc',
+    keywords: ['image', 'preview', 'tool calls'],
+    labelKey: 'settingChatAppearance.showImageReadPreview.title',
+    tab: SettingsTabs.Conversation,
+  },
+  {
+    anchor: 'conversation-followUpAction',
+    descKey: 'systemAgent.followUpAction.modelDesc',
+    keywords: ['follow up', 'suggestion', 'chips'],
+    labelKey: 'systemAgent.followUpAction.title',
+    tab: SettingsTabs.Conversation,
+  },
+  {
+    anchor: 'conversation-inputCompletion',
+    descKey: 'systemAgent.inputCompletion.modelDesc',
+    keywords: ['input completion', 'autocomplete', 'suggestion'],
+    labelKey: 'systemAgent.inputCompletion.title',
+    tab: SettingsTabs.Conversation,
+  },
+  {
+    anchor: 'conversation-send-key',
+    descKey: 'hotkey.sendMessage.desc',
+    keywords: [
+      'send key',
+      'send',
+      'enter',
+      'cmd enter',
+      'ctrl enter',
+      'newline',
+      'line break',
+      'shortcut',
+    ],
+    labelKey: 'hotkey.sendMessage.title',
+    tab: SettingsTabs.Conversation,
+    visible: (ctx) => !ctx.isMobile,
+  },
+  {
+    anchor: 'conversation-paste-auto-convert',
+    descKey: 'settingChatAppearance.pasteAutoConvert.desc',
+    keywords: ['paste', 'markdown', 'rich text', 'format'],
+    labelKey: 'settingChatAppearance.pasteAutoConvert.title',
+    tab: SettingsTabs.Conversation,
+  },
+  {
+    anchor: 'conversation-voice-message',
+    descKey: 'settingConversation.voiceMessage.desc',
+    keywords: ['voice message', 'voice', 'audio', 'microphone', 'record', 'speech'],
+    labelKey: 'settingConversation.voiceMessage.title',
+    tab: SettingsTabs.Conversation,
+  },
+  {
+    anchor: 'conversation-font-size',
+    descKey: 'settingChatAppearance.fontSize.desc',
+    keywords: ['font', 'size', 'text'],
+    labelKey: 'settingChatAppearance.fontSize.title',
+    tab: SettingsTabs.Conversation,
+  },
+  {
+    anchor: 'conversation-link-icon',
+    keywords: ['link', 'favicon', 'icon'],
+    labelKey: 'settingChatAppearance.linkIcon.title',
+    tab: SettingsTabs.Conversation,
+  },
+  {
+    anchor: 'conversation-message-usage',
+    descKey: 'settingChatAppearance.showMessageUsage.desc',
+    keywords: ['token', 'usage', 'model', 'cost', 'developer', 'advanced tools'],
+    labelKey: 'settingChatAppearance.showMessageUsage.title',
+    tab: SettingsTabs.Conversation,
+  },
+  {
+    anchor: 'conversation-transition',
+    keywords: ['transition', 'animation', 'fade', 'streaming'],
+    labelKey: 'settingChatAppearance.transitionMode.title',
+    tab: SettingsTabs.Conversation,
+  },
+  {
+    anchor: 'conversation-highlighter-theme',
+    keywords: ['code', 'highlight', 'syntax', 'theme'],
+    labelKey: 'settingChatAppearance.highlighterTheme.title',
+    tab: SettingsTabs.Conversation,
+  },
+  {
+    anchor: 'conversation-mermaid-theme',
+    keywords: ['mermaid', 'diagram', 'chart', 'theme'],
+    labelKey: 'settingChatAppearance.mermaidTheme.title',
+    tab: SettingsTabs.Conversation,
   },
   // System Tools
   {
@@ -327,13 +562,6 @@ export const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
   },
   // Advanced
   {
-    anchor: 'advanced-dev-mode',
-    descKey: 'settingCommon.devMode.desc',
-    keywords: ['developer', 'debug', 'dev mode'],
-    labelKey: 'settingCommon.devMode.title',
-    tab: SettingsTabs.Advanced,
-  },
-  {
     anchor: 'advanced-gateway-mode',
     descKey: 'tab.advanced.gatewayMode.desc',
     keywords: ['gateway', 'agent runtime'],
@@ -341,39 +569,82 @@ export const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
     tab: SettingsTabs.Advanced,
     visible: (ctx) => ctx.enableGatewayMode,
   },
+  // About
   {
-    anchor: 'advanced-update-channel',
+    anchor: 'about-update-channel',
     descKey: 'tab.advanced.updateChannel.desc',
     keywords: ['update', 'version', 'canary', 'stable'],
     labelKey: 'tab.advanced.updateChannel.title',
-    tab: SettingsTabs.Advanced,
+    tab: SettingsTabs.About,
     visible: (ctx) => ctx.isDesktop,
   },
+  // Labs — derived from the LAB_FEATURES catalog the page renders, so a new
+  // lab flag becomes searchable without a second registration. Anchors use
+  // `labs-${flag}`, matching the SettingsSearchAnchor wrap on each toggle.
+  ...LAB_FEATURES.map(
+    ({ desktopOnly, flag, i18nKey, searchKeywords, workspaceOnly }): SettingsSearchItem => ({
+      anchor: `labs-${flag}`,
+      descKey: `features.${i18nKey}.desc`,
+      keywords: searchKeywords,
+      labelKey: `features.${i18nKey}.title`,
+      ns: 'labs',
+      tab: SettingsTabs.Labs,
+      ...(desktopOnly ? { visible: (ctx: SettingsSearchContext) => ctx.isDesktop } : {}),
+      ...(workspaceOnly
+        ? { visible: (ctx: SettingsSearchContext) => ctx.enableBusinessFeatures }
+        : {}),
+    }),
+  ),
   // Service Model
   {
     anchor: 'service-model-assignments',
-    keywords: ['model assignment', 'topic naming', 'translation', 'default model'],
-    labelKey: 'serviceModel.modelAssignments.title',
+    descKey: 'serviceModel.desc',
+    keywords: ['main model', 'flash model', 'embedding', 'default model', 'system recommended'],
+    labelKey: 'serviceModel.tier.main.title',
     tab: SettingsTabs.ServiceModel,
   },
   {
-    anchor: 'service-model-memory',
-    keywords: ['memory', 'embedding', 'vector'],
-    labelKey: 'serviceModel.memoryModels.title',
+    // Follow-up / input completion stay out of the keywords: they live on
+    // Conversation, not here.
+    anchor: 'service-model-advanced',
+    keywords: [
+      'model assignment',
+      'topic naming',
+      'translation',
+      'memory',
+      'prompt rewrite',
+      'history compress',
+    ],
+    labelKey: 'serviceModel.advanced.title',
     tab: SettingsTabs.ServiceModel,
   },
   {
-    anchor: 'service-model-optional-features',
-    keywords: ['follow up', 'input completion', 'prompt rewrite', 'suggestion'],
-    labelKey: 'serviceModel.optionalFeatures.title',
+    anchor: 'service-model-verify',
+    descKey: 'serviceModel.tier.verify.desc',
+    keywords: ['acceptance', 'verify', 'verifier', 'vision', 'multimodal'],
+    labelKey: 'serviceModel.tier.verify.title',
     tab: SettingsTabs.ServiceModel,
   },
   {
-    anchor: 'service-model-tts',
-    keywords: ['tts', 'voice', 'speech', 'text to speech'],
-    labelKey: 'settingTTS.openai.ttsModel',
+    anchor: 'service-model-fileEmbedding',
+    descKey: 'systemAgent.fileEmbedding.modelDesc',
+    keywords: ['embedding', 'file', 'knowledge base', 'vector', 'DEFAULT_FILES_CONFIG'],
+    labelKey: 'systemAgent.fileEmbedding.title',
     tab: SettingsTabs.ServiceModel,
-    visible: (ctx) => ctx.enableSTT,
+  },
+  {
+    anchor: 'service-model-asr',
+    keywords: ['voice', 'transcription', 'speech to text'],
+    labelKey: 'systemAgent.asr.title',
+    tab: SettingsTabs.ServiceModel,
+  },
+  {
+    anchor: 'service-model-channelRouting',
+    descKey: 'systemAgent.channelRouting.modelDesc',
+    keywords: ['channel', 'decision', 'Jev', '频道', '决策', '回复'],
+    labelKey: 'systemAgent.channelRouting.title',
+    tab: SettingsTabs.ServiceModel,
+    visible: (ctx) => ctx.enableChannels,
   },
   {
     anchor: 'service-model-image',
@@ -466,6 +737,13 @@ export const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
     tab: SettingsTabs.Hotkey,
     visible: (ctx) => ctx.isDesktop,
   },
+  {
+    anchor: 'hotkey-app-menu',
+    keywords: ['shortcut', 'keyboard', 'menu', 'new agent', 'new topic', 'zoom'],
+    labelKey: 'hotkey.group.appMenu',
+    tab: SettingsTabs.Hotkey,
+    visible: (ctx) => ctx.isDesktop,
+  },
   // Business pages below are rendered by business slots (cloud implementation);
   // their tabs only appear when the business build provides them, so tab
   // visibility via useCategory is the effective gate — no per-item gate needed.
@@ -491,20 +769,20 @@ export const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
     ns: 'subscription',
     tab: SettingsTabs.Billing,
   },
-  // Credits
+  // Usage and balance (balance anchors keep their `credits-` ids for old links)
   {
     anchor: 'credits-balance',
     keywords: ['balance', 'credits'],
     labelKey: 'balance.title',
     ns: 'subscription',
-    tab: SettingsTabs.Credits,
+    tab: SettingsTabs.Usage,
   },
   {
     anchor: 'credits-top-up',
     keywords: ['top up', 'topup', 'buy credits', 'recharge'],
     labelKey: 'credits.topUp.title',
     ns: 'subscription',
-    tab: SettingsTabs.Credits,
+    tab: SettingsTabs.Usage,
   },
   {
     anchor: 'credits-cost-estimate-hint',
@@ -512,7 +790,7 @@ export const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
     keywords: ['cost estimate'],
     labelKey: 'credits.costEstimateHint.title',
     ns: 'subscription',
-    tab: SettingsTabs.Credits,
+    tab: SettingsTabs.Usage,
   },
   {
     anchor: 'credits-auto-top-up',
@@ -520,23 +798,16 @@ export const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
     keywords: ['auto top up', 'automatic recharge'],
     labelKey: 'credits.autoTopUp.title',
     ns: 'subscription',
-    tab: SettingsTabs.Credits,
+    tab: SettingsTabs.Usage,
   },
   {
     anchor: 'credits-packages',
     keywords: ['package', 'budget'],
     labelKey: 'credits.packages.title',
     ns: 'subscription',
-    tab: SettingsTabs.Credits,
+    tab: SettingsTabs.Usage,
   },
   // Plans
-  {
-    anchor: 'plans-model-pricing',
-    keywords: ['model pricing', 'price'],
-    labelKey: 'modelPricing.title',
-    ns: 'subscription',
-    tab: SettingsTabs.Plans,
-  },
   {
     anchor: 'plans-qa',
     keywords: ['faq', 'question'],
@@ -599,6 +870,28 @@ export const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
     tab: SettingsTabs.Usage,
   },
   // Notification
+  {
+    anchor: 'notification-completion-sound',
+    descKey: 'completionSound.desc',
+    keywords: ['sound', 'audio', 'OpenPeon', 'completion'],
+    labelKey: 'completionSound.title',
+    tab: SettingsTabs.Notification,
+    visible: (ctx) => ctx.isDesktop,
+  },
+  {
+    anchor: 'notification-banner-sound',
+    descKey: 'completionSound.banner.desc',
+    keywords: ['sound', 'notification', 'banner', 'background'],
+    labelKey: 'completionSound.banner.title',
+    tab: SettingsTabs.Notification,
+    visible: (ctx) => ctx.isDesktop,
+  },
+  {
+    anchor: 'notification-inbox',
+    keywords: ['inbox', 'in-app notification'],
+    labelKey: 'notification.inbox.title',
+    tab: SettingsTabs.Notification,
+  },
   {
     anchor: 'notification-email',
     keywords: ['email'],

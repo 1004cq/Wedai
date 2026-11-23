@@ -10,7 +10,7 @@ import {
   AsyncTaskStatus,
   AsyncTaskType,
 } from '@lobechat/types';
-import { and, eq, inArray, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt, or, sql } from 'drizzle-orm';
 
 import type { AsyncTaskSelectItem, NewAsyncTaskItem } from '../schemas';
 import { asyncTasks } from '../schemas';
@@ -63,12 +63,92 @@ export class AsyncTaskModel {
     });
   };
 
+  /**
+   * Atomically claims the right to finalize a video task (store the asset, charge, notify).
+   *
+   * Webhook retries (the handler answers 503 while the provider file is still processing) and the
+   * background polling fallback can both reach completion for the same task. The claim is a single
+   * compare-and-set UPDATE — still active AND no `completionClaimedAt` yet — so exactly one caller
+   * wins; do not split it into a read followed by a write, or completion may run twice.
+   * @returns `true` when this caller owns the completion, `false` when it was already claimed or finalized
+   */
+  static claimVideoCompletion = async (
+    db: LobeChatDatabase,
+    taskId: string,
+    completionEventId?: string,
+  ) => {
+    const claimedAt = new Date().toISOString();
+    const metadataWithClaim = sql`
+      jsonb_set(
+        COALESCE(${asyncTasks.metadata}, '{}'::jsonb),
+        '{completionClaimedAt}',
+        to_jsonb(${claimedAt}::text),
+        true
+      )
+    `;
+
+    const [claimed] = await db
+      .update(asyncTasks)
+      .set({
+        metadata: completionEventId
+          ? sql`
+              jsonb_set(
+                ${metadataWithClaim},
+                '{completionEventId}',
+                to_jsonb(${completionEventId}::text),
+                true
+              )
+            `
+          : metadataWithClaim,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(asyncTasks.id, taskId),
+          inArray(asyncTasks.status, [AsyncTaskStatus.Pending, AsyncTaskStatus.Processing]),
+          sql`NOT (COALESCE(${asyncTasks.metadata}, '{}'::jsonb) ? 'completionClaimedAt')`,
+        ),
+      )
+      .returning({ id: asyncTasks.id });
+
+    return Boolean(claimed);
+  };
+
   update(taskId: string, value: Partial<AsyncTaskSelectItem>) {
     return this.db
       .update(asyncTasks)
       .set({ ...value, updatedAt: new Date() })
       .where(and(eq(asyncTasks.id, taskId), this.ownership()));
   }
+
+  /**
+   * Move a pending task to processing. Returns false when the task is gone or
+   * another runner already claimed or settled it, so one task runs at most once.
+   */
+  claimPending = async (taskId: string): Promise<boolean> => {
+    const [claimed] = await this.db
+      .update(asyncTasks)
+      .set({ status: AsyncTaskStatus.Processing, updatedAt: new Date() })
+      .where(
+        and(
+          eq(asyncTasks.id, taskId),
+          this.ownership(),
+          eq(asyncTasks.status, AsyncTaskStatus.Pending),
+        ),
+      )
+      .returning({ id: asyncTasks.id });
+
+    return Boolean(claimed);
+  };
+
+  /** All tasks of one type in the current scope, newest first. */
+  findAllByType = async (type: AsyncTaskType): Promise<AsyncTaskSelectItem[]> => {
+    return this.db
+      .select()
+      .from(asyncTasks)
+      .where(and(this.ownership(), eq(asyncTasks.type, type)))
+      .orderBy(desc(asyncTasks.createdAt));
+  };
 
   findActiveByType = async (type: AsyncTaskType) => {
     return this.db.query.asyncTasks.findFirst({
@@ -102,6 +182,11 @@ export class AsyncTaskModel {
             true
           )
         `,
+        // Verified on pg_search 0.15.26: `UPDATE … SET`, SELECT lists and ORDER
+        // BY all survive a null test over an extracted jsonb value; only quals
+        // (WHERE / JOIN ON / HAVING) crash the planner. `async_tasks` carries no
+        // bm25 index either. See the block comment above `TopicModel`.
+        // jsonb-null-test-safe: SET target list, not a qual
         status: sql`
           CASE
             WHEN ${asyncTasks.status} = ${AsyncTaskStatus.Error} OR ${asyncTasks.error} IS NOT NULL

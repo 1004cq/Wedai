@@ -1,3 +1,4 @@
+import { EMPTY_SEARCH_RESULTS_PROMPT } from '@lobechat/prompts';
 import { describe, expect, it, vi } from 'vitest';
 
 import { WebBrowsingExecutionRuntime } from './index';
@@ -67,7 +68,8 @@ describe('WebBrowsingExecutionRuntime', () => {
       const result = await runtime.search({ query: 'test' });
 
       expect(result.success).toBe(true);
-      expect(result.content).toBe('<searchResults />');
+      expect(result.content).toBe(EMPTY_SEARCH_RESULTS_PROMPT);
+      expect(result.content).toContain('do not resend the same query');
     });
 
     it('should return success: false when webSearch throws', async () => {
@@ -81,6 +83,303 @@ describe('WebBrowsingExecutionRuntime', () => {
 
       expect(result.success).toBe(false);
       expect(result.content).toBe('Network error');
+    });
+  });
+
+  describe('crawlMultiPages', () => {
+    it('should keep the failing url and guidance visible for error items', async () => {
+      const mockSearchService = {
+        crawlPages: vi.fn().mockResolvedValue({
+          results: [
+            {
+              crawler: 'naive',
+              data: {
+                content: 'x'.repeat(20),
+                contentType: 'text',
+                title: 'OK page',
+                url: 'https://ok.example.com/',
+              },
+              originalUrl: 'https://ok.example.com/',
+            },
+            {
+              crawler: 'search1api',
+              data: {
+                content:
+                  'Dead link: the server confirmed this page does not exist (HTTP 404). Do not retry this URL.',
+                errorMessage: 'Not Found',
+                errorType: 'PageNotFoundError',
+                retryable: false,
+              },
+              originalUrl: 'https://raw.githubusercontent.com/foo/bar/main/env.release',
+            },
+          ],
+        }),
+        webSearch: vi.fn(),
+      };
+
+      const runtime = new WebBrowsingExecutionRuntime({ searchService: mockSearchService });
+      const result = await runtime.crawlMultiPages({
+        urls: [
+          'https://ok.example.com/',
+          'https://raw.githubusercontent.com/foo/bar/main/env.release',
+        ],
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.content).toContain('<page url="https://ok.example.com/" title="OK page"');
+      expect(result.content).toContain(
+        '<error errorType="PageNotFoundError" errorMessage="Not Found" url="https://raw.githubusercontent.com/foo/bar/main/env.release">Dead link: the server confirmed this page does not exist (HTTP 404). Do not retry this URL.</error>',
+      );
+    });
+  });
+
+  describe('crawlMultiPages', () => {
+    const longPage = Array.from({ length: 5000 }, (_, i) => `paragraph ${i + 1}`).join('\n');
+    const createSearchService = () => ({
+      crawlPages: vi.fn().mockResolvedValue({
+        results: [
+          {
+            data: { content: longPage, title: 'Long', url: 'https://example.com/long' },
+            originalUrl: 'https://example.com/long',
+          },
+        ],
+      }),
+      webSearch: vi.fn(),
+    });
+
+    it('pages a long crawled page through its saved agent document', async () => {
+      const runtime = new WebBrowsingExecutionRuntime({
+        canReadSavedDocuments: true,
+        documentService: {
+          associateDocument: vi.fn().mockResolvedValue({ id: 'agent-doc-1' }),
+          createDocument: vi.fn().mockResolvedValue({ id: 'docs-1' }),
+        },
+        searchService: createSearchService() as any,
+      });
+
+      const result = await runtime.crawlMultiPages({ urls: ['https://example.com/long'] });
+
+      expect(result.content).not.toContain('paragraph 5000');
+      expect(result.content).toMatch(
+        /\[Showing lines 1-\d+ of 5000 lines, \d+ characters\. To continue, call lobe-agent-documents readDocument with id="agent-doc-1", format="markdown" and offset=\d+\.\]/,
+      );
+    });
+
+    it('does not name readDocument when the run cannot call it', async () => {
+      // Chat mode, or a custom tool set with browsing alone, has no lobe-agent-documents.
+      const createDocument = vi.fn().mockResolvedValue({ id: 'docs-1' });
+      const runtime = new WebBrowsingExecutionRuntime({
+        documentService: {
+          associateDocument: vi.fn().mockResolvedValue({ id: 'agent-doc-1' }),
+          createDocument,
+        },
+        searchService: createSearchService() as any,
+      });
+
+      const result = await runtime.crawlMultiPages({ urls: ['https://example.com/long'] });
+
+      expect(createDocument).toHaveBeenCalled();
+      expect(result.content).toMatch(/Lines \d+-5000 were left out\./);
+      expect(result.content).not.toContain('readDocument');
+    });
+
+    it('reports what was left out when the page was not saved', async () => {
+      const runtime = new WebBrowsingExecutionRuntime({
+        searchService: createSearchService() as any,
+      });
+
+      const result = await runtime.crawlMultiPages({ urls: ['https://example.com/long'] });
+
+      expect(result.content).toMatch(/Lines \d+-5000 were left out\./);
+    });
+
+    it('returns an oversized crawl result without saving it as a document', async () => {
+      // A 13 MB JS bundle served from a CDN was snapshotted into a document on the
+      // main thread and kept the event loop busy until the liveness probe killed the pod.
+      const hugeBody = 'const a = 1;\n'.repeat(100_000);
+      const createDocument = vi.fn().mockResolvedValue({ id: 'docs-1' });
+      const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const runtime = new WebBrowsingExecutionRuntime({
+        canReadSavedDocuments: true,
+        documentService: {
+          associateDocument: vi.fn().mockResolvedValue({ id: 'agent-doc-1' }),
+          createDocument,
+        },
+        searchService: {
+          crawlPages: vi.fn().mockResolvedValue({
+            results: [
+              {
+                data: { content: hugeBody, title: 'Bundle', url: 'https://example.com/index.js' },
+                originalUrl: 'https://example.com/index.js',
+              },
+            ],
+          }),
+          webSearch: vi.fn(),
+        } as any,
+      });
+
+      try {
+        const result = await runtime.crawlMultiPages({ urls: ['https://example.com/index.js'] });
+
+        expect(createDocument).not.toHaveBeenCalled();
+        expect(result.success).toBe(true);
+        expect(result.content).toContain('const a = 1;');
+        expect(result.content).toMatch(/Lines \d+-\d+ were left out\./);
+        expect(result.content).not.toContain('readDocument');
+      } finally {
+        consoleWarn.mockRestore();
+      }
+    });
+
+    it('logs a save failure by its driver cause instead of the query parameters', async () => {
+      // Drizzle's "Failed query" wrapper embeds every bound parameter, here the whole
+      // page and its editor JSON; logging it whole wrote about 30 MB to stderr per failure.
+      const queryError = new Error(
+        `Failed query: insert into "documents" ...\nparams: ${'page body '.repeat(10_000)}`,
+        {
+          cause: Object.assign(new Error('unsupported Unicode escape sequence'), { code: '22P05' }),
+        },
+      );
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const runtime = new WebBrowsingExecutionRuntime({
+        documentService: {
+          associateDocument: vi.fn(),
+          createDocument: vi.fn().mockRejectedValue(queryError),
+        },
+        searchService: createSearchService() as any,
+      });
+
+      try {
+        const result = await runtime.crawlMultiPages({ urls: ['https://example.com/long'] });
+
+        expect(result.success).toBe(true);
+        expect(consoleError).toHaveBeenCalledTimes(1);
+        const logged = consoleError.mock.calls[0].map(String).join(' ');
+        expect(logged).toContain('22P05 unsupported Unicode escape sequence');
+        expect(logged).toContain('https://example.com/long');
+        expect(logged).not.toContain('page body');
+      } finally {
+        consoleError.mockRestore();
+      }
+    });
+
+    it('appends browser escalation guidance once for multiple retryable failures without mutating state', async () => {
+      const response = {
+        results: [
+          {
+            crawler: 'browserless',
+            data: {
+              content: 'Fail to crawl the page. Error type: TimeoutError, error message: timed out',
+              errorMessage: 'timed out',
+              errorType: 'TimeoutError',
+            },
+            originalUrl: 'https://blocked1.example.com',
+          },
+          {
+            crawler: 'browserless',
+            data: {
+              content: 'Fail to crawl the page. Error type: CrawlError, error message: 403',
+              errorMessage: '403',
+              errorType: 'CrawlError',
+            },
+            originalUrl: 'https://blocked2.example.com',
+          },
+        ],
+      };
+      const runtime = new WebBrowsingExecutionRuntime({
+        canUseBrowserSkill: true,
+        searchService: { crawlPages: vi.fn().mockResolvedValue(response), webSearch: vi.fn() },
+      });
+
+      const result = await runtime.crawlMultiPages({
+        urls: ['https://blocked1.example.com', 'https://blocked2.example.com'],
+      });
+
+      expect(result.content.match(/<guidance>/g)).toHaveLength(1);
+      expect(result.content).toContain('activate the `agent-browser` skill');
+      // Portal UI reads raw `state.results[i].data.content` and must never see model guidance.
+      expect(response.results[0].data.content).not.toContain('agent-browser');
+      expect(response.results[1].data.content).not.toContain('agent-browser');
+    });
+
+    it('omits agent-browser guidance when canUseBrowserSkill is false', async () => {
+      const runtime = new WebBrowsingExecutionRuntime({
+        canUseBrowserSkill: false,
+        searchService: {
+          crawlPages: vi.fn().mockResolvedValue({
+            results: [
+              {
+                crawler: 'browserless',
+                data: {
+                  content:
+                    'Fail to crawl the page. Error type: TimeoutError, error message: timeout',
+                  errorMessage: 'timeout',
+                  errorType: 'TimeoutError',
+                },
+                originalUrl: 'https://blocked.example.com',
+              },
+            ],
+          }),
+          webSearch: vi.fn(),
+        },
+      });
+
+      const result = await runtime.crawlMultiPages({ urls: ['https://blocked.example.com'] });
+
+      expect(result.content).toContain('<guidance>');
+      expect(result.content).not.toContain('agent-browser');
+      expect(result.content).toContain('no browser fallback is available');
+    });
+
+    it('does not append escalation guidance for non-retryable 404 or non-existent domain DNS errors', async () => {
+      const runtime = new WebBrowsingExecutionRuntime({
+        canUseBrowserSkill: true,
+        searchService: {
+          crawlPages: vi.fn().mockResolvedValue({
+            results: [
+              {
+                crawler: 'naive',
+                data: {
+                  content: 'Dead link (HTTP 404)',
+                  errorMessage: 'Not Found',
+                  errorType: 'PageNotFoundError',
+                  retryable: false,
+                },
+                originalUrl: 'https://example.com/missing',
+              },
+              {
+                crawler: 'naive',
+                data: {
+                  content:
+                    'Fail to crawl the page. Error type: NetworkConnectionError, error message: getaddrinfo ENOTFOUND nope.invalid',
+                  errorMessage: 'getaddrinfo ENOTFOUND nope.invalid',
+                  errorType: 'NetworkConnectionError',
+                },
+                originalUrl: 'https://nope.invalid/',
+              },
+              {
+                crawler: 'search1api',
+                data: {
+                  content:
+                    'Fail to crawl the page. Error type: HTTPStatusError, error message: Failed to crawl URL: Domain does not exist: www.nope.invalid (DNS NXDOMAIN)',
+                  errorMessage:
+                    'Failed to crawl URL: Domain does not exist: www.nope.invalid (DNS NXDOMAIN)',
+                  errorType: 'HTTPStatusError',
+                },
+                originalUrl: 'https://www.nope.invalid/',
+              },
+            ],
+          }),
+          webSearch: vi.fn(),
+        },
+      });
+
+      const result = await runtime.crawlMultiPages({
+        urls: ['https://example.com/missing', 'https://nope.invalid/'],
+      });
+
+      expect(result.content).not.toContain('<guidance>');
+      expect(result.content).not.toContain('agent-browser');
     });
   });
 });

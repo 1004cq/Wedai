@@ -1,0 +1,292 @@
+import type { SidebarAgentItem } from '@lobechat/types';
+import { agentDisplayName, agentSecondaryDisplayName } from '@lobechat/types';
+import { ActionIcon, Spin } from '@lobehub/ui';
+import { cssVar } from '@lobehub/ui/stylex/cssVar.stylex';
+import * as stylex from '@stylexjs/stylex';
+import { PinIcon } from 'lucide-react';
+import { type CSSProperties, type DragEvent } from 'react';
+import { memo, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
+
+import AgentAvatar, { isGeneratedAgentAvatar } from '@/components/AgentAvatar';
+import PrivateLockIcon from '@/components/PrivateLockIcon';
+import { useAgentAvatarActivity } from '@/features/AgentAvatarActivity/useAgentAvatarActivity';
+import AgentProfilePopup from '@/features/AgentProfileCard/AgentProfilePopup';
+import NavItem from '@/features/NavPanel/components/NavItem';
+import WorkspaceLink from '@/features/Workspace/WorkspaceLink';
+import { usePrefetchAgent } from '@/hooks/usePrefetchAgent';
+import { useChatStore } from '@/store/chat';
+import { operationSelectors } from '@/store/chat/selectors';
+import { useGlobalStore } from '@/store/global';
+import { useHomeStore } from '@/store/home';
+
+import { useAgentModal } from '../../ModalProvider';
+import { useSidebarPinState } from '../../useSidebarPinState';
+import Actions from '../Item/Actions';
+import { usePreservedAgentUrl } from '../usePreservedAgentUrl';
+import { useAgentVisibilityMenu } from './useAgentVisibilityMenu';
+import { useAgentDropdownMenu } from './useDropdownMenu';
+import VisibilityLockAction from './VisibilityLockAction';
+
+const styles = stylex.create({
+  badge: {
+    pointerEvents: 'none',
+    position: 'absolute',
+    insetBlockEnd: '-3px',
+    insetInlineEnd: '-3px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: '14px',
+    height: '14px',
+    paddingInline: '3px',
+    borderWidth: '1.5px',
+    borderStyle: 'solid',
+    borderColor: cssVar.colorBgContainer,
+    borderRadius: '999px',
+    fontSize: '9px',
+    fontWeight: 600,
+    lineHeight: 1,
+    color: cssVar.colorTextLightSolid,
+    backgroundColor: cssVar.colorError,
+    backgroundImage: 'none',
+  },
+  runningBadge: {
+    pointerEvents: 'none',
+    position: 'absolute',
+    insetBlockEnd: '-3px',
+    insetInlineEnd: '-3px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '14px',
+    height: '14px',
+    borderWidth: '1.5px',
+    borderStyle: 'solid',
+    borderColor: cssVar.colorBgContainer,
+    borderRadius: '999px',
+    color: cssVar.colorWarning,
+    backgroundColor: cssVar.colorBgContainer,
+    backgroundImage: 'none',
+  },
+  wrapper: { position: 'relative', display: 'inline-flex' },
+});
+
+interface AgentItemProps {
+  className?: string;
+  item: SidebarAgentItem;
+  onNavigate?: () => void;
+  secondaryLabel?: string | null;
+  style?: CSSProperties;
+}
+
+const AgentItem = memo<AgentItemProps>(({ item, style, className, onNavigate, secondaryLabel }) => {
+  const {
+    id,
+    avatar,
+    backgroundColor,
+    description,
+    name,
+    pinned,
+    slug,
+    title,
+    userId,
+    visibility,
+  } = item;
+  const avatarUrl = typeof avatar === 'string' ? avatar : undefined;
+  // Unread count is server-computed (topics.status === 'unread') and carried on
+  // the sidebar list item, so it stays accurate across agents whose topics
+  // aren't loaded into the chat store on this client.
+  const unreadCount = item.unreadCount ?? 0;
+  const { t } = useTranslation('chat');
+  const { openCreateGroupModal } = useAgentModal();
+  const openAgentInNewWindow = useGlobalStore((s) => s.openAgentInNewWindow);
+
+  const prefetchAgent = usePrefetchAgent();
+  const isUpdating = useHomeStore((s) => s.agentUpdatingId === id);
+
+  // Separate loading state from chat store - only show loading for this specific agent
+  const isLoading = useChatStore(operationSelectors.isAgentVisiblyRunning(id));
+  // The row's hover wakes the character; a run plays on it without a hover.
+  const { avatar: avatarActivity, hover: rowHover } = useAgentAvatarActivity(id);
+  // A generated character acts the run out, so only an emoji or image needs the spinner.
+  const showRunningBadge = isLoading && !isGeneratedAgentAvatar(avatarUrl);
+
+  // Name-first label with fallback (see agentDisplayName)
+  const displayTitle = agentDisplayName(item, t('untitledAgent'));
+  // The role shown beside the name — same rule for every agent, heterogeneous
+  // ones included (see agentSecondaryDisplayName).
+  const roleTag = secondaryLabel || agentSecondaryDisplayName(item);
+
+  const agentUrl = usePreservedAgentUrl(id);
+
+  // Memoize event handlers
+  const handleMouseEnter = useCallback(() => {
+    prefetchAgent(id);
+    rowHover.onMouseEnter();
+  }, [id, prefetchAgent, rowHover]);
+
+  const handleDoubleClick = useCallback(() => {
+    openAgentInNewWindow(id);
+  }, [id, openAgentInNewWindow]);
+
+  const handleDragStart = useCallback(
+    (e: DragEvent) => {
+      e.dataTransfer.setData('text/plain', id);
+    },
+    [id],
+  );
+
+  const handleDragEnd = useCallback(
+    (e: DragEvent) => {
+      if (e.dataTransfer.dropEffect === 'none') {
+        openAgentInNewWindow(id);
+      }
+    },
+    [id, openAgentInNewWindow],
+  );
+
+  const handleOpenCreateGroupModal = useCallback(() => {
+    openCreateGroupModal(id, visibility);
+  }, [id, openCreateGroupModal, visibility]);
+
+  // In a workspace the row's column is the team pin (public) or the creator's
+  // own pin (private); the member's own pins live in their preference.
+  const { isMyPinned, isPrivate, isTeamPinned } = useSidebarPinState({ id, pinned, visibility });
+  const showPinIcon = isTeamPinned || isMyPinned;
+
+  // Memoize pin icon
+  // The lock sits with the pin in the fixed trailing slot rather than after
+  // the title, where a long name or role tag would truncate it out of view.
+  const pinIcon = useMemo(
+    () =>
+      showPinIcon || isPrivate ? (
+        <>
+          {isPrivate && <PrivateLockIcon />}
+          {showPinIcon && (
+            <ActionIcon icon={PinIcon} size={12} style={{ opacity: 0.5, pointerEvents: 'none' }} />
+          )}
+        </>
+      ) : undefined,
+    [isPrivate, showPinIcon],
+  );
+
+  // Memoize avatar icon (show loader when updating, running spinner or unread badge at bottom-right)
+  const avatarIcon = useMemo(() => {
+    if (isUpdating) {
+      return <Spin size="small" style={{ color: cssVar.colorTextDescription }} />;
+    }
+
+    const avatarNode = (
+      <AgentAvatar
+        {...avatarActivity}
+        agentId={id}
+        avatar={avatarUrl}
+        background={backgroundColor || undefined}
+        name={displayTitle}
+        size={22}
+      />
+    );
+
+    // Hovering the avatar (not the whole row, which the pointer crosses all
+    // the time) shows the same profile card the Task assignees use.
+    return (
+      <AgentProfilePopup
+        agent={{ avatar: avatarUrl, backgroundColor, description, name, title }}
+        agentId={id}
+        placement={'right'}
+        trigger={'hover'}
+      >
+        <span {...stylex.props(styles.wrapper)}>
+          {avatarNode}
+          {showRunningBadge ? (
+            <span {...stylex.props(styles.runningBadge)}>
+              <Spin size={9} style={{ color: 'inherit' }} />
+            </span>
+          ) : unreadCount > 0 ? (
+            <span {...stylex.props(styles.badge)}>{unreadCount > 99 ? '99+' : unreadCount}</span>
+          ) : null}
+        </span>
+      </AgentProfilePopup>
+    );
+  }, [
+    isUpdating,
+    showRunningBadge,
+    avatarActivity,
+    id,
+    avatarUrl,
+    backgroundColor,
+    description,
+    displayTitle,
+    name,
+    title,
+    unreadCount,
+  ]);
+
+  const dropdownMenu = useAgentDropdownMenu({
+    avatar: avatarUrl,
+    backgroundColor: backgroundColor || undefined,
+    group: undefined, // TODO: pass group from parent if needed
+    id,
+    name,
+    openCreateGroupModal: handleOpenCreateGroupModal,
+    pinned: pinned ?? false,
+    slug,
+    title: displayTitle,
+    userId,
+    visibility,
+  });
+
+  // The lock is the same door as the menu's Visibility row: whoever may change
+  // the scope can open it from the lock on hover.
+  const visibilityMenu = useAgentVisibilityMenu({ id, slug, userId, visibility });
+  const showVisibilityLock = isPrivate && visibilityMenu.canChange;
+
+  return (
+    <WorkspaceLink
+      aria-label={displayTitle}
+      to={agentUrl}
+      onClick={onNavigate}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={rowHover.onMouseLeave}
+    >
+      <NavItem
+        className={className}
+        contextMenuItems={dropdownMenu}
+        disabled={isUpdating}
+        draggable={!isUpdating}
+        extra={pinIcon}
+        icon={avatarIcon}
+        key={id}
+        style={style}
+        actions={
+          // Two direct children widen the hover overlay (NavItem counts them),
+          // so the resting lock fades under the clickable one.
+          showVisibilityLock ? (
+            <>
+              <VisibilityLockAction options={visibilityMenu.options} />
+              <Actions dropdownMenu={dropdownMenu} />
+            </>
+          ) : (
+            <Actions dropdownMenu={dropdownMenu} />
+          )
+        }
+        title={
+          roleTag ? (
+            <>
+              {displayTitle}
+              <span style={{ fontSize: 12, marginInlineStart: 6, opacity: 0.6 }}>{roleTag}</span>
+            </>
+          ) : (
+            displayTitle
+          )
+        }
+        onDoubleClick={handleDoubleClick}
+        onDragEnd={handleDragEnd}
+        onDragStart={handleDragStart}
+      />
+    </WorkspaceLink>
+  );
+});
+
+export default AgentItem;

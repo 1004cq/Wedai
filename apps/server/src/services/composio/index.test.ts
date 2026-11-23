@@ -3,39 +3,46 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ComposioService } from './index';
 
 const mocks = vi.hoisted(() => ({
+  connectorPickLegacyMirrors: vi.fn(),
   connectorQuery: vi.fn(),
   connectorQueryByIdentifiers: vi.fn(),
   connectorToolQueryAll: vi.fn(),
   isClientAvailable: vi.fn(),
   isComposioNotFound: vi.fn(),
   markComposioUnavailable: vi.fn(),
-  pluginFindById: vi.fn(),
   pluginQuery: vi.fn(),
   toolsExecute: vi.fn(),
 }));
 
 vi.mock('@/database/models/connector', () => ({
-  ConnectorModel: vi.fn().mockImplementation(() => ({
-    // Runtime resolution goes through the agent-aware resolvers; map them to the
-    // same fixtures (the priority/dedup logic itself is covered by the model's
-    // own connectorAgentScope tests).
-    resolveAll: mocks.connectorQuery,
-    resolveByIdentifiers: mocks.connectorQueryByIdentifiers,
-    markComposioConnectionUnavailable: mocks.markComposioUnavailable,
-  })),
+  ConnectorModel: vi.fn().mockImplementation(function () {
+    return {
+      // Runtime resolution goes through the agent-aware resolvers; map them to the
+      // same fixtures (the priority/dedup logic itself is covered by the model's
+      // own connectorAgentScope tests).
+      resolveAll: mocks.connectorQuery,
+      resolveByIdentifiers: mocks.connectorQueryByIdentifiers,
+      // Health writes follow the resolved row's own scope; the scoped model is
+      // an implementation detail here, the call itself is what the test asserts.
+      forRow: () => ({ markComposioConnectionUnavailable: mocks.markComposioUnavailable }),
+      pickLegacyComposioMirrors: mocks.connectorPickLegacyMirrors,
+      markComposioConnectionUnavailable: mocks.markComposioUnavailable,
+    };
+  }),
 }));
 
 vi.mock('@/database/models/connectorTool', () => ({
-  ConnectorToolModel: vi.fn().mockImplementation(() => ({
-    queryAllByConnectorIds: mocks.connectorToolQueryAll,
-  })),
+  ConnectorToolModel: vi.fn().mockImplementation(function () {
+    return {
+      queryAllByConnectorIds: mocks.connectorToolQueryAll,
+    };
+  }),
 }));
 
 vi.mock('@/database/models/plugin', () => ({
-  PluginModel: vi.fn().mockImplementation(() => ({
-    findById: mocks.pluginFindById,
-    query: mocks.pluginQuery,
-  })),
+  PluginModel: vi.fn().mockImplementation(function () {
+    return { queryComposioMirrors: mocks.pluginQuery };
+  }),
 }));
 
 vi.mock('@/libs/composio', () => ({
@@ -45,6 +52,26 @@ vi.mock('@/libs/composio', () => ({
 }));
 
 const service = () => new ComposioService({ db: {} as any, userId: 'user-1' });
+
+/** Legacy plugin-projection rows; the query filters by identifier like the SQL does. */
+const mockPlugins = (rows: Record<string, any>[]) =>
+  mocks.pluginQuery.mockImplementation(async (identifiers?: string[]) =>
+    rows.filter((row) => !identifiers || identifiers.includes(row.identifier)),
+  );
+
+const pluginRow = (
+  identifier: string,
+  composio: Record<string, unknown> = {},
+  overrides: Record<string, any> = {},
+) => ({
+  customParams: {
+    composio: { connectedAccountId: `ca-${identifier}`, status: 'ACTIVE', ...composio },
+  },
+  identifier,
+  manifest: { api: [{ name: `${identifier.toUpperCase()}_TOOL` }], meta: {} },
+  userId: 'owner-plugin',
+  ...overrides,
+});
 
 const activeConnectorRow = (overrides: Record<string, any> = {}) => ({
   id: 'conn-gmail',
@@ -61,19 +88,20 @@ const activeConnectorRow = (overrides: Record<string, any> = {}) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.isClientAvailable.mockReturnValue(true);
-  mocks.isComposioNotFound.mockImplementation(
-    (error: unknown) =>
+  mocks.isComposioNotFound.mockImplementation(function (error: unknown) {
+    return (
       typeof error === 'object' &&
       error !== null &&
       'code' in error &&
-      error.code === 'CONNECTED_ACCOUNT_NOT_FOUND',
-  );
+      error.code === 'CONNECTED_ACCOUNT_NOT_FOUND'
+    );
+  });
   mocks.markComposioUnavailable.mockResolvedValue(false);
+  mocks.connectorPickLegacyMirrors.mockImplementation(async (mirrors: unknown[]) => mirrors);
   mocks.connectorQuery.mockResolvedValue([]);
   mocks.connectorQueryByIdentifiers.mockResolvedValue([]);
   mocks.connectorToolQueryAll.mockResolvedValue([]);
-  mocks.pluginQuery.mockResolvedValue([]);
-  mocks.pluginFindById.mockResolvedValue(undefined);
+  mockPlugins([]);
 });
 
 describe('ComposioService.getComposioManifests', () => {
@@ -99,17 +127,46 @@ describe('ComposioService.getComposioManifests', () => {
     expect(mocks.pluginQuery).toHaveBeenCalledTimes(1); // called, but yields nothing new
   });
 
+  it('reads only the requested identifiers', async () => {
+    mocks.connectorQueryByIdentifiers.mockResolvedValue([activeConnectorRow()]);
+    mocks.connectorToolQueryAll.mockResolvedValue([
+      { description: 'Send', toolName: 'GMAIL_SEND_EMAIL', userConnectorId: 'conn-gmail' },
+    ]);
+    mockPlugins([pluginRow('slack')]);
+
+    const manifests = await service().getComposioManifests('agent-1', {
+      identifiers: ['gmail', 'not-composio'],
+    });
+
+    expect(mocks.connectorQuery).not.toHaveBeenCalled();
+    expect(mocks.connectorQueryByIdentifiers).toHaveBeenCalledWith(['gmail'], 'agent-1');
+    expect(manifests.map((m) => m.identifier)).toEqual(['gmail']);
+  });
+
+  it('reads nothing when no requested identifier is a Composio app', async () => {
+    const manifests = await service().getComposioManifests('agent-1', {
+      identifiers: ['deepwiki'],
+    });
+
+    expect(manifests).toEqual([]);
+    expect(mocks.connectorQuery).not.toHaveBeenCalled();
+    expect(mocks.connectorQueryByIdentifiers).not.toHaveBeenCalled();
+    expect(mocks.pluginQuery).not.toHaveBeenCalled();
+  });
+
   it('falls back to plugin table for identifiers without a connector projection', async () => {
     mocks.connectorQuery.mockResolvedValue([]);
-    mocks.pluginQuery.mockResolvedValue([
-      {
-        customParams: { composio: { status: 'ACTIVE' } },
-        identifier: 'slack',
-        manifest: {
-          api: [{ description: 'post', name: 'SLACK_POST', parameters: { type: 'object' } }],
-          meta: { avatar: '☁️', title: 'Slack' },
+    mockPlugins([
+      pluginRow(
+        'slack',
+        {},
+        {
+          manifest: {
+            api: [{ description: 'post', name: 'SLACK_POST', parameters: { type: 'object' } }],
+            meta: { avatar: '☁️', title: 'Slack' },
+          },
         },
-      },
+      ),
     ]);
 
     const manifests = await service().getComposioManifests();
@@ -119,24 +176,56 @@ describe('ComposioService.getComposioManifests', () => {
     expect(manifests[0].api[0].name).toBe('SLACK_POST');
   });
 
+  it('does not fall back to the plugin projection when a connector row exists but the run cannot see it', async () => {
+    // A shared Composio connector switched to private: runtime resolution leaves
+    // it out, and the mirrored plugin row must not serve it instead.
+    mocks.connectorQuery.mockResolvedValue([]);
+    mocks.connectorPickLegacyMirrors.mockResolvedValue([]);
+    mockPlugins([pluginRow('gmail', { linkedByUserId: 'creator' })]);
+
+    const manifests = await service().getComposioManifests();
+
+    expect(manifests).toEqual([]);
+    expect(mocks.connectorPickLegacyMirrors).toHaveBeenCalledWith([
+      expect.objectContaining({
+        connectedAccountId: 'ca-gmail',
+        identifier: 'gmail',
+        ownerUserId: 'creator',
+      }),
+    ]);
+  });
+
+  it('advertises a legacy connection next to a projection row a connector claims', async () => {
+    // A teammate's private Composio connection leaves its own projection row
+    // for the same app. Only that row is the connector's mirror; the
+    // workspace's legacy connection stays available to everyone else.
+    const claimed = pluginRow(
+      'gmail',
+      { connectedAccountId: 'ca-teammate-private' },
+      { manifest: { api: [{ name: 'GMAIL_PRIVATE' }], meta: {} }, userId: 'teammate' },
+    );
+    const legacy = pluginRow('gmail', { connectedAccountId: 'ca-legacy' });
+    mockPlugins([claimed, legacy]);
+    mocks.connectorPickLegacyMirrors.mockImplementation(async (mirrors: any[]) =>
+      mirrors.filter((mirror) => mirror.plugin !== claimed),
+    );
+
+    const manifests = await service().getComposioManifests();
+
+    expect(manifests).toHaveLength(1);
+    expect(manifests[0].api[0].name).toBe('GMAIL_TOOL');
+  });
+
   it('unions both sources and dedupes by identifier (connector wins)', async () => {
     mocks.connectorQuery.mockResolvedValue([activeConnectorRow()]);
     mocks.connectorToolQueryAll.mockResolvedValue([
       { toolName: 'GMAIL_SEND_EMAIL', userConnectorId: 'conn-gmail' },
     ]);
-    mocks.pluginQuery.mockResolvedValue([
+    mockPlugins([
       // Same identifier as the connector → must be dropped (connector wins).
-      {
-        customParams: { composio: { status: 'ACTIVE' } },
-        identifier: 'gmail',
-        manifest: { api: [{ name: 'GMAIL_OLD' }], meta: {} },
-      },
+      pluginRow('gmail', {}, { manifest: { api: [{ name: 'GMAIL_OLD' }], meta: {} } }),
       // Distinct identifier → included via fallback.
-      {
-        customParams: { composio: { status: 'ACTIVE' } },
-        identifier: 'slack',
-        manifest: { api: [{ name: 'SLACK_POST' }], meta: {} },
-      },
+      pluginRow('slack', {}, { manifest: { api: [{ name: 'SLACK_POST' }], meta: {} } }),
     ]);
 
     const manifests = await service().getComposioManifests();
@@ -158,6 +247,16 @@ describe('ComposioService.getComposioManifests', () => {
     expect(manifests).toHaveLength(0);
   });
 
+  /** @example Legacy GitHub Composio rows are not exposed after Market becomes canonical. */
+  it('ignores connector rows removed from the Composio catalog', async () => {
+    mocks.connectorQuery.mockResolvedValue([
+      activeConnectorRow({ id: 'conn-github', identifier: 'github', name: 'GitHub' }),
+    ]);
+
+    await expect(service().getComposioManifests()).resolves.toEqual([]);
+    expect(mocks.connectorToolQueryAll).not.toHaveBeenCalled();
+  });
+
   it('returns empty when there are no composio connections in either source', async () => {
     const manifests = await service().getComposioManifests();
     expect(manifests).toEqual([]);
@@ -166,6 +265,19 @@ describe('ComposioService.getComposioManifests', () => {
 
 describe('ComposioService.executeComposioTool', () => {
   const params = { args: { to: 'a@b.c' }, identifier: 'gmail', toolSlug: 'GMAIL_SEND_EMAIL' };
+
+  /** @example Legacy GitHub Composio tools cannot execute after Market becomes canonical. */
+  it('rejects apps removed from the Composio catalog', async () => {
+    const result = await service().executeComposioTool({
+      args: {},
+      identifier: 'github',
+      toolSlug: 'GITHUB_GET_REPOSITORY',
+    });
+
+    expect(result).toMatchObject({ error: { code: 'COMPOSIO_APP_UNSUPPORTED' }, success: false });
+    expect(mocks.connectorQueryByIdentifiers).not.toHaveBeenCalled();
+    expect(mocks.toolsExecute).not.toHaveBeenCalled();
+  });
 
   it('returns COMPOSIO_NOT_CONFIGURED when the client is unavailable', async () => {
     mocks.isClientAvailable.mockReturnValue(false);
@@ -190,7 +302,7 @@ describe('ComposioService.executeComposioTool', () => {
       expect.objectContaining({ connectedAccountId: 'ca-connector', userId: 'user-1' }),
     );
     // connector hit → plugin fallback not consulted
-    expect(mocks.pluginFindById).not.toHaveBeenCalled();
+    expect(mocks.pluginQuery).not.toHaveBeenCalled();
   });
 
   /**
@@ -282,10 +394,7 @@ describe('ComposioService.executeComposioTool', () => {
 
   it('falls back to plugin customParams when the connector has no account', async () => {
     mocks.connectorQueryByIdentifiers.mockResolvedValue([]);
-    mocks.pluginFindById.mockResolvedValue({
-      customParams: { composio: { connectedAccountId: 'ca-plugin' } },
-      userId: 'owner-plugin',
-    });
+    mockPlugins([pluginRow('gmail', { connectedAccountId: 'ca-plugin' })]);
     mocks.toolsExecute.mockResolvedValue({ data: 'sent' });
 
     const result = await service().executeComposioTool(params);
@@ -297,9 +406,35 @@ describe('ComposioService.executeComposioTool', () => {
     );
   });
 
+  it('runs the legacy connection, not a projection row a connector claims', async () => {
+    mocks.connectorQueryByIdentifiers.mockResolvedValue([]);
+    const claimed = pluginRow(
+      'gmail',
+      { connectedAccountId: 'ca-teammate-private', linkedByUserId: 'teammate' },
+      { userId: 'teammate' },
+    );
+    mockPlugins([
+      claimed,
+      pluginRow('gmail', { connectedAccountId: 'ca-pending', status: 'PENDING' }),
+      pluginRow('gmail', { connectedAccountId: 'ca-legacy', linkedByUserId: 'linker' }),
+    ]);
+    mocks.connectorPickLegacyMirrors.mockImplementation(async (mirrors: any[]) =>
+      mirrors.filter((mirror) => mirror.plugin !== claimed),
+    );
+    mocks.toolsExecute.mockResolvedValue({ data: 'sent' });
+
+    const result = await service().executeComposioTool(params);
+
+    expect(result.success).toBe(true);
+    // An active legacy connection wins over a pending one.
+    expect(mocks.toolsExecute).toHaveBeenCalledWith(
+      'GMAIL_SEND_EMAIL',
+      expect.objectContaining({ connectedAccountId: 'ca-legacy', userId: 'linker' }),
+    );
+  });
+
   it('returns COMPOSIO_CONFIG_NOT_FOUND when neither source has an account', async () => {
     mocks.connectorQueryByIdentifiers.mockResolvedValue([]);
-    mocks.pluginFindById.mockResolvedValue(undefined);
 
     const result = await service().executeComposioTool(params);
 

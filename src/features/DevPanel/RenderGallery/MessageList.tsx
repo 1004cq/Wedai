@@ -2,8 +2,7 @@
 
 import { LOADING_FLAT } from '@lobechat/const';
 import type { ChatToolPayload, UIChatMessage } from '@lobechat/types';
-import { Text } from '@lobehub/ui';
-import { createStaticStyles } from 'antd-style';
+import { createStaticStyles, Text } from '@lobehub/ui';
 import { memo, useMemo } from 'react';
 
 import {
@@ -13,6 +12,7 @@ import {
 } from '@/features/Conversation';
 import { MessageActionProvider } from '@/features/Conversation/Messages/Contexts/MessageActionProvider';
 import { dataSelectors, useConversationStore } from '@/features/Conversation/store';
+import { densityVars } from '@/styles/densityVars';
 
 import { DEVTOOLS_AGENT_ID } from './fixtures';
 import { deriveFixtureProps, type LifecycleMode } from './lifecycleMode';
@@ -26,12 +26,8 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
   `,
   thread: css`
     width: 100%;
-    max-width: 820px;
-    margin-inline: auto;
     padding-block: 8px 48px;
-    padding-inline: 12px;
-    border-radius: 14px;
-
+    padding-inline: ${densityVars.contentGap};
     background: ${cssVar.colorBgContainer};
   `,
 }));
@@ -174,7 +170,7 @@ const MessageList = memo<MessageListProps>(({ apis, mode }) => {
   }
 
   return (
-    <ConversationProvider hasInitMessages skipFetch context={context} messages={messages}>
+    <ConversationProvider context={context} messages={messages}>
       <InnerList />
     </ConversationProvider>
   );

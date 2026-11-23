@@ -1,13 +1,13 @@
 'use client';
 
 import { type AssistantContentBlock, type UIChatMessage } from '@lobechat/types';
-import { Accordion, AccordionItem, Block, Flexbox, Icon, Markdown, Text } from '@lobehub/ui';
-import { createStaticStyles, cssVar } from 'antd-style';
+import { Accordion, Block, Flexbox, Icon, Markdown, Spin, Text } from '@lobehub/ui';
+import { cssVar } from '@lobehub/ui/stylex/cssVar.stylex';
+import * as stylex from '@stylexjs/stylex';
 import { ScrollText, Workflow } from 'lucide-react';
 import { memo, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import NeuralNetworkLoading from '@/components/NeuralNetworkLoading';
 import { useAutoScroll } from '@/hooks/useAutoScroll';
 import { useUserStore } from '@/store/user';
 import { userGeneralSettingsSelectors } from '@/store/user/selectors';
@@ -19,12 +19,7 @@ import Usage from '../../components/Extras/Usage';
 import AnimatedNumber from '../../components/Extras/Usage/UsageDetail/AnimatedNumber';
 import { accumulateUsage, formatDuration, formatElapsedTime } from './utils';
 
-const styles = createStaticStyles(({ css }) => ({
-  instructionContent: css`
-    overflow: auto;
-    max-height: 300px;
-  `,
-}));
+const styles = stylex.create({ instructionContent: { overflow: 'auto', maxHeight: '300px' } });
 
 /**
  * InstructionAccordion - Shows the task instruction in a collapsible accordion
@@ -44,45 +39,47 @@ const InstructionAccordion = memo<{ childrenCount: number; instruction: string }
 
     return (
       <Accordion
-        expandedKeys={expandedKeys}
         gap={8}
-        onExpandedChange={(keys) => setExpandedKeys(keys as string[])}
-      >
-        <AccordionItem
-          itemKey="instruction"
-          paddingBlock={4}
-          paddingInline={4}
-          title={
-            <Flexbox horizontal align="center" gap={8}>
+        indicatorPlacement="inline"
+        styles={{ trigger: { paddingBlock: 4, paddingInline: 4 } }}
+        value={expandedKeys}
+        items={[
+          {
+            children: (
               <Block
-                horizontal
-                align="center"
-                flex="none"
-                gap={4}
-                height={24}
-                justify="center"
-                style={{ fontSize: 12 }}
-                variant="outlined"
-                width={24}
+                className={stylex.props(styles.instructionContent).className}
+                padding={12}
+                style={{ marginBlock: 8 }}
+                variant={'outlined'}
               >
-                <Icon color={cssVar.colorTextSecondary} icon={ScrollText} />
+                <Markdown variant={'chat'}>{instruction}</Markdown>
               </Block>
-              <Text as="span" type="secondary">
-                {t('task.instruction')}
-              </Text>
-            </Flexbox>
-          }
-        >
-          <Block
-            className={styles.instructionContent}
-            padding={12}
-            style={{ marginBlock: 8 }}
-            variant={'outlined'}
-          >
-            <Markdown variant={'chat'}>{instruction}</Markdown>
-          </Block>
-        </AccordionItem>
-      </Accordion>
+            ),
+            key: 'instruction',
+            title: (
+              <Flexbox horizontal align="center" gap={8}>
+                <Block
+                  horizontal
+                  align="center"
+                  flex="none"
+                  gap={4}
+                  height={24}
+                  justify="center"
+                  style={{ fontSize: 12 }}
+                  variant="outlined"
+                  width={24}
+                >
+                  <Icon color={cssVar.colorTextSecondary} icon={ScrollText} />
+                </Block>
+                <Text as="span" type="secondary">
+                  {t('task.instruction')}
+                </Text>
+              </Flexbox>
+            ),
+          },
+        ]}
+        onValueChange={setExpandedKeys}
+      />
     );
   },
 );
@@ -133,7 +130,7 @@ const ProcessingView = memo<{
   totalToolCalls: number;
 }>(({ messages, startTime, model, provider, totalToolCalls, accumulatedUsage }) => {
   const { t } = useTranslation('chat');
-  const isDevMode = useUserStore((s) => userGeneralSettingsSelectors.config(s).isDevMode);
+  const showMessageUsage = useUserStore(userGeneralSettingsSelectors.showMessageUsage);
   const [elapsedTime, setElapsedTime] = useState(0);
   const { ref, handleScroll } = useAutoScroll<HTMLDivElement>({
     deps: [messages],
@@ -172,7 +169,7 @@ const ProcessingView = memo<{
           variant="outlined"
           width={24}
         >
-          <NeuralNetworkLoading size={16} />
+          <Spin size="small" variant="network" />
         </Block>
         <Flexbox horizontal align="center" gap={4}>
           <Text as="span" type="secondary" weight={500}>
@@ -201,7 +198,7 @@ const ProcessingView = memo<{
       />
 
       {/* Usage display */}
-      {isDevMode && model && provider && (
+      {showMessageUsage && model && provider && (
         <Usage model={model} provider={provider} usage={accumulatedUsage} />
       )}
     </Flexbox>
@@ -224,7 +221,7 @@ const CompletedView = memo<{
   totalToolCalls: number;
 }>(({ blocks, assistantId, duration, totalToolCalls, model, provider, totalTokens, totalCost }) => {
   const { t } = useTranslation('chat');
-  const isDevMode = useUserStore((s) => userGeneralSettingsSelectors.config(s).isDevMode);
+  const showMessageUsage = useUserStore(userGeneralSettingsSelectors.showMessageUsage);
 
   // Split blocks: intermediate steps (all but last) and final result (last)
   const { intermediateBlocks, finalBlock } = useMemo(() => {
@@ -275,22 +272,37 @@ const CompletedView = memo<{
     <Flexbox gap={8}>
       {/* Intermediate steps - collapsed by default */}
       {intermediateBlocks.length > 0 && (
-        <Accordion defaultExpandedKeys={[]} gap={8}>
-          <AccordionItem itemKey="intermediate" paddingBlock={4} paddingInline={4} title={title}>
-            <Flexbox gap={8} paddingInline={4} style={{ marginTop: 8 }}>
-              {intermediateBlocks.map((block) => (
-                <ContentBlock {...block} disableEditing assistantId={assistantId} key={block.id} />
-              ))}
-            </Flexbox>
-          </AccordionItem>
-        </Accordion>
+        <Accordion
+          defaultValue={[]}
+          gap={8}
+          indicatorPlacement="inline"
+          styles={{ trigger: { paddingBlock: 4, paddingInline: 4 } }}
+          items={[
+            {
+              children: (
+                <Flexbox gap={8} paddingInline={4} style={{ marginTop: 8 }}>
+                  {intermediateBlocks.map((block) => (
+                    <ContentBlock
+                      {...block}
+                      disableEditing
+                      assistantId={assistantId}
+                      key={block.id}
+                    />
+                  ))}
+                </Flexbox>
+              ),
+              key: 'intermediate',
+              title,
+            },
+          ]}
+        />
       )}
 
       {/* Final result - always visible */}
       <ContentBlock {...finalBlock} disableEditing assistantId={assistantId} />
 
       {/* Usage display */}
-      {isDevMode && model && provider && (
+      {showMessageUsage && model && provider && (
         <Usage model={model} provider={provider} usage={{ cost: totalCost, totalTokens }} />
       )}
     </Flexbox>

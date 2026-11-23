@@ -1,8 +1,7 @@
 'use client';
 
 import { AGENT_PLAN_FILE_TYPE } from '@lobechat/const';
-import { Checkbox, Flexbox, Icon, Tag } from '@lobehub/ui';
-import { createStaticStyles, cssVar, cx } from 'antd-style';
+import { Checkbox, createStaticStyles, cssVar, cx, Flexbox, Icon, Tag } from '@lobehub/ui';
 import { ChevronDown, ChevronUp, ListTodo } from 'lucide-react';
 import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -11,6 +10,7 @@ import { useChatStore } from '@/store/chat';
 import { chatPortalSelectors } from '@/store/chat/selectors';
 import { useNotebookStore } from '@/store/notebook';
 import { notebookSelectors } from '@/store/notebook/selectors';
+import { densityVars } from '@/styles/densityVars';
 
 interface TodoItem {
   completed: boolean;
@@ -34,7 +34,7 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
     user-select: none;
 
     padding-block: 8px;
-    padding-inline: 12px;
+    padding-inline: ${densityVars.contentGap};
     border: 1px solid ${cssVar.colorBorderSecondary};
     border-radius: 8px;
 
@@ -78,6 +78,11 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
   listContainer: css`
     overflow-x: hidden;
 
+    /* Blockify the inline-flex Base UI Checkbox labels — without this the todo
+       rows flow inline and wrap several per line. */
+    display: flex;
+    flex-direction: column;
+
     margin-block-start: 8px;
     padding-block: 4px;
     border-block-start: 1px solid ${cssVar.colorBorderSecondary};
@@ -101,8 +106,8 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
   `,
   root: css`
     flex-shrink: 0;
-    padding-block-end: 12px;
-    padding-inline: 12px;
+    padding-block-end: ${densityVars.contentGap};
+    padding-inline: ${densityVars.contentGap};
   `,
   textChecked: css`
     color: ${cssVar.colorTextQuaternary};

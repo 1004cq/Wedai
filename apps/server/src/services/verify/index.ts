@@ -1,4 +1,16 @@
 export {
+  type AcceptanceMergeSummary,
+  collectCheckIds,
+  mergeAcceptanceRounds,
+  planCheckIdRemap,
+} from './acceptanceMerge';
+export {
+  previewAcceptancePurge,
+  purgeAcceptance,
+  type PurgePreview,
+  purgeVerifyRun,
+} from './acceptancePurge';
+export {
   type AcceptanceCheckHistoryEntry,
   type AcceptanceCheckReviewEvent,
   type AcceptanceCheckReviewOverlay,
@@ -10,8 +22,21 @@ export {
   buildCheckReviewOverlay,
 } from './acceptanceService';
 export { createVerifierAgentRunner } from './agentVerifier';
+export {
+  scheduleVerifyOnCompletion,
+  VERIFY_ON_OPERATION_COMPLETE_PATH,
+  type VerifyOnOperationCompletePayload,
+} from './completionDispatch';
+export { mapWithConcurrency } from './concurrency';
 export { coverageGaps, readRequiredEvidence } from './evidenceCoverage';
-export { createEvidenceFileResolver, type EvidenceFileMeta } from './evidenceFiles';
+export {
+  createEvidenceFileResolver,
+  type EvidenceFileMeta,
+  resolveEvidenceFiles,
+  type TerminalArtifactLink,
+} from './evidenceFiles';
+export { prepareEvidenceRows } from './evidenceIntake';
+export { evidenceTypeForStoredFile } from './evidenceMedium';
 export {
   type ExecuteVerifyParams,
   type VerifierAgentRunner,
@@ -19,7 +44,12 @@ export {
 } from './executor';
 export { computeFalseFlags, VerifyFeedbackService } from './feedbackService';
 export { runVerifyOnCompletion } from './lifecycle';
-export { isHeterogeneousVerifyProvider, resolveVerifyModelConfig } from './modelConfig';
+export { resolveLiveRoundForItem } from './liveRound';
+export {
+  isHeterogeneousVerifyProvider,
+  resolveVerifyModelConfig,
+  REVIEW_PREDICT_MODEL_CONFIG,
+} from './modelConfig';
 export { type GeneratePlanParams, VerifyPlanGeneratorService } from './planGenerator';
 export { instantiateVerifyPlanOnStart } from './planInstantiation';
 export {
@@ -28,7 +58,19 @@ export {
   type RepairSpawner,
   VerifyRepairService,
 } from './repairService';
+export { settleFailedRepair } from './repairTerminal';
 export { type GenerateReportParams, VerifyReporterService } from './reporter';
+export {
+  isCurrentReviewPrediction,
+  type PredictReviewParams,
+  REVIEW_PREDICT_CONCURRENCY,
+  shouldSurfaceProposal,
+  VerifyReviewPredictorService,
+} from './reviewPredictor';
 export { driveTaskFromVerify, finalizeVerifyRun } from './settle';
+export { VERIFY_ABANDONED_MS, VERIFY_ROLLUP_GRACE_MS } from './staleness';
 export { VerifyStatusService } from './statusService';
+export { sweepStuckVerifyRuns, type VerifySweepOutcome } from './sweep';
+export { resolveEvidenceMetadata } from './terminalEvidence';
+export { releaseUndeliveredRound } from './undeliveredRound';
 export { settleVerifierCheckFromTerminal } from './verifierTerminal';

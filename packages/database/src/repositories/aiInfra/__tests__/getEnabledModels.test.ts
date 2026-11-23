@@ -24,6 +24,17 @@ beforeEach(() => {
   repo = new AiInfraRepos(serverDB, userId, mockProviderConfigs);
 });
 
+const getMergedModels = (
+  providers: AiProviderListItem[],
+  userModels: Awaited<ReturnType<AiInfraRepos['aiModelModel']['getAllModels']>>,
+  builtinModels: unknown[],
+) => {
+  vi.spyOn(repo, 'getAiProviderList').mockResolvedValue(providers);
+  vi.spyOn(repo.aiModelModel, 'getAllModels').mockResolvedValue(userModels);
+  vi.spyOn(repo as any, 'fetchBuiltinModels').mockResolvedValue(builtinModels);
+  return repo.getEnabledModels();
+};
+
 describe('AiInfraRepos', () => {
   describe('getEnabledModels', () => {
     it('should merge and filter enabled models', async () => {
@@ -90,6 +101,56 @@ describe('AiInfraRepos', () => {
           providerId: 'openai',
           sort: 1,
           type: 'chat',
+        }),
+      );
+    });
+
+    it('should keep the builtin deploymentName when the user row only stores chatConfig', async () => {
+      const mockProviders = [
+        {
+          enabled: true,
+          id: 'volcengine',
+          name: 'Volcengine',
+          sort: 1,
+          source: 'builtin' as const,
+        },
+      ];
+
+      // Preference-only row created by updateModelReasoningConfig: its config
+      // holds just chatConfig, but must not shadow the builtin card's
+      // config.deploymentName that findDeploymentName relies on
+      const mockAllModels = [
+        {
+          config: { chatConfig: { reasoningEffort: 'high' } },
+          id: 'deepseek-v4',
+          providerId: 'volcengine',
+          type: 'chat' as const,
+        },
+      ] as any[];
+
+      vi.spyOn(repo, 'getAiProviderList').mockResolvedValue(mockProviders);
+      vi.spyOn(repo.aiModelModel, 'getAllModels').mockResolvedValue(mockAllModels);
+      vi.spyOn(repo as any, 'fetchBuiltinModels').mockResolvedValue([
+        {
+          abilities: {},
+          config: { deploymentName: 'deepseek-v4-250801' },
+          displayName: 'DeepSeek V4',
+          enabled: true,
+          id: 'deepseek-v4',
+          type: 'chat' as const,
+        },
+      ]);
+
+      const result = await repo.getEnabledModels();
+
+      expect(result).toContainEqual(
+        expect.objectContaining({
+          config: {
+            chatConfig: { reasoningEffort: 'high' },
+            deploymentName: 'deepseek-v4-250801',
+          },
+          id: 'deepseek-v4',
+          providerId: 'volcengine',
         }),
       );
     });
@@ -350,11 +411,7 @@ describe('AiInfraRepos', () => {
         settings: { searchImpl: 'params', searchProvider: 'google' }, // builtin has settings
       };
 
-      vi.spyOn(repo, 'getAiProviderList').mockResolvedValue(mockProviders);
-      vi.spyOn(repo.aiModelModel, 'getAllModels').mockResolvedValue([userModel]);
-      vi.spyOn(repo as any, 'fetchBuiltinModels').mockResolvedValue([builtinModel]);
-
-      const result = await repo.getEnabledModels();
+      const result = await getMergedModels(mockProviders, [userModel], [builtinModel]);
 
       const merged = result.find((m) => m.id === 'gpt-4');
       expect(merged).toBeDefined();
@@ -385,11 +442,7 @@ describe('AiInfraRepos', () => {
         settings: { searchImpl: 'params', searchProvider: 'google' }, // builtin has settings
       };
 
-      vi.spyOn(repo, 'getAiProviderList').mockResolvedValue(mockProviders);
-      vi.spyOn(repo.aiModelModel, 'getAllModels').mockResolvedValue([userModel]);
-      vi.spyOn(repo as any, 'fetchBuiltinModels').mockResolvedValue([builtinModel]);
-
-      const result = await repo.getEnabledModels();
+      const result = await getMergedModels(mockProviders, [userModel], [builtinModel]);
 
       const merged = result.find((m) => m.id === 'gpt-4');
       expect(merged).toBeDefined();
@@ -421,11 +474,7 @@ describe('AiInfraRepos', () => {
         settings: { searchImpl: 'params', searchProvider: 'google' }, // builtin has settings
       };
 
-      vi.spyOn(repo, 'getAiProviderList').mockResolvedValue(mockProviders);
-      vi.spyOn(repo.aiModelModel, 'getAllModels').mockResolvedValue([userModel]);
-      vi.spyOn(repo as any, 'fetchBuiltinModels').mockResolvedValue([builtinModel]);
-
-      const result = await repo.getEnabledModels();
+      const result = await getMergedModels(mockProviders, [userModel], [builtinModel]);
 
       const merged = result.find((m) => m.id === 'gpt-4');
       expect(merged).toBeDefined();
@@ -456,11 +505,7 @@ describe('AiInfraRepos', () => {
         settings: { searchImpl: 'params', searchProvider: 'google' }, // builtin has settings
       };
 
-      vi.spyOn(repo, 'getAiProviderList').mockResolvedValue(mockProviders);
-      vi.spyOn(repo.aiModelModel, 'getAllModels').mockResolvedValue([userModel]);
-      vi.spyOn(repo as any, 'fetchBuiltinModels').mockResolvedValue([builtinModel]);
-
-      const result = await repo.getEnabledModels();
+      const result = await getMergedModels(mockProviders, [userModel], [builtinModel]);
 
       const merged = result.find((m) => m.id === 'gpt-4');
       expect(merged).toBeDefined();
@@ -492,11 +537,7 @@ describe('AiInfraRepos', () => {
         // builtin has no settings
       };
 
-      vi.spyOn(repo, 'getAiProviderList').mockResolvedValue(mockProviders);
-      vi.spyOn(repo.aiModelModel, 'getAllModels').mockResolvedValue([userModel]);
-      vi.spyOn(repo as any, 'fetchBuiltinModels').mockResolvedValue([builtinModel]);
-
-      const result = await repo.getEnabledModels();
+      const result = await getMergedModels(mockProviders, [userModel], [builtinModel]);
 
       const merged = result.find((m) => m.id === 'gpt-4');
       expect(merged).toBeDefined();
@@ -527,11 +568,7 @@ describe('AiInfraRepos', () => {
         // no settings
       };
 
-      vi.spyOn(repo, 'getAiProviderList').mockResolvedValue(mockProviders);
-      vi.spyOn(repo.aiModelModel, 'getAllModels').mockResolvedValue([userModel]);
-      vi.spyOn(repo as any, 'fetchBuiltinModels').mockResolvedValue([builtinModel]);
-
-      const result = await repo.getEnabledModels();
+      const result = await getMergedModels(mockProviders, [userModel], [builtinModel]);
 
       const merged = result.find((m) => m.id === 'gpt-4');
       expect(merged).toBeDefined();
@@ -560,11 +597,7 @@ describe('AiInfraRepos', () => {
         settings: { searchImpl: 'tool' }, // builtin has settings
       };
 
-      vi.spyOn(repo, 'getAiProviderList').mockResolvedValue(mockProviders);
-      vi.spyOn(repo.aiModelModel, 'getAllModels').mockResolvedValue([userModel]);
-      vi.spyOn(repo as any, 'fetchBuiltinModels').mockResolvedValue([builtinModel]);
-
-      const result = await repo.getEnabledModels();
+      const result = await getMergedModels(mockProviders, [userModel], [builtinModel]);
 
       const merged = result.find((m) => m.id === 'gpt-4');
       expect(merged).toBeDefined();
@@ -594,11 +627,7 @@ describe('AiInfraRepos', () => {
         settings: { searchImpl: 'tool', extendParams: [] }, // builtin has settings
       };
 
-      vi.spyOn(repo, 'getAiProviderList').mockResolvedValue(mockProviders);
-      vi.spyOn(repo.aiModelModel, 'getAllModels').mockResolvedValue([userModel]);
-      vi.spyOn(repo as any, 'fetchBuiltinModels').mockResolvedValue([builtinModel]);
-
-      const result = await repo.getEnabledModels();
+      const result = await getMergedModels(mockProviders, [userModel], [builtinModel]);
 
       const merged = result.find((m) => m.id === 'gpt-4');
       expect(merged).toBeDefined();
@@ -627,11 +656,7 @@ describe('AiInfraRepos', () => {
         // no settings
       };
 
-      vi.spyOn(repo, 'getAiProviderList').mockResolvedValue(mockProviders);
-      vi.spyOn(repo.aiModelModel, 'getAllModels').mockResolvedValue([userModel]);
-      vi.spyOn(repo as any, 'fetchBuiltinModels').mockResolvedValue([builtinModel]);
-
-      const result = await repo.getEnabledModels();
+      const result = await getMergedModels(mockProviders, [userModel], [builtinModel]);
 
       const merged = result.find((m) => m.id === 'gpt-4');
       expect(merged).toBeDefined();
@@ -661,11 +686,7 @@ describe('AiInfraRepos', () => {
         settings: { searchImpl: 'tool', searchProvider: 'builtin-provider' },
       };
 
-      vi.spyOn(repo, 'getAiProviderList').mockResolvedValue(mockProviders);
-      vi.spyOn(repo.aiModelModel, 'getAllModels').mockResolvedValue([userModel]);
-      vi.spyOn(repo as any, 'fetchBuiltinModels').mockResolvedValue([builtinModel]);
-
-      const result = await repo.getEnabledModels();
+      const result = await getMergedModels(mockProviders, [userModel], [builtinModel]);
 
       const merged = result.find((m) => m.id === 'gpt-4');
       expect(merged).toBeDefined();
@@ -694,11 +715,7 @@ describe('AiInfraRepos', () => {
         settings: { searchImpl: 'tool', searchProvider: 'google' },
       };
 
-      vi.spyOn(repo, 'getAiProviderList').mockResolvedValue(mockProviders);
-      vi.spyOn(repo.aiModelModel, 'getAllModels').mockResolvedValue([userModel]);
-      vi.spyOn(repo as any, 'fetchBuiltinModels').mockResolvedValue([builtinModel]);
-
-      const result = await repo.getEnabledModels();
+      const result = await getMergedModels(mockProviders, [userModel], [builtinModel]);
 
       const merged = result.find((m) => m.id === 'gpt-4');
       expect(merged).toBeDefined();
@@ -731,11 +748,7 @@ describe('AiInfraRepos', () => {
         },
       };
 
-      vi.spyOn(repo, 'getAiProviderList').mockResolvedValue(mockProviders);
-      vi.spyOn(repo.aiModelModel, 'getAllModels').mockResolvedValue([userModel]);
-      vi.spyOn(repo as any, 'fetchBuiltinModels').mockResolvedValue([builtinModel]);
-
-      const result = await repo.getEnabledModels();
+      const result = await getMergedModels(mockProviders, [userModel], [builtinModel]);
 
       const merged = result.find((m) => m.id === 'gpt-4');
       expect(merged).toBeDefined();
@@ -767,11 +780,7 @@ describe('AiInfraRepos', () => {
         // builtin also has no settings
       };
 
-      vi.spyOn(repo, 'getAiProviderList').mockResolvedValue(mockProviders);
-      vi.spyOn(repo.aiModelModel, 'getAllModels').mockResolvedValue([userModel]);
-      vi.spyOn(repo as any, 'fetchBuiltinModels').mockResolvedValue([builtinModel]);
-
-      const result = await repo.getEnabledModels();
+      const result = await getMergedModels(mockProviders, [userModel], [builtinModel]);
 
       const merged = result.find((m) => m.id === 'gpt-4');
       expect(merged).toBeDefined();
@@ -919,11 +928,7 @@ describe('AiInfraRepos', () => {
         },
       ];
 
-      vi.spyOn(repo, 'getAiProviderList').mockResolvedValue(mockProviders);
-      vi.spyOn(repo.aiModelModel, 'getAllModels').mockResolvedValue(userModels);
-      vi.spyOn(repo as any, 'fetchBuiltinModels').mockResolvedValue(builtinModels);
-
-      const result = await repo.getEnabledModels();
+      const result = await getMergedModels(mockProviders, userModels, builtinModels);
 
       const modelA = result.find((m) => m.id === 'model-a');
       const modelB = result.find((m) => m.id === 'model-b');
@@ -1077,11 +1082,7 @@ describe('AiInfraRepos', () => {
         },
       ] as EnabledAiModel[];
 
-      vi.spyOn(repo, 'getAiProviderList').mockResolvedValue(mockProviders);
-      vi.spyOn(repo.aiModelModel, 'getAllModels').mockResolvedValue(mockAllModels);
-      vi.spyOn(repo as any, 'fetchBuiltinModels').mockResolvedValue([]);
-
-      const result = await repo.getEnabledModels();
+      const result = await getMergedModels(mockProviders, mockAllModels, []);
       const merged = result.find((m) => m.id === 'newapi-model');
       expect(merged).toBeDefined();
       expect(merged?.pricing).toEqual({

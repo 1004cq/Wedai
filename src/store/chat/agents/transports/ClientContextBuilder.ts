@@ -4,7 +4,11 @@ import type {
   ContextBuildInput,
   ContextBuildOutput,
 } from '@lobechat/agent-runtime';
-import { ToolResolver, type ToolsEngine } from '@lobechat/context-engine';
+import {
+  ToolResolver,
+  type ToolsEngine,
+  tryCountRequestPayloadTokens,
+} from '@lobechat/context-engine';
 import type { MessageMetadata } from '@lobechat/types';
 import { TraceNameMap } from '@lobechat/types';
 import { dedupeBy } from '@lobechat/utils';
@@ -65,7 +69,6 @@ export class ClientContextBuilder implements ContextBuilder {
       enabledToolIds: resolvedTools.enabledToolIds,
       tools: resolvedTools.tools.length > 0 ? resolvedTools.tools : undefined,
     };
-    const { agentConfig } = promptAgentConfig;
     const { agentId, groupId, subAgentId, topicId } = operation.context;
     const effectiveAgentId = groupId && subAgentId ? subAgentId : agentId;
     const assistantMessageId = (input.payload as { assistantMessageId?: string })
@@ -76,13 +79,17 @@ export class ClientContextBuilder implements ContextBuilder {
     const prepared = await chatService.buildAssistantMessageContext(
       {
         agentId: effectiveAgentId || undefined,
+        additionalContexts: input.payload.additionalContexts,
+        attachmentPreviewFileIds: input.payload.attachmentPreviewFileIds,
+        discoveryExcludedToolIds: this.context.agentConfig.enabledToolIds ?? [],
+        discoveryManifests:
+          input.state.operationToolSet?.manifestMap ?? input.state.toolManifestMap,
         groupId,
         messages,
         model: input.model,
         provider: input.provider,
         resolvedAgentConfig: promptAgentConfig,
         topicId: topicId ?? undefined,
-        ...agentConfig.params,
       },
       {
         initialContext: this.context.runtimeContext?.initialContext,
@@ -98,16 +105,25 @@ export class ClientContextBuilder implements ContextBuilder {
     const { messages: preparedMessages = [], ...params } = prepared.params;
 
     return {
+      // The client transport sends these messages and `params.tools` as-is.
+      contextAccounting: tryCountRequestPayloadTokens({
+        messages: preparedMessages,
+        tools: params.tools,
+      }),
       messages: preparedMessages,
       modelParameters: {
         options: prepared.options,
-        params,
+        params: {
+          ...params,
+          // The client transport builds the request from these params alone,
+          // so a forced or configured preserveThinking must ride here too.
+          ...(typeof prepared.preserveThinking === 'boolean' && {
+            preserveThinking: prepared.preserveThinking,
+          }),
+        },
       } satisfies ClientLLMModelParameters,
-      preserveThinking:
-        typeof prepared.params.preserveThinking === 'boolean'
-          ? prepared.params.preserveThinking
-          : undefined,
-      replayAssistantReasoning: true,
+      preserveThinking: prepared.preserveThinking,
+      replayAssistantReasoning: prepared.replayAssistantReasoning ?? false,
       resolvedTools,
     };
   }

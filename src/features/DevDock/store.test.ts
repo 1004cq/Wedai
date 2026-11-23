@@ -1,7 +1,7 @@
 /**
  * @vitest-environment happy-dom
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MIN_PANEL_HEIGHT, useDevDockStore } from './store';
 
@@ -16,6 +16,7 @@ describe('DevDock store', () => {
       activePanelId: null,
       expanded: true,
       maximized: false,
+      mesurer: false,
       panelHeight: 360,
       pinOverrides: {},
       reactScan: false,
@@ -44,10 +45,16 @@ describe('DevDock store', () => {
 
   it('persists UI state to localStorage', () => {
     useDevDockStore.getState().setExpanded(false);
+    useDevDockStore.getState().setMesurer(true);
     useDevDockStore.getState().setScrollDebug(true);
     useDevDockStore.getState().setReactScan(true);
 
-    expect(readPersisted()).toMatchObject({ expanded: false, reactScan: true, scrollDebug: true });
+    expect(readPersisted()).toMatchObject({
+      expanded: false,
+      mesurer: true,
+      reactScan: true,
+      scrollDebug: true,
+    });
   });
 
   it('merges pin overrides per id and persists them', () => {
@@ -63,5 +70,27 @@ describe('DevDock store', () => {
     useDevDockStore.getState().setPinned('reload', false);
 
     expect(useDevDockStore.getState().pinOverrides).toEqual({ reload: false });
+  });
+
+  it('never writes the open panel to storage', () => {
+    useDevDockStore.getState().togglePanel('local-database');
+    useDevDockStore.getState().togglePanel('feature-flags');
+
+    expect(readPersisted()).not.toHaveProperty('activePanelId');
+  });
+
+  it('restores persisted state but boots with no panel open', async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ activePanelId: 'local-database', expanded: false, panelHeight: 500 }),
+    );
+
+    vi.resetModules();
+    // Boot-time state only exists at module init, so the store has to be re-imported.
+    const { useDevDockStore: bootedStore } = await import('./store');
+
+    expect(bootedStore.getState().activePanelId).toBeNull();
+    expect(bootedStore.getState().expanded).toBe(false);
+    expect(bootedStore.getState().panelHeight).toBe(500);
   });
 });

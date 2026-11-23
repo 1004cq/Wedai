@@ -1,15 +1,39 @@
 import { describe, expect, it } from 'vitest';
 
+import { resolveThreadScope } from '../../indexing';
 import type { Message, MessageGroupMetadata } from '../../types';
 import { BranchResolver } from '../BranchResolver';
 import { FlatListBuilder } from '../FlatListBuilder';
 import { MessageCollector } from '../MessageCollector';
 import { MessageTransformer } from '../MessageTransformer';
 
+const createRootMessage = (id: string, role: Message['role'], content: string): Message => ({
+  content,
+  createdAt: 0,
+  id,
+  role,
+  updatedAt: 0,
+});
+
+const createReplyMessage = (
+  id: string,
+  parentId: string,
+  role: Message['role'],
+  content: string,
+): Message => ({
+  content,
+  createdAt: 0,
+  id,
+  parentId,
+  role,
+  updatedAt: 0,
+});
+
 describe('FlatListBuilder', () => {
   const createBuilder = (
     messages: Message[],
     messageGroupMap: Map<string, MessageGroupMetadata> = new Map(),
+    threadId?: string | null,
   ) => {
     const messageMap = new Map<string, Message>();
     const childrenMap = new Map<string | null, string[]>();
@@ -24,8 +48,16 @@ describe('FlatListBuilder', () => {
       childrenMap.get(parentId)!.push(msg.id);
     });
 
+    // Mirrors `buildHelperMaps`, so the builder is scoped the way production scopes it.
+    const threadScope = resolveThreadScope(messages, threadId);
+
     const branchResolver = new BranchResolver();
-    const messageCollector = new MessageCollector(messageMap, childrenMap);
+    const messageCollector = new MessageCollector(
+      messageMap,
+      childrenMap,
+      branchResolver,
+      threadScope,
+    );
     const messageTransformer = new MessageTransformer();
 
     return new FlatListBuilder(
@@ -35,27 +67,15 @@ describe('FlatListBuilder', () => {
       branchResolver,
       messageCollector,
       messageTransformer,
+      threadScope,
     );
   };
 
   describe('flatten', () => {
     it('should flatten simple message chain', () => {
       const messages: Message[] = [
-        {
-          content: 'Hello',
-          createdAt: 0,
-          id: 'msg-1',
-          role: 'user',
-          updatedAt: 0,
-        },
-        {
-          content: 'Hi',
-          createdAt: 0,
-          id: 'msg-2',
-          parentId: 'msg-1',
-          role: 'assistant',
-          updatedAt: 0,
-        },
+        createRootMessage('msg-1', 'user', 'Hello'),
+        createReplyMessage('msg-2', 'msg-1', 'assistant', 'Hi'),
       ];
 
       const builder = createBuilder(messages);
@@ -66,15 +86,181 @@ describe('FlatListBuilder', () => {
       expect(result[1].id).toBe('msg-2');
     });
 
-    it('should create assistant group virtual message', () => {
+    it('should hide cross-agent dispatch user envelope while preserving target reply', () => {
       const messages: Message[] = [
         {
-          content: 'Request',
+          agentId: 'parent-agent',
+          content: '@Target please handle this',
           createdAt: 0,
-          id: 'msg-1',
+          id: 'user-parent',
           role: 'user',
           updatedAt: 0,
         },
+        {
+          agentId: 'parent-agent',
+          content: '',
+          createdAt: 1,
+          id: 'assistant-parent',
+          parentId: 'user-parent',
+          role: 'assistant',
+          tools: [
+            {
+              apiName: 'callAgent',
+              arguments: '{"agentId":"target-agent"}',
+              id: 'call-agent-1',
+              identifier: 'lobe-agent-management',
+              type: 'default',
+            },
+          ],
+          updatedAt: 1,
+        },
+        {
+          content: 'Called agent "target-agent" to respond.',
+          createdAt: 2,
+          id: 'tool-call-agent',
+          parentId: 'assistant-parent',
+          role: 'tool',
+          tool_call_id: 'call-agent-1',
+          updatedAt: 2,
+        },
+        {
+          agentId: 'target-agent',
+          content: '@Target please handle this',
+          createdAt: 3,
+          id: 'user-dispatch-envelope',
+          metadata: { agentDispatch: { kind: 'callAgent', visibility: 'internal' } },
+          parentId: 'assistant-parent',
+          role: 'user',
+          updatedAt: 3,
+        },
+        {
+          agentId: 'target-agent',
+          content: 'Target result',
+          createdAt: 4,
+          id: 'assistant-target',
+          parentId: 'user-dispatch-envelope',
+          role: 'assistant',
+          updatedAt: 4,
+        },
+      ];
+
+      const builder = createBuilder(messages);
+      const result = builder.flatten(messages);
+
+      expect(result.map((message) => message.id)).toEqual([
+        'user-parent',
+        'assistant-parent',
+        'assistant-target',
+      ]);
+      expect(result.filter((message) => message.role === 'user')).toHaveLength(1);
+      expect(result.at(-1)).toMatchObject({
+        agentId: 'target-agent',
+        content: 'Target result',
+        role: 'assistant',
+      });
+    });
+
+    it('should not hide an unmarked cross-agent user turn', () => {
+      const messages: Message[] = [
+        {
+          agentId: 'parent-agent',
+          content: 'Parent answer',
+          createdAt: 0,
+          id: 'assistant-parent',
+          role: 'assistant',
+          updatedAt: 0,
+        },
+        {
+          agentId: 'target-agent',
+          content: 'A real user-authored turn',
+          createdAt: 1,
+          id: 'user-cross-agent',
+          parentId: 'assistant-parent',
+          role: 'user',
+          updatedAt: 1,
+        },
+      ];
+
+      const result = createBuilder(messages).flatten(messages);
+
+      expect(result.map((message) => message.id)).toEqual(['assistant-parent', 'user-cross-agent']);
+    });
+
+    it('should keep a normal same-agent follow-up user message visible', () => {
+      const messages: Message[] = [
+        {
+          agentId: 'agent-a',
+          content: 'First question',
+          createdAt: 0,
+          id: 'user-1',
+          role: 'user',
+          updatedAt: 0,
+        },
+        {
+          agentId: 'agent-a',
+          content: 'First answer',
+          createdAt: 1,
+          id: 'assistant-1',
+          parentId: 'user-1',
+          role: 'assistant',
+          updatedAt: 1,
+        },
+        {
+          agentId: 'agent-a',
+          content: 'Follow-up question',
+          createdAt: 2,
+          id: 'user-2',
+          parentId: 'assistant-1',
+          role: 'user',
+          updatedAt: 2,
+        },
+      ];
+
+      const builder = createBuilder(messages);
+      const result = builder.flatten(messages);
+
+      expect(result.map((message) => message.id)).toEqual(['user-1', 'assistant-1', 'user-2']);
+    });
+
+    it('should keep a user follow-up after a direct cross-agent reply visible', () => {
+      const messages: Message[] = [
+        {
+          agentId: 'conversation-owner',
+          content: '@Target first question',
+          createdAt: 0,
+          id: 'user-1',
+          role: 'user',
+          updatedAt: 0,
+        },
+        {
+          agentId: 'target-agent',
+          content: 'Direct answer',
+          createdAt: 1,
+          id: 'assistant-1',
+          parentId: 'user-1',
+          role: 'assistant',
+          updatedAt: 1,
+        },
+        {
+          agentId: 'conversation-owner',
+          content: 'Follow-up question',
+          createdAt: 2,
+          id: 'user-2',
+          parentId: 'assistant-1',
+          role: 'user',
+          updatedAt: 2,
+        },
+      ];
+
+      const builder = createBuilder(messages);
+      const result = builder.flatten(messages);
+
+      expect(result.map((message) => message.id)).toEqual(['user-1', 'assistant-1', 'user-2']);
+    });
+
+    it('should create assistant group virtual message', () => {
+      const messages: Message[] = [
+        createRootMessage('msg-1', 'user', 'Request'),
         {
           content: 'Using tool',
           createdAt: 0,
@@ -108,6 +294,177 @@ describe('FlatListBuilder', () => {
       expect(result[1].usage).toBeDefined();
     });
 
+    it('should backfill group model/provider from a later step assistant', () => {
+      // Kimi Code only learns model/provider at run end (stamped on the LAST
+      // step's assistant via turn_metadata); the group spreads the first row.
+      const messages: Message[] = [
+        createRootMessage('msg-1', 'user', 'Request'),
+        {
+          content: 'Using tool',
+          createdAt: 0,
+          id: 'msg-2',
+          parentId: 'msg-1',
+          role: 'assistant',
+          tools: [
+            { apiName: 'test', arguments: '{}', id: 'tool-1', identifier: 'test', type: 'default' },
+          ],
+          updatedAt: 0,
+        },
+        {
+          content: 'Tool result',
+          createdAt: 0,
+          id: 'tool-1',
+          parentId: 'msg-2',
+          role: 'tool',
+          tool_call_id: 'tool-1',
+          updatedAt: 0,
+        },
+        {
+          content: 'Done',
+          createdAt: 0,
+          id: 'msg-3',
+          metadata: { totalInputTokens: 30, totalOutputTokens: 7 },
+          model: 'kimi-code/k3',
+          parentId: 'tool-1',
+          provider: 'kimi-code',
+          role: 'assistant',
+          updatedAt: 0,
+        },
+      ];
+
+      const builder = createBuilder(messages);
+      const result = builder.flatten(messages);
+
+      expect(result).toHaveLength(2);
+      expect(result[1].role).toBe('assistantGroup');
+      expect(result[1].model).toBe('kimi-code/k3');
+      expect(result[1].provider).toBe('kimi-code');
+      expect(result[1].usage).toMatchObject({ totalInputTokens: 30, totalOutputTokens: 7 });
+    });
+
+    it('should keep the first assistant model/provider when already set', () => {
+      const messages: Message[] = [
+        createRootMessage('msg-1', 'user', 'Request'),
+        {
+          content: 'Using tool',
+          createdAt: 0,
+          id: 'msg-2',
+          model: 'claude-opus-4-7',
+          parentId: 'msg-1',
+          provider: 'claude-code',
+          role: 'assistant',
+          tools: [
+            { apiName: 'test', arguments: '{}', id: 'tool-1', identifier: 'test', type: 'default' },
+          ],
+          updatedAt: 0,
+        },
+        {
+          content: 'Tool result',
+          createdAt: 0,
+          id: 'tool-1',
+          parentId: 'msg-2',
+          role: 'tool',
+          tool_call_id: 'tool-1',
+          updatedAt: 0,
+        },
+        {
+          content: 'Done',
+          createdAt: 0,
+          id: 'msg-3',
+          model: 'kimi-code/k3',
+          parentId: 'tool-1',
+          provider: 'kimi-code',
+          role: 'assistant',
+          updatedAt: 0,
+        },
+      ];
+
+      const builder = createBuilder(messages);
+      const result = builder.flatten(messages);
+
+      expect(result[1].role).toBe('assistantGroup');
+      expect(result[1].model).toBe('claude-opus-4-7');
+      expect(result[1].provider).toBe('claude-code');
+    });
+
+    it('should leave group model/provider undefined when no assistant carries one', () => {
+      const messages: Message[] = [
+        createRootMessage('msg-1', 'user', 'Request'),
+        {
+          content: 'Using tool',
+          createdAt: 0,
+          id: 'msg-2',
+          parentId: 'msg-1',
+          role: 'assistant',
+          tools: [
+            { apiName: 'test', arguments: '{}', id: 'tool-1', identifier: 'test', type: 'default' },
+          ],
+          updatedAt: 0,
+        },
+        {
+          content: 'Tool result',
+          createdAt: 0,
+          id: 'tool-1',
+          parentId: 'msg-2',
+          role: 'tool',
+          tool_call_id: 'tool-1',
+          updatedAt: 0,
+        },
+        createReplyMessage('msg-3', 'tool-1', 'assistant', 'Done'),
+      ];
+
+      const builder = createBuilder(messages);
+      const result = builder.flatten(messages);
+
+      expect(result[1].role).toBe('assistantGroup');
+      expect(result[1].model).toBeUndefined();
+      expect(result[1].provider).toBeUndefined();
+    });
+
+    it('keeps a terminal finish type on its originating assistant block', () => {
+      const messages: Message[] = [
+        createRootMessage('user-1', 'user', 'Request'),
+        {
+          content: 'Using tool',
+          createdAt: 1,
+          id: 'assistant-1',
+          parentId: 'user-1',
+          role: 'assistant',
+          tools: [
+            { apiName: 'test', arguments: '{}', id: 'tool-1', identifier: 'test', type: 'default' },
+          ],
+          updatedAt: 1,
+        },
+        {
+          content: 'Tool result',
+          createdAt: 2,
+          id: 'tool-result-1',
+          parentId: 'assistant-1',
+          role: 'tool',
+          tool_call_id: 'tool-1',
+          updatedAt: 2,
+        },
+        {
+          content: 'I cannot help with that.',
+          createdAt: 3,
+          id: 'assistant-2',
+          metadata: { collapsed: true, finishType: 'refusal' },
+          parentId: 'tool-result-1',
+          role: 'assistant',
+          updatedAt: 3,
+        },
+      ];
+
+      const result = createBuilder(messages).flatten(messages);
+      const [initial, terminal] = result[1].children ?? [];
+
+      expect(result[1].role).toBe('assistantGroup');
+      expect(initial?.metadata?.finishType).toBeUndefined();
+      expect(initial?.metadata?.collapsed).toBe(true);
+      expect(terminal?.metadata?.finishType).toBe('refusal');
+      expect(terminal?.metadata?.collapsed).toBeUndefined();
+    });
+
     it('should handle user message with branches', () => {
       const messages: Message[] = [
         {
@@ -118,22 +475,8 @@ describe('FlatListBuilder', () => {
           role: 'user',
           updatedAt: 0,
         },
-        {
-          content: 'Branch 1',
-          createdAt: 0,
-          id: 'msg-2',
-          parentId: 'msg-1',
-          role: 'assistant',
-          updatedAt: 0,
-        },
-        {
-          content: 'Branch 2',
-          createdAt: 0,
-          id: 'msg-3',
-          parentId: 'msg-1',
-          role: 'assistant',
-          updatedAt: 0,
-        },
+        createReplyMessage('msg-2', 'msg-1', 'assistant', 'Branch 1'),
+        createReplyMessage('msg-3', 'msg-1', 'assistant', 'Branch 2'),
       ];
 
       const builder = createBuilder(messages);
@@ -146,13 +489,7 @@ describe('FlatListBuilder', () => {
 
     it('should handle assistant message with branches', () => {
       const messages: Message[] = [
-        {
-          content: 'User',
-          createdAt: 0,
-          id: 'msg-1',
-          role: 'user',
-          updatedAt: 0,
-        },
+        createRootMessage('msg-1', 'user', 'User'),
         {
           content: 'Assistant',
           createdAt: 0,
@@ -162,22 +499,8 @@ describe('FlatListBuilder', () => {
           role: 'assistant',
           updatedAt: 0,
         },
-        {
-          content: 'Branch 1',
-          createdAt: 0,
-          id: 'msg-3',
-          parentId: 'msg-2',
-          role: 'user',
-          updatedAt: 0,
-        },
-        {
-          content: 'Branch 2',
-          createdAt: 0,
-          id: 'msg-4',
-          parentId: 'msg-2',
-          role: 'user',
-          updatedAt: 0,
-        },
+        createReplyMessage('msg-3', 'msg-2', 'user', 'Branch 1'),
+        createReplyMessage('msg-4', 'msg-2', 'user', 'Branch 2'),
       ];
 
       const builder = createBuilder(messages);
@@ -243,14 +566,7 @@ describe('FlatListBuilder', () => {
           role: 'assistant',
           updatedAt: 0,
         },
-        {
-          content: 'Assistant 2',
-          createdAt: 0,
-          id: 'msg-3',
-          parentId: 'msg-1',
-          role: 'assistant',
-          updatedAt: 0,
-        },
+        createReplyMessage('msg-3', 'msg-1', 'assistant', 'Assistant 2'),
       ];
 
       const builder = createBuilder(messages);
@@ -279,30 +595,9 @@ describe('FlatListBuilder', () => {
           role: 'user',
           updatedAt: 0,
         },
-        {
-          content: 'Branch 1',
-          createdAt: 0,
-          id: 'msg-2',
-          parentId: 'msg-1',
-          role: 'assistant',
-          updatedAt: 0,
-        },
-        {
-          content: 'Branch 2',
-          createdAt: 0,
-          id: 'msg-3',
-          parentId: 'msg-1',
-          role: 'assistant',
-          updatedAt: 0,
-        },
-        {
-          content: 'Follow-up',
-          createdAt: 0,
-          id: 'msg-4',
-          parentId: 'msg-2',
-          role: 'user',
-          updatedAt: 0,
-        },
+        createReplyMessage('msg-2', 'msg-1', 'assistant', 'Branch 1'),
+        createReplyMessage('msg-3', 'msg-1', 'assistant', 'Branch 2'),
+        createReplyMessage('msg-4', 'msg-2', 'user', 'Follow-up'),
       ];
 
       const builder = createBuilder(messages);
@@ -344,14 +639,7 @@ describe('FlatListBuilder', () => {
           tool_call_id: 'tool-1',
           updatedAt: 0,
         },
-        {
-          content: 'Assistant 2',
-          createdAt: 0,
-          id: 'msg-3',
-          parentId: 'msg-1',
-          role: 'assistant',
-          updatedAt: 0,
-        },
+        createReplyMessage('msg-3', 'msg-1', 'assistant', 'Assistant 2'),
       ];
 
       const builder = createBuilder(messages);
@@ -370,13 +658,7 @@ describe('FlatListBuilder', () => {
 
     it('should include follow-up messages after assistant chain', () => {
       const messages: Message[] = [
-        {
-          content: 'User request',
-          createdAt: 0,
-          id: 'msg-1',
-          role: 'user',
-          updatedAt: 0,
-        },
+        createRootMessage('msg-1', 'user', 'User request'),
         {
           content: 'Using tool',
           createdAt: 0,
@@ -397,22 +679,8 @@ describe('FlatListBuilder', () => {
           tool_call_id: 'tool-1',
           updatedAt: 0,
         },
-        {
-          content: 'Response based on tool',
-          createdAt: 0,
-          id: 'msg-3',
-          parentId: 'tool-1',
-          role: 'assistant',
-          updatedAt: 0,
-        },
-        {
-          content: 'User follow-up',
-          createdAt: 0,
-          id: 'msg-4',
-          parentId: 'msg-3',
-          role: 'user',
-          updatedAt: 0,
-        },
+        createReplyMessage('msg-3', 'tool-1', 'assistant', 'Response based on tool'),
+        createReplyMessage('msg-4', 'msg-3', 'user', 'User follow-up'),
       ];
 
       const builder = createBuilder(messages);
@@ -427,13 +695,7 @@ describe('FlatListBuilder', () => {
 
     it('should handle user reply to tool message', () => {
       const messages: Message[] = [
-        {
-          content: 'User request',
-          createdAt: 0,
-          id: 'msg-1',
-          role: 'user',
-          updatedAt: 0,
-        },
+        createRootMessage('msg-1', 'user', 'User request'),
         {
           content: 'Using tool',
           createdAt: 0,
@@ -454,14 +716,7 @@ describe('FlatListBuilder', () => {
           tool_call_id: 'tool-1',
           updatedAt: 0,
         },
-        {
-          content: 'User reply to tool',
-          createdAt: 0,
-          id: 'msg-3',
-          parentId: 'tool-1',
-          role: 'user',
-          updatedAt: 0,
-        },
+        createReplyMessage('msg-3', 'tool-1', 'user', 'User reply to tool'),
       ];
 
       const builder = createBuilder(messages);
@@ -488,22 +743,8 @@ describe('FlatListBuilder', () => {
           role: 'user',
           updatedAt: 0,
         },
-        {
-          content: 'Branch 1',
-          createdAt: 0,
-          id: 'msg-2',
-          parentId: 'msg-1',
-          role: 'assistant',
-          updatedAt: 0,
-        },
-        {
-          content: 'Branch 2',
-          createdAt: 0,
-          id: 'msg-3',
-          parentId: 'msg-1',
-          role: 'assistant',
-          updatedAt: 0,
-        },
+        createReplyMessage('msg-2', 'msg-1', 'assistant', 'Branch 1'),
+        createReplyMessage('msg-3', 'msg-1', 'assistant', 'Branch 2'),
       ];
 
       const builder = createBuilder(messages);
@@ -522,30 +763,9 @@ describe('FlatListBuilder', () => {
       // Scenario: Thread messages where the parent (source message) is not in the query result
       // All messages have parentId pointing to a message not in the array
       const messages: Message[] = [
-        {
-          content: 'Thread user message',
-          createdAt: 0,
-          id: 'msg-1',
-          parentId: 'source-msg-not-in-array',
-          role: 'user',
-          updatedAt: 0,
-        },
-        {
-          content: 'Thread assistant reply',
-          createdAt: 0,
-          id: 'msg-2',
-          parentId: 'msg-1',
-          role: 'assistant',
-          updatedAt: 0,
-        },
-        {
-          content: 'Thread user follow-up',
-          createdAt: 0,
-          id: 'msg-3',
-          parentId: 'msg-2',
-          role: 'user',
-          updatedAt: 0,
-        },
+        createReplyMessage('msg-1', 'source-msg-not-in-array', 'user', 'Thread user message'),
+        createReplyMessage('msg-2', 'msg-1', 'assistant', 'Thread assistant reply'),
+        createReplyMessage('msg-3', 'msg-2', 'user', 'Thread user follow-up'),
       ];
 
       const builder = createBuilder(messages);
@@ -560,21 +780,8 @@ describe('FlatListBuilder', () => {
 
     it('should create tasks message when multiple tasks have same agentId', () => {
       const messages: Message[] = [
-        {
-          content: 'User request',
-          createdAt: 0,
-          id: 'msg-1',
-          role: 'user',
-          updatedAt: 0,
-        },
-        {
-          content: 'Tool message',
-          createdAt: 0,
-          id: 'tool-1',
-          parentId: 'msg-1',
-          role: 'tool',
-          updatedAt: 0,
-        },
+        createRootMessage('msg-1', 'user', 'User request'),
+        createReplyMessage('tool-1', 'msg-1', 'tool', 'Tool message'),
         {
           agentId: 'agent-1',
           content: 'Task 1 result',
@@ -608,21 +815,8 @@ describe('FlatListBuilder', () => {
 
     it('should create groupTasks message when multiple tasks have different agentIds', () => {
       const messages: Message[] = [
-        {
-          content: 'User request',
-          createdAt: 0,
-          id: 'msg-1',
-          role: 'user',
-          updatedAt: 0,
-        },
-        {
-          content: 'Tool message',
-          createdAt: 0,
-          id: 'tool-1',
-          parentId: 'msg-1',
-          role: 'tool',
-          updatedAt: 0,
-        },
+        createRootMessage('msg-1', 'user', 'User request'),
+        createReplyMessage('tool-1', 'msg-1', 'tool', 'Tool message'),
         {
           agentId: 'agent-1',
           content: 'Task 1 result',
@@ -667,13 +861,7 @@ describe('FlatListBuilder', () => {
 
     it('should create groupTasks with correct timestamps from task messages', () => {
       const messages: Message[] = [
-        {
-          content: 'Tool message',
-          createdAt: 0,
-          id: 'tool-1',
-          role: 'tool',
-          updatedAt: 0,
-        },
+        createRootMessage('tool-1', 'tool', 'Tool message'),
         {
           agentId: 'agent-1',
           content: 'Task 1',
@@ -723,7 +911,7 @@ describe('FlatListBuilder', () => {
 
       const messages: Message[] = [
         // User
-        { content: 'go', createdAt: 0, id: 'u-1', role: 'user', updatedAt: 0 },
+        createRootMessage('u-1', 'user', 'go'),
         // Step 0: assistant with Monitor tool
         {
           agentId: 'a',
@@ -810,6 +998,159 @@ describe('FlatListBuilder', () => {
       expect(block.callbacks.map((c) => c.id)).toEqual(['cb-1', 'cb-2', 'cb-3']);
       expect(block.callbacks.map((c) => c.sequence)).toEqual([1, 2, 3]);
       expect(block.callbacks[0].content).toBe('等 list 完。');
+    });
+  });
+
+  describe('threads', () => {
+    const base = { createdAt: 1, role: 'assistant', updatedAt: 1 } as const;
+
+    // A background run (memory signal, sub-agent) lives in its own thread. Whether its head
+    // hangs off nothing or off the main-chain step that spawned it, the transcript must not
+    // walk into it — otherwise the run renders as a stray bubble mid-conversation.
+    const mainChain: Message[] = [
+      { ...base, content: 'Question', id: 'user-1', role: 'user' },
+      { ...base, content: 'Answer', createdAt: 2, id: 'asst-1', parentId: 'user-1' },
+    ];
+
+    it('should exclude a thread whose head is a root', () => {
+      const messages: Message[] = [
+        ...mainChain,
+        { ...base, content: 'Background run', createdAt: 3, id: 'thr-1', threadId: 'thd-1' },
+      ];
+
+      expect(
+        createBuilder(messages)
+          .flatten(messages)
+          .map((m) => m.id),
+      ).toEqual(['user-1', 'asst-1']);
+    });
+
+    it('should exclude a thread whose head hangs off the main chain', () => {
+      const messages: Message[] = [
+        ...mainChain,
+        {
+          ...base,
+          content: 'Background run',
+          createdAt: 3,
+          id: 'thr-1',
+          parentId: 'asst-1',
+          threadId: 'thd-1',
+        },
+      ];
+
+      expect(
+        createBuilder(messages)
+          .flatten(messages)
+          .map((m) => m.id),
+      ).toEqual(['user-1', 'asst-1']);
+    });
+
+    it('should not classify an assistant as a tool-chain head via a threaded reply', () => {
+      // The only continuation carrying tools is threaded, so it is out of scope. Classifying
+      // on it would open an AssistantGroup that collection cannot fill, replacing the
+      // assistant's own bubble with an empty group.
+      const messages: Message[] = [
+        { ...base, content: 'Question', id: 'user-1', role: 'user' },
+        {
+          ...base,
+          agentId: 'a1',
+          content: 'Answer',
+          createdAt: 2,
+          id: 'asst-1',
+          parentId: 'user-1',
+        },
+        {
+          ...base,
+          agentId: 'a1',
+          content: 'Background run',
+          createdAt: 3,
+          id: 'thr-1',
+          parentId: 'asst-1',
+          threadId: 'thd-1',
+          tools: [
+            {
+              apiName: 'search',
+              arguments: '{}',
+              id: 'call-1',
+              identifier: 'search',
+              type: 'default',
+            },
+          ],
+        },
+      ];
+
+      const result = createBuilder(messages).flatten(messages);
+
+      expect(result.map((m) => m.id)).toEqual(['user-1', 'asst-1']);
+      expect(result[1].role).toBe('assistant');
+    });
+
+    // The thread view's query returns the unthreaded ancestors together with the thread's
+    // replies, so the input mixes both. Scoped to that thread, the replies must survive while
+    // other threads stay out.
+    const threadQuery: Message[] = [
+      ...mainChain,
+      {
+        ...base,
+        content: 'Reply',
+        createdAt: 3,
+        id: 'thr-1',
+        parentId: 'asst-1',
+        threadId: 'thd-1',
+      },
+      {
+        ...base,
+        content: 'Follow-up',
+        createdAt: 4,
+        id: 'thr-2',
+        parentId: 'thr-1',
+        role: 'user',
+        threadId: 'thd-1',
+      },
+      {
+        ...base,
+        content: 'Other thread',
+        createdAt: 5,
+        id: 'other-1',
+        parentId: 'asst-1',
+        threadId: 'thd-2',
+      },
+    ];
+
+    it('should keep the replies of the requested thread alongside its ancestors', () => {
+      expect(
+        createBuilder(threadQuery, new Map(), 'thd-1')
+          .flatten(threadQuery)
+          .map((m) => m.id),
+      ).toEqual(['user-1', 'asst-1', 'thr-1', 'thr-2']);
+    });
+
+    it('should drop every thread when scoped to the main flow', () => {
+      expect(
+        createBuilder(threadQuery, new Map(), null)
+          .flatten(threadQuery)
+          .map((m) => m.id),
+      ).toEqual(['user-1', 'asst-1']);
+    });
+
+    it('should still render a thread when it is all the caller passed', () => {
+      const messages: Message[] = [
+        { ...base, content: 'Background run', id: 'thr-1', threadId: 'thd-1' },
+        {
+          ...base,
+          content: 'More',
+          createdAt: 2,
+          id: 'thr-2',
+          parentId: 'thr-1',
+          threadId: 'thd-1',
+        },
+      ];
+
+      expect(
+        createBuilder(messages)
+          .flatten(messages)
+          .map((m) => m.id),
+      ).toEqual(['thr-1', 'thr-2']);
     });
   });
 });

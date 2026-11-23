@@ -18,9 +18,11 @@ const aiInfraMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@/database/repositories/aiInfra', () => {
-  const AiInfraRepos = vi.fn().mockImplementation(() => ({
-    getAiProviderRuntimeState: aiInfraMocks.getAiProviderRuntimeState,
-  })) as unknown as typeof AiInfraReposModule.AiInfraRepos;
+  const AiInfraRepos = vi.fn().mockImplementation(function () {
+    return {
+      getAiProviderRuntimeState: aiInfraMocks.getAiProviderRuntimeState,
+    };
+  }) as unknown as typeof AiInfraReposModule.AiInfraRepos;
 
   (AiInfraRepos as any).tryMatchingModelFrom = aiInfraMocks.tryMatchingModelFrom;
   (AiInfraRepos as any).tryMatchingProviderFrom = aiInfraMocks.tryMatchingProviderFrom;
@@ -38,6 +40,8 @@ vi.mock('@/server/globalConfig/parseMemoryExtractionConfig', () => ({
       model: 'gpt-mock',
       provider: 'openai',
     },
+    agentLayerExtractorPreferredModels: ['gpt-mock'],
+    agentLayerExtractorPreferredProviders: ['openai'],
     agentPersonaWriter: {
       apiKey: 'test-key',
       baseURL: 'https://example.com',
@@ -45,6 +49,8 @@ vi.mock('@/server/globalConfig/parseMemoryExtractionConfig', () => ({
       model: 'gpt-mock',
       provider: 'openai',
     },
+    agentPersonaWriterPreferredModels: ['gpt-mock'],
+    agentPersonaWriterPreferredProviders: ['openai'],
   }),
 }));
 
@@ -64,9 +70,11 @@ const structuredResult = {
 const toolCall = vi.fn().mockResolvedValue(structuredResult);
 
 vi.mock('@lobechat/memory-user-memory', () => ({
-  UserPersonaExtractor: vi.fn().mockImplementation(() => ({
-    toolCall,
-  })),
+  UserPersonaExtractor: vi.fn().mockImplementation(function () {
+    return {
+      toolCall,
+    };
+  }),
 }));
 
 vi.mock('@/server/services/memory/userMemory/extract', () => ({
@@ -177,6 +185,22 @@ describe('UserPersonaService', () => {
         },
       }),
       undefined,
+    );
+  });
+
+  it('passes persona writer preferred lists to runtime resolution', async () => {
+    const service = new UserPersonaService(db);
+
+    await service.composeWriting({ userId, username: 'User' });
+
+    expect(aiInfraMocks.tryMatchingProviderFrom).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        fallbackProvider: 'openai',
+        modelId: 'gpt-mock',
+        preferredModels: ['gpt-mock'],
+        preferredProviders: ['openai'],
+      }),
     );
   });
 });

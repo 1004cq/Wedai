@@ -29,13 +29,17 @@ process.env.OPENAI_API_KEY = 'sk-test-fake-api-key-for-testing';
 
 let testDB: LobeChatDatabase;
 vi.mock('@/database/core/db-adaptor', () => ({
-  getServerDB: vi.fn(() => testDB),
+  getServerDB: vi.fn(function () {
+    return testDB;
+  }),
 }));
 
 vi.mock('@/server/services/file', () => ({
-  FileService: vi.fn().mockImplementation(() => ({
-    getFullFileUrl: vi.fn().mockImplementation((path: string) => (path ? `/files${path}` : null)),
-  })),
+  FileService: vi.fn().mockImplementation(function () {
+    return {
+      getFullFileUrl: vi.fn().mockImplementation((path: string) => (path ? `/files${path}` : null)),
+    };
+  }),
 }));
 
 let mockResponsesCreate: any;
@@ -47,8 +51,23 @@ const createTestContext = () => ({
   userId,
 });
 
-const hasMemoryTools = (tools: Array<{ name?: string; function?: { name: string } }>) =>
-  tools?.some((t) => (t.name || t.function?.name)?.includes('lobe-user-memory'));
+const expectMemoryDiscovery = async (agentId: string, available: boolean) => {
+  const caller = aiAgentRouter.createCaller(createTestContext());
+  const result = await caller.execAgent({ agentId, prompt: 'Hello' });
+  const state = await waitForOperationComplete(inMemoryAgentStateManager, result.operationId);
+
+  expect(state.status).toBe('done');
+  expect(state.operationToolSet).toBeDefined();
+  expect(Object.keys(state.operationToolSet!.manifestMap).includes('lobe-user-memory')).toBe(
+    available,
+  );
+  const { tools } = mockResponsesCreate.mock.calls[0][0];
+  expect(tools).not.toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ name: expect.stringContaining('lobe-user-memory') }),
+    ]),
+  );
+};
 
 const setUserMemorySettings = async (enabled: boolean) => {
   // Try update first, then insert if no row exists
@@ -99,46 +118,26 @@ describe('execAgent - memory enabled priority', () => {
     await setUserMemorySettings(true);
     const agent = await createTestAgent({ memory: { enabled: false } });
 
-    const caller = aiAgentRouter.createCaller(createTestContext());
-    const result = await caller.execAgent({ agentId: agent.id, prompt: 'Hello' });
-    await waitForOperationComplete(inMemoryAgentStateManager, result.operationId);
-
-    const callArgs = mockResponsesCreate.mock.calls[0][0] as { tools?: any[] };
-    expect(hasMemoryTools(callArgs.tools ?? [])).toBe(false);
+    await expectMemoryDiscovery(agent.id, false);
   });
 
   it('should enable memory tools when agent config sets memory.enabled = true, even if user disables it', async () => {
     await setUserMemorySettings(false);
     const agent = await createTestAgent({ memory: { enabled: true } });
 
-    const caller = aiAgentRouter.createCaller(createTestContext());
-    const result = await caller.execAgent({ agentId: agent.id, prompt: 'Hello' });
-    await waitForOperationComplete(inMemoryAgentStateManager, result.operationId);
-
-    const callArgs = mockResponsesCreate.mock.calls[0][0] as { tools?: any[] };
-    expect(hasMemoryTools(callArgs.tools ?? [])).toBe(true);
+    await expectMemoryDiscovery(agent.id, true);
   });
 
   it('should fallback to user setting when agent has no memory config', async () => {
     await setUserMemorySettings(false);
     const agent = await createTestAgent();
 
-    const caller = aiAgentRouter.createCaller(createTestContext());
-    const result = await caller.execAgent({ agentId: agent.id, prompt: 'Hello' });
-    await waitForOperationComplete(inMemoryAgentStateManager, result.operationId);
-
-    const callArgs = mockResponsesCreate.mock.calls[0][0] as { tools?: any[] };
-    expect(hasMemoryTools(callArgs.tools ?? [])).toBe(false);
+    await expectMemoryDiscovery(agent.id, false);
   });
 
   it('should enable memory by default when neither agent nor user configures it', async () => {
     const agent = await createTestAgent();
 
-    const caller = aiAgentRouter.createCaller(createTestContext());
-    const result = await caller.execAgent({ agentId: agent.id, prompt: 'Hello' });
-    await waitForOperationComplete(inMemoryAgentStateManager, result.operationId);
-
-    const callArgs = mockResponsesCreate.mock.calls[0][0] as { tools?: any[] };
-    expect(hasMemoryTools(callArgs.tools ?? [])).toBe(true);
+    await expectMemoryDiscovery(agent.id, true);
   });
 });

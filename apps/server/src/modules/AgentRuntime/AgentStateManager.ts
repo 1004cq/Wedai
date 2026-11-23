@@ -2,20 +2,167 @@ import {
   type AgentEvent,
   type AgentRuntimeContext,
   type AgentState,
+  getLlmCallCount,
+  normalizeAgentState,
 } from '@lobechat/agent-runtime';
 import debug from 'debug';
 import { type Redis } from 'ioredis';
 
+import { getServerFeatureFlagsStateFromRuntimeConfig } from '@/server/featureFlags';
+
 import { hasNonPersistedMessage } from './messagePersistence';
 import { getAgentRuntimeRedisClient } from './redis';
-import { stripFinalStateInEventData } from './StreamEventManager';
+import { restoreSlimState, slimStateForPersist } from './slimAgentState';
 
 const log = debug('lobe-server:agent-runtime:agent-state-manager');
 
 const REFRESH_OWNED_LOCK_SCRIPT =
   "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end";
+/**
+ * Drop the inline envelope only while this worker still owns the operation lock.
+ *
+ * An unconditional DEL is unsafe: a redelivery can read envelope k, stall while
+ * the active worker finishes k and parks k+1, then lose the lock race and be
+ * told its step is stale. Clearing there would delete a live worker's newer
+ * recovery pointer. Ownership of the lock is exactly the right predicate —
+ * whoever holds it is the worker whose envelope this is.
+ *
+ * KEYS[1] = operation lock, KEYS[2] = inline resume envelope, ARGV[1] = owner.
+ */
+const CLEAR_OWNED_INLINE_RESUME_SCRIPT =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[2]) else return 0 end";
 const RELEASE_OWNED_LOCK_SCRIPT =
   "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+/**
+ * Claim the lock, or re-enter it when this exact owner already holds it.
+ *
+ * Re-entry exists for the inline step loop, which runs several steps under one
+ * lock. Owner ids carry a random UUID (see `createStepLockOwner`), so only the
+ * invocation that took the lock can present its owner id — a redelivery from
+ * the queue always mints a different one and still loses the race.
+ */
+const CLAIM_OR_REENTER_LOCK_SCRIPT = `
+if redis.call('set', KEYS[1], ARGV[1], 'EX', ARGV[2], 'NX') then return 1 end
+if redis.call('get', KEYS[1]) == ARGV[1] then
+  redis.call('expire', KEYS[1], ARGV[2])
+  return 1
+end
+return 0`;
+
+/**
+ * Process-local cache of each operation's serialized tool set, keyed by
+ * operationId.
+ *
+ * The tool set is the heaviest thing on an AgentState (manifest schemas + tool
+ * definitions, ~300–400 KB) and is immutable for the life of the operation —
+ * nothing ever reassigns `state.operationToolSet` after creation. So rather
+ * than re-serialize it into the state blob at every step (and re-download it at
+ * every step entry), it lives in its own Redis key written once per process,
+ * and this cache lets the inline step loop — which runs many steps in one
+ * process under one lock — attach it on load without a second Redis round-trip.
+ *
+ * Bounded + TTL'd: the value is always re-fetchable from Redis, so eviction
+ * only costs a re-read. The cached string is exactly what a normal blob parse
+ * would have produced, so `JSON.parse(json)` on load yields the same fresh,
+ * independent object the old inline path handed each reader.
+ */
+const TOOLSET_CACHE_MAX = 64;
+const toolSetJsonCache = new Map<string, { expiresAt: number; json: string }>();
+
+const readToolSetCache = (operationId: string): string | undefined => {
+  const hit = toolSetJsonCache.get(operationId);
+  if (!hit) return undefined;
+  if (hit.expiresAt <= Date.now()) {
+    toolSetJsonCache.delete(operationId);
+    return undefined;
+  }
+  // Touch for LRU recency.
+  toolSetJsonCache.delete(operationId);
+  toolSetJsonCache.set(operationId, hit);
+  return hit.json;
+};
+
+const writeToolSetCache = (operationId: string, json: string, ttlSeconds: number): void => {
+  toolSetJsonCache.delete(operationId);
+  toolSetJsonCache.set(operationId, { expiresAt: Date.now() + ttlSeconds * 1000, json });
+  while (toolSetJsonCache.size > TOOLSET_CACHE_MAX) {
+    const oldest = toolSetJsonCache.keys().next().value;
+    if (oldest === undefined) break;
+    toolSetJsonCache.delete(oldest);
+  }
+};
+
+/**
+ * Whether a persisted blob may leave out the copies `slimStateForPersist`
+ * drops (see `slimAgentState.ts`): runtime flag `agent_runtime_slim_state`,
+ * overridden by `AGENT_RUNTIME_SLIM_STATE` (`0` kill switch, `1` force on).
+ * The load path restores them unconditionally, so flipping it either way is
+ * safe for operations in flight.
+ *
+ * The flag is resolved per operation owner and cached here for a few seconds
+ * on top of the runtime-config provider's own snapshot cache, so a publish
+ * still lands within seconds without a redeploy and a save pays no per-owner
+ * lookup. If resolution fails, the blob is not slimmed rather than failing the
+ * save.
+ */
+const SLIM_FLAG_CACHE_TTL_MS = 5000;
+const SLIM_FLAG_CACHE_MAX = 1024;
+
+const envOverride = (name: string): boolean | undefined => {
+  const value = process.env[name];
+  if (value === '0') return false;
+  if (value === '1') return true;
+  return undefined;
+};
+
+/**
+ * Resolved values, keyed by owner ('' for the global value).
+ *
+ * `getMergedFeatureFlags` always reads the per-user override record when it is
+ * given a user id, and that provider does not cache a missing record
+ * (`cacheNullSnapshots: false`). Resolving with the owner on every save would
+ * therefore put a Redis GET on the per-step write path for every operation
+ * whose owner has no override. This cache bounds the lookup to once per owner
+ * per TTL.
+ */
+const slimFlagCache = new Map<string, { expiresAt: number; value: boolean }>();
+
+/** Clear the slim-state flag resolution cache (for testing). */
+export const resetSlimAgentStateCache = () => {
+  slimFlagCache.clear();
+};
+
+const resolveSlimFlag = async (userId?: string): Promise<boolean> => {
+  // Owners without a user id all resolve the global value, so they share a key.
+  const cacheKey = userId ?? '';
+  const cached = slimFlagCache.get(cacheKey);
+  if (cached) {
+    if (cached.expiresAt > Date.now()) return cached.value;
+    slimFlagCache.delete(cacheKey);
+  }
+
+  try {
+    const flags = await getServerFeatureFlagsStateFromRuntimeConfig(userId);
+    const value = flags.enableSlimAgentState === true;
+
+    // Evict the oldest entry instead of growing with the number of owners.
+    if (slimFlagCache.size >= SLIM_FLAG_CACHE_MAX) {
+      const oldestKey = slimFlagCache.keys().next().value;
+      if (oldestKey !== undefined) slimFlagCache.delete(oldestKey);
+    }
+    slimFlagCache.set(cacheKey, { expiresAt: Date.now() + SLIM_FLAG_CACHE_TTL_MS, value });
+
+    return value;
+  } catch (error) {
+    // Deliberately not cached: a transient read failure must not pin the flag
+    // off for a whole TTL.
+    log('Failed to resolve agent state slim flag, keeping copies inline: %O', error);
+    return false;
+  }
+};
+
+const resolveSlim = async (userId?: string): Promise<boolean> =>
+  envOverride('AGENT_RUNTIME_SLIM_STATE') ?? (await resolveSlimFlag(userId));
 
 export interface StepResult {
   events?: AgentEvent[];
@@ -26,6 +173,13 @@ export interface StepResult {
 }
 
 export interface AgentOperationMetadata {
+  /**
+   * The client that started this operation handles `member_runtime_end`. Only
+   * then does the Gateway stream notifier rename a mirrored group member's
+   * terminal on this operation's channel; a client released before the rename
+   * still gets the verbatim `agent_runtime_end` it retires member columns on.
+   */
+  acceptsMemberRuntimeEnd?: boolean;
   agentConfig?: any;
   createdAt: string;
   lastActiveAt: string;
@@ -39,6 +193,13 @@ export interface AgentOperationMetadata {
   mirrorToOperationId?: string;
   modelRuntimeConfig?: any;
   status: AgentState['status'];
+  /**
+   * Gateway WS channel owner when it differs from the executing user. For
+   * shared-agent visitor runs the operation EXECUTES as the creator
+   * (`userId`), but only the visitor may subscribe to its stream — the
+   * gateway registers the channel under this id and rejects other subs.
+   */
+  streamOwnerUserId?: string;
   totalCost: number;
   totalSteps: number;
   userId?: string;
@@ -54,9 +215,12 @@ export interface AgentOperationMetadata {
 export class AgentStateManager {
   private redis: Redis;
   private readonly STATE_PREFIX = 'agent_runtime_state';
+  private readonly TOOLSET_PREFIX = 'agent_runtime_toolset';
   private readonly STEPS_PREFIX = 'agent_runtime_steps';
   private readonly METADATA_PREFIX = 'agent_runtime_meta';
-  private readonly EVENTS_PREFIX = 'agent_runtime_events';
+  private readonly INTERRUPT_PREFIX = 'agent_runtime_interrupt';
+  private readonly QUEUED_MESSAGES_PREFIX = 'agent_runtime_queued_messages';
+  private readonly INLINE_RESUME_PREFIX = 'agent_runtime_inline_resume';
   private readonly DEFAULT_TTL = 2 * 3600; // 2h
 
   constructor() {
@@ -90,12 +254,71 @@ export class AgentStateManager {
    * (group-member supervisor turns); the size win is forgone to avoid losing
    * the prompt.
    */
-  private serializeStateForPersist(state: AgentState): string {
-    if (hasNonPersistedMessage((state as { messages?: unknown }).messages)) {
-      return JSON.stringify(state);
+  private serializeStateForPersist(state: AgentState, slim: boolean): string {
+    // Copies of the tool set are dropped against the full state, before the tool
+    // set itself leaves the blob; `restoreSlimState` rebuilds them after it is
+    // re-attached on load.
+    const source = slim ? slimStateForPersist(state) : state;
+    // `operationToolSet` is externalized to its own key (see
+    // `externalizeToolSet`) and re-attached on load, so it never travels in the
+    // blob. It is immutable after creation, so a single write per operation
+    // replaces re-serializing ~300–400 KB of tool schemas at every step.
+    const { operationToolSet: _toolSet, ...withoutToolSet } = source as AgentState & {
+      operationToolSet?: unknown;
+    };
+    const persistable = withoutToolSet as AgentState & { messages?: unknown };
+    if (
+      !state.origin?.agentId ||
+      !state.origin.topicId ||
+      hasNonPersistedMessage(persistable.messages)
+    ) {
+      return JSON.stringify(persistable);
     }
-    const { messages: _messages, ...rest } = state as AgentState & { messages?: unknown };
+    const { messages: _messages, ...rest } = persistable;
     return JSON.stringify(rest);
+  }
+
+  private toolSetKey(operationId: string): string {
+    return `${this.TOOLSET_PREFIX}:${operationId}`;
+  }
+
+  /**
+   * Persist the operation's tool set to its own key, once per process.
+   *
+   * Write-once is guarded by the process cache: the first save in a process
+   * writes the key and seeds the cache; every later save (each step of an
+   * inline loop) finds the cache warm and skips the ~300–400 KB write
+   * entirely — the save paths only refresh the key's TTL in lockstep with the
+   * state blob. A queue redelivery lands in a fresh process and re-writes once,
+   * which is negligible beside the per-step writes it removes.
+   */
+  private async externalizeToolSet(operationId: string, state: AgentState): Promise<void> {
+    const toolSet = (state as { operationToolSet?: unknown }).operationToolSet;
+    if (!toolSet) return;
+    if (readToolSetCache(operationId)) return;
+    const json = JSON.stringify(toolSet);
+    await this.redis.setex(this.toolSetKey(operationId), this.DEFAULT_TTL, json);
+    writeToolSetCache(operationId, json, this.DEFAULT_TTL);
+  }
+
+  /**
+   * Re-attach the externalized tool set to a freshly loaded state. Served from
+   * the process cache after the first read, so an inline loop reads it from
+   * Redis at most once per process. A blob that still carries its tool set
+   * inline — written by pre-externalization code during a rolling deploy — is
+   * left untouched, and an operation whose key has genuinely gone degrades to
+   * the same empty-tool-set fallback the selectors already apply.
+   */
+  private async rehydrateToolSet(operationId: string, state: AgentState): Promise<void> {
+    if ((state as { operationToolSet?: unknown }).operationToolSet) return;
+    let json = readToolSetCache(operationId);
+    if (!json) {
+      json = (await this.redis.get(this.toolSetKey(operationId))) ?? undefined;
+      if (json) writeToolSetCache(operationId, json, this.DEFAULT_TTL);
+    }
+    if (json) {
+      (state as { operationToolSet?: unknown }).operationToolSet = JSON.parse(json);
+    }
   }
 
   /**
@@ -105,16 +328,26 @@ export class AgentStateManager {
     const stateKey = `${this.STATE_PREFIX}:${operationId}`;
 
     try {
-      const serializedState = this.serializeStateForPersist(state);
-      await this.redis.setex(stateKey, this.DEFAULT_TTL, serializedState);
-
-      // Update metadata
-      await this.updateOperationMetadata(operationId, {
+      const slim = await resolveSlim(state.origin?.userId);
+      await this.externalizeToolSet(operationId, state);
+      const serializedState = this.serializeStateForPersist(state, slim);
+      // One MULTI, like `saveStepResult`: `loadAgentStatus` reads the status
+      // from the metadata hash, so it must never disagree with the blob.
+      const pipeline = this.redis.multi();
+      pipeline.setex(stateKey, this.DEFAULT_TTL, serializedState);
+      // Keep the externalized tool set alive in lockstep with the blob so a
+      // long run never loads a stripped blob whose tool set has expired.
+      pipeline.expire(this.toolSetKey(operationId), this.DEFAULT_TTL);
+      const metaKey = `${this.METADATA_PREFIX}:${operationId}`;
+      const metadata: Partial<AgentOperationMetadata> = {
         lastActiveAt: new Date().toISOString(),
         status: state.status,
         totalCost: state.cost?.total || 0,
-        totalSteps: state.stepCount,
-      });
+        totalSteps: getLlmCallCount(state),
+      };
+      pipeline.hmset(metaKey, metadata as any);
+      pipeline.expire(metaKey, this.DEFAULT_TTL);
+      await pipeline.exec();
 
       // State change events are recorded through the events array in saveStepResult
 
@@ -138,7 +371,13 @@ export class AgentStateManager {
         return null;
       }
 
-      const state = JSON.parse(serializedState) as AgentState;
+      // Blobs written before the typed `world` / `binding` slots existed carry
+      // that context in `metadata`; lift it once here so readers see one shape.
+      const state = normalizeAgentState(JSON.parse(serializedState) as AgentState);
+      await this.rehydrateToolSet(operationId, state);
+      // Unconditional, like the tool set: a blob saved with slimming on loads the
+      // same whatever the flag says now.
+      restoreSlimState(state);
       log('[%s] Loaded state (step %d)', operationId, state.stepCount);
 
       return state;
@@ -149,19 +388,72 @@ export class AgentStateManager {
   }
 
   /**
+   * Read only the persisted status. Both save paths write it to the metadata
+   * hash in the same MULTI as the blob, so this is the blob's status without
+   * downloading the blob, which can run to hundreds of KB. Falls back to the blob
+   * only when the hash has no status field.
+   */
+  async loadAgentStatus(operationId: string): Promise<AgentState['status'] | null> {
+    const status = await this.redis.hget(`${this.METADATA_PREFIX}:${operationId}`, 'status');
+    if (status) return status as AgentState['status'];
+    return (await this.loadAgentState(operationId))?.status ?? null;
+  }
+
+  /**
+   * Set the interrupt sentinel. The full state blob can run to hundreds of
+   * KB (tool manifests, user memory, …), so the step-abort poller checks
+   * this tiny key instead of re-downloading the blob every interval — the
+   * blob's `status: 'interrupted'` stays the authoritative record.
+   */
+  async markInterrupted(operationId: string): Promise<void> {
+    await this.redis.setex(`${this.INTERRUPT_PREFIX}:${operationId}`, this.DEFAULT_TTL, '1');
+  }
+
+  /**
+   * Check the interrupt sentinel without loading the state blob.
+   */
+  async isInterrupted(operationId: string): Promise<boolean> {
+    const exists = await this.redis.exists(`${this.INTERRUPT_PREFIX}:${operationId}`);
+    return exists === 1;
+  }
+
+  /**
+   * Mirror the client's queued-messages flag into a tiny key beside the state,
+   * for the same reason as the interrupt sentinel: the step boundary reads it
+   * without loading the state blob. Clearing deletes the key.
+   */
+  async setQueuedMessages(operationId: string, pending: boolean): Promise<void> {
+    const key = `${this.QUEUED_MESSAGES_PREFIX}:${operationId}`;
+    if (pending) await this.redis.setex(key, this.DEFAULT_TTL, '1');
+    else await this.redis.del(key);
+  }
+
+  async hasQueuedMessages(operationId: string): Promise<boolean> {
+    const exists = await this.redis.exists(`${this.QUEUED_MESSAGES_PREFIX}:${operationId}`);
+    return exists === 1;
+  }
+
+  /**
    * Save step execution result
    */
   async saveStepResult(operationId: string, stepResult: StepResult): Promise<void> {
-    const pipeline = this.redis.multi();
-
     try {
+      // Write-once before opening the pipeline; the inline loop warms the cache
+      // on its first step and every later step skips the tool-set write.
+      const slim = await resolveSlim(stepResult.newState.origin?.userId);
+      await this.externalizeToolSet(operationId, stepResult.newState);
+
+      const pipeline = this.redis.multi();
+
       // Save latest state
       const stateKey = `${this.STATE_PREFIX}:${operationId}`;
       pipeline.setex(
         stateKey,
         this.DEFAULT_TTL,
-        this.serializeStateForPersist(stepResult.newState),
+        this.serializeStateForPersist(stepResult.newState, slim),
       );
+      // Refresh the externalized tool set's TTL alongside the blob.
+      pipeline.expire(this.toolSetKey(operationId), this.DEFAULT_TTL);
 
       // Save step history
       const stepsKey = `${this.STEPS_PREFIX}:${operationId}`;
@@ -178,21 +470,10 @@ export class AgentStateManager {
       pipeline.ltrim(stepsKey, 0, 199); // Keep most recent 200 steps
       pipeline.expire(stepsKey, this.DEFAULT_TTL);
 
-      // Save step event sequence to agent_runtime_events
-      if (stepResult.events && stepResult.events.length > 0) {
-        const eventsKey = `${this.EVENTS_PREFIX}:${operationId}`;
-
-        // A terminal `done` event carries the full `finalState` (incl. messages
-        // + tool-set), so strip those reconstructible fields before persisting —
-        // same chokepoint the stream path uses — otherwise this lpush is a
-        // second route to Upstash's 10MB limit on long topics.
-        pipeline.lpush(
-          eventsKey,
-          JSON.stringify(stepResult.events.map(stripFinalStateInEventData)),
-        );
-        pipeline.ltrim(eventsKey, 0, 199); // Keep events from most recent 200 steps
-        pipeline.expire(eventsKey, this.DEFAULT_TTL);
-      }
+      // `stepResult.events` is intentionally NOT persisted: nothing ever read
+      // the `agent_runtime_events` list back — the same events already reach
+      // clients through the live stream and land durably in the operation
+      // trace, so the list only duplicated every streamed byte into Redis.
 
       // Update operation metadata
       const metaKey = `${this.METADATA_PREFIX}:${operationId}`;
@@ -200,19 +481,14 @@ export class AgentStateManager {
         lastActiveAt: new Date().toISOString(),
         status: stepResult.newState.status,
         totalCost: stepResult.newState.cost?.total || 0,
-        totalSteps: stepResult.newState.stepCount,
+        totalSteps: getLlmCallCount(stepResult.newState),
       };
       pipeline.hmset(metaKey, metadata as any);
       pipeline.expire(metaKey, this.DEFAULT_TTL);
 
       await pipeline.exec();
 
-      log(
-        '[%s:%d] Saved step result with %d events',
-        operationId,
-        stepResult.stepIndex,
-        stepResult.events?.length || 0,
-      );
+      log('[%s:%d] Saved step result', operationId, stepResult.stepIndex);
     } catch (error) {
       console.error('Failed to save step result:', error);
       throw error;
@@ -248,6 +524,7 @@ export class AgentStateManager {
       }
 
       return {
+        acceptsMemberRuntimeEnd: metadata.acceptsMemberRuntimeEnd === 'true' || undefined,
         agentConfig: metadata.agentConfig ? JSON.parse(metadata.agentConfig) : undefined,
         createdAt: metadata.createdAt,
         lastActiveAt: metadata.lastActiveAt,
@@ -256,6 +533,7 @@ export class AgentStateManager {
           : undefined,
         mirrorToOperationId: metadata.mirrorToOperationId || undefined,
         status: metadata.status as AgentState['status'],
+        streamOwnerUserId: metadata.streamOwnerUserId || undefined,
         totalCost: parseFloat(metadata.totalCost) || 0,
         totalSteps: parseInt(metadata.totalSteps) || 0,
         userId: metadata.userId,
@@ -273,9 +551,11 @@ export class AgentStateManager {
   async createOperationMetadata(
     operationId: string,
     data: {
+      acceptsMemberRuntimeEnd?: boolean;
       agentConfig?: any;
       mirrorToOperationId?: string;
       modelRuntimeConfig?: any;
+      streamOwnerUserId?: string;
       userId?: string;
       workspaceId?: string;
     },
@@ -284,12 +564,14 @@ export class AgentStateManager {
 
     try {
       const metadata: AgentOperationMetadata = {
+        acceptsMemberRuntimeEnd: data.acceptsMemberRuntimeEnd,
         agentConfig: data.agentConfig,
         createdAt: new Date().toISOString(),
         lastActiveAt: new Date().toISOString(),
         mirrorToOperationId: data.mirrorToOperationId,
         modelRuntimeConfig: data.modelRuntimeConfig,
         status: 'idle',
+        streamOwnerUserId: data.streamOwnerUserId,
         totalCost: 0,
         totalSteps: 0,
         userId: data.userId,
@@ -306,9 +588,11 @@ export class AgentStateManager {
       };
 
       if (metadata.userId) redisData.userId = metadata.userId;
+      if (metadata.streamOwnerUserId) redisData.streamOwnerUserId = metadata.streamOwnerUserId;
       if (metadata.workspaceId) redisData.workspaceId = metadata.workspaceId;
       if (metadata.mirrorToOperationId)
         redisData.mirrorToOperationId = metadata.mirrorToOperationId;
+      if (metadata.acceptsMemberRuntimeEnd) redisData.acceptsMemberRuntimeEnd = 'true';
       if (metadata.modelRuntimeConfig)
         redisData.modelRuntimeConfig = JSON.stringify(metadata.modelRuntimeConfig);
       if (metadata.agentConfig) redisData.agentConfig = JSON.stringify(metadata.agentConfig);
@@ -324,48 +608,21 @@ export class AgentStateManager {
   }
 
   /**
-   * Update operation metadata
-   */
-  private async updateOperationMetadata(
-    operationId: string,
-    updates: Partial<AgentOperationMetadata>,
-  ): Promise<void> {
-    const metaKey = `${this.METADATA_PREFIX}:${operationId}`;
-
-    try {
-      const redisUpdates: Record<string, string> = {};
-
-      Object.entries(updates).forEach(([key, value]) => {
-        if (value !== undefined) {
-          if (typeof value === 'object') {
-            redisUpdates[key] = JSON.stringify(value);
-          } else {
-            redisUpdates[key] = value.toString();
-          }
-        }
-      });
-
-      if (Object.keys(redisUpdates).length > 0) {
-        await this.redis.hmset(metaKey, redisUpdates);
-        await this.redis.expire(metaKey, this.DEFAULT_TTL);
-      }
-    } catch (error) {
-      console.error('Failed to update session metadata:', error);
-    }
-  }
-
-  /**
    * Delete all data for Agent operation
    */
   async deleteAgentOperation(operationId: string): Promise<void> {
     const keys = [
       `${this.STATE_PREFIX}:${operationId}`,
+      this.toolSetKey(operationId),
       `${this.STEPS_PREFIX}:${operationId}`,
       `${this.METADATA_PREFIX}:${operationId}`,
-      `${this.EVENTS_PREFIX}:${operationId}`,
+      `${this.INTERRUPT_PREFIX}:${operationId}`,
+      `${this.QUEUED_MESSAGES_PREFIX}:${operationId}`,
+      `${this.INLINE_RESUME_PREFIX}:${operationId}`,
     ];
 
     try {
+      toolSetJsonCache.delete(operationId);
       await this.redis.del(...keys);
       log('Deleted operation %s', operationId);
     } catch (error) {
@@ -473,6 +730,60 @@ export class AgentStateManager {
     }
   }
 
+  /**
+   * The inline step loop's envelope for the step it is about to run. This is the
+   * queue message that would otherwise be in flight — parked here instead, so a
+   * redelivery arriving after the loop died can pick the operation back up from
+   * where it actually stopped rather than from the delivered (older) step index.
+   */
+  async saveInlineResume(operationId: string, serialized: string): Promise<boolean> {
+    try {
+      await this.redis.setex(
+        `${this.INLINE_RESUME_PREFIX}:${operationId}`,
+        this.DEFAULT_TTL,
+        serialized,
+      );
+      return true;
+    } catch (error) {
+      // Reported, never swallowed: the caller must fall back to the queue, or
+      // it would run the next step with no recovery path behind it at all.
+      console.error('Failed to save inline resume pointer:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Deliberately not wrapped in a try/catch. "No envelope" and "could not read
+   * the envelope" have opposite consequences: the first means run the delivered
+   * step, the second means an operation may be mid-loop with nothing queued
+   * behind it. Swallowing the error would ACK that delivery as stale and strand
+   * the run, so the failure propagates and the queue retries instead.
+   */
+  async loadInlineResume(operationId: string): Promise<null | string> {
+    return this.redis.get(`${this.INLINE_RESUME_PREFIX}:${operationId}`);
+  }
+
+  /**
+   * Owner-scoped, and best-effort on failure: a stale envelope is harmless. It
+   * only ever resumes a step whose index is ahead of the delivered one, and the
+   * next step to park overwrites it — worst case it expires with the
+   * operation's TTL. Deleting someone else's envelope is not harmless, hence
+   * the ownership check.
+   */
+  async clearInlineResume(operationId: string, ownerId: string): Promise<void> {
+    try {
+      await this.redis.eval(
+        CLEAR_OWNED_INLINE_RESUME_SCRIPT,
+        2,
+        this.executionLockKey(operationId),
+        `${this.INLINE_RESUME_PREFIX}:${operationId}`,
+        ownerId,
+      );
+    } catch (error) {
+      console.error('Failed to clear inline resume pointer:', error);
+    }
+  }
+
   private executionLockKey(operationId: string): string {
     return `agent_runtime_operation_lock:${operationId}`;
   }
@@ -484,15 +795,15 @@ export class AgentStateManager {
     ownerId: string = Date.now().toString(),
   ): Promise<boolean> {
     try {
-      const result = await this.redis.set(
+      const result = await this.redis.eval(
+        CLAIM_OR_REENTER_LOCK_SCRIPT,
+        1,
         this.executionLockKey(operationId),
         ownerId,
-        'EX',
-        ttlSeconds,
-        'NX',
+        ttlSeconds.toString(),
       );
 
-      return result === 'OK';
+      return result === 1;
     } catch (error) {
       // Fail-open: on Redis error, allow execution to proceed
       console.error('Failed to acquire step lock:', error);

@@ -1,6 +1,12 @@
 import { z } from 'zod';
 
-import { type ModelParamsSchema, type VideoModelParamsSchema } from '../standard-parameters';
+import {
+  type ModelParamsSchema,
+  type MusicModelParamsSchema,
+  type TTSModelParamsSchema,
+  type TTSVoice,
+  type VideoModelParamsSchema,
+} from '../standard-parameters';
 
 export type ModelPriceCurrency = 'CNY' | 'USD';
 
@@ -21,9 +27,18 @@ export const AiModelTypeSchema = z.enum([
   'video',
   'text2music',
   'realtime',
+  'decision',
 ] as const);
 
 export type AiModelType = z.infer<typeof AiModelTypeSchema>;
+
+export const AgentCompatibilitySchema = z
+  .object({
+    serverDefaultHeterogeneousProfiles: z.array(z.string().min(1)).optional(),
+  })
+  .passthrough();
+
+export type AgentCompatibility = z.infer<typeof AgentCompatibilitySchema>;
 
 /**
  * The speech-to-text model type was renamed from the legacy `stt` to the
@@ -162,13 +177,17 @@ export type PricingUnitName =
 
   // Video-based pricing units
   | 'videoInput'
-  | 'videoGeneration';
+  | 'videoGeneration'
+
+  // Music-based pricing units
+  | 'musicGeneration'; // for text-to-music models
 
 export type PricingUnitType =
   | 'millionTokens' // per 1M tokens
   | 'millionCharacters' // per 1M characters
   | 'image' // per image
   | 'video' // per video
+  | 'song' // per generated song (music models)
   | 'megapixel' // per megapixel
   | 'second'; // per second
 
@@ -190,6 +209,14 @@ export interface FixedPricingUnit extends PricingUnitBase {
 }
 
 export interface TieredPricingUnit extends PricingUnitBase {
+  /**
+   * How tiers apply to a quantity:
+   * - `volume` (default): the whole quantity is billed at the rate of the tier it falls into
+   *   (e.g. Google's long-context pricing)
+   * - `graduated`: each tier bills only the part of the quantity inside it, so a zero-rate first
+   *   tier expresses a free allowance (e.g. fal's 4,096 free reference tokens per request)
+   */
+  mode?: 'graduated' | 'volume';
   strategy: 'tiered';
   tiers: Array<{
     /**
@@ -224,6 +251,11 @@ export interface Pricing {
    * Fallback approximate per-video price (USD) when detailed pricing table is unavailable
    */
   approximatePricePerVideo?: number;
+  /**
+   * Positive model-specific audio input token rate used for duration-based pre-flight estimates.
+   * Authoritative billing continues to use provider-reported usage.
+   */
+  audioTokensPerSecond?: number;
   currency?: ModelPriceCurrency;
   units: PricingUnit[];
 }
@@ -290,6 +322,12 @@ export interface AIBaseModelCard {
   generation?: string;
   id: string;
   /**
+   * Whether this card is listed by the vendor that makes the model, so its `pricing` is the
+   * official list price. Resellers that list another vendor's model (e.g. DeepSeek on Qwen)
+   * leave it unset. Unset also means "not checked yet", so treat it as unknown, not as false.
+   */
+  isOfficial?: boolean;
+  /**
    * knowledge cutoff date (YYYY-MM). When the provider distinguishes a "reliable
    * knowledge cutoff" from the broader training-data cutoff, use the reliable one.
    */
@@ -314,7 +352,173 @@ export interface AIBaseModelCard {
 
 export const isAiModelVisible = (model: { visible?: boolean }) => model.visible !== false;
 
+/**
+ * User-level default reasoning params for a model instance (userId + providerId + modelId),
+ * stored under `ai_models.config.chatConfig` on the personal-scope row (workspaceId IS NULL).
+ *
+ * Field names intentionally mirror the same-named `LobeAgentChatConfig` fields so
+ * `applyModelExtendParams` can consume this object unchanged. Deliberately narrow:
+ * the reasoning-effort family, Gemini thinking levels, and `reasoningMode`.
+ * Numeric thinking budgets and other extend params remain agent-scoped.
+ */
+export interface AiModelReasoningConfig {
+  codexMaxReasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+  deepseekV4GAReasoningEffort?: 'none' | 'low' | 'high' | 'max';
+  deepseekV4ReasoningEffort?: 'none' | 'high' | 'max';
+  effort?: 'low' | 'medium' | 'high' | 'max';
+  glm5_2ReasoningEffort?: 'high' | 'max';
+  glm5_3ReasoningEffort?: 'low' | 'high' | 'max';
+  gpt5_1ReasoningEffort?: 'none' | 'low' | 'medium' | 'high';
+  gpt5_2ProReasoningEffort?: 'medium' | 'high' | 'xhigh';
+  gpt5_2ReasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh';
+  gpt5_6ReasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  gpt5ReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+  gpt6ReasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  grok4_3ReasoningEffort?: 'none' | 'low' | 'medium' | 'high';
+  grok4_5ReasoningEffort?: 'low' | 'medium' | 'high';
+  grok4_6ReasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+  grok4_7ReasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+  grok4_20ReasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+  hy3ReasoningEffort?: 'no_think' | 'low' | 'high';
+  kimiK3ReasoningEffort?: 'low' | 'high' | 'max';
+  opus47Effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  reasoningEffort?: 'low' | 'medium' | 'high';
+  reasoningMode?: 'standard' | 'pro';
+  ring2_6ReasoningEffort?: 'high' | 'xhigh';
+  step3_5ReasoningEffort?: 'low' | 'high';
+  thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high';
+  thinkingLevel2?: 'low' | 'high';
+  thinkingLevel3?: 'low' | 'medium' | 'high';
+  thinkingLevel4?: 'minimal' | 'high';
+  thinkingLevel5?: 'low' | 'medium' | 'high' | 'xhigh';
+}
+
+export const AiModelReasoningConfigSchema = z.object({
+  codexMaxReasoningEffort: z.enum(['low', 'medium', 'high', 'xhigh']).optional(),
+  deepseekV4GAReasoningEffort: z.enum(['none', 'low', 'high', 'max']).optional(),
+  deepseekV4ReasoningEffort: z.enum(['none', 'high', 'max']).optional(),
+  effort: z.enum(['low', 'medium', 'high', 'max']).optional(),
+  glm5_2ReasoningEffort: z.enum(['high', 'max']).optional(),
+  glm5_3ReasoningEffort: z.enum(['low', 'high', 'max']).optional(),
+  gpt5_1ReasoningEffort: z.enum(['none', 'low', 'medium', 'high']).optional(),
+  gpt5_2ProReasoningEffort: z.enum(['medium', 'high', 'xhigh']).optional(),
+  gpt5_2ReasoningEffort: z.enum(['none', 'low', 'medium', 'high', 'xhigh']).optional(),
+  gpt5_6ReasoningEffort: z.enum(['none', 'low', 'medium', 'high', 'xhigh', 'max']).optional(),
+  gpt5ReasoningEffort: z.enum(['minimal', 'low', 'medium', 'high']).optional(),
+  gpt6ReasoningEffort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+  grok4_3ReasoningEffort: z.enum(['none', 'low', 'medium', 'high']).optional(),
+  grok4_5ReasoningEffort: z.enum(['low', 'medium', 'high']).optional(),
+  grok4_6ReasoningEffort: z.enum(['low', 'medium', 'high', 'xhigh']).optional(),
+  grok4_7ReasoningEffort: z.enum(['low', 'medium', 'high', 'xhigh']).optional(),
+  grok4_20ReasoningEffort: z.enum(['low', 'medium', 'high', 'xhigh']).optional(),
+  hy3ReasoningEffort: z.enum(['no_think', 'low', 'high']).optional(),
+  kimiK3ReasoningEffort: z.enum(['low', 'high', 'max']).optional(),
+  opus47Effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+  reasoningEffort: z.enum(['low', 'medium', 'high']).optional(),
+  reasoningMode: z.enum(['standard', 'pro']).optional(),
+  ring2_6ReasoningEffort: z.enum(['high', 'xhigh']).optional(),
+  step3_5ReasoningEffort: z.enum(['low', 'high']).optional(),
+  thinkingLevel: z.enum(['minimal', 'low', 'medium', 'high']).optional(),
+  thinkingLevel2: z.enum(['low', 'high']).optional(),
+  thinkingLevel3: z.enum(['low', 'medium', 'high']).optional(),
+  thinkingLevel4: z.enum(['minimal', 'high']).optional(),
+  thinkingLevel5: z.enum(['low', 'medium', 'high', 'xhigh']).optional(),
+});
+
+/**
+ * The extend params covered by AiModelReasoningConfig. Each entry is both an
+ * ExtendParamsType value and the AiModelReasoningConfig key it reads from —
+ * used to filter which model-instance defaults a given model actually supports.
+ */
+export const MODEL_REASONING_EXTEND_PARAMS = Object.keys(
+  AiModelReasoningConfigSchema.shape,
+) as (keyof AiModelReasoningConfig)[];
+
+/**
+ * Ordered level list per reasoning param (low → high), mirroring the
+ * ControlsForm slider level definitions so select-style controls can render
+ * the same choices.
+ */
+export const MODEL_REASONING_PARAM_LEVELS: {
+  [K in keyof AiModelReasoningConfig]-?: readonly NonNullable<AiModelReasoningConfig[K]>[];
+} = {
+  codexMaxReasoningEffort: ['low', 'medium', 'high', 'xhigh'],
+  deepseekV4GAReasoningEffort: ['none', 'low', 'high', 'max'],
+  deepseekV4ReasoningEffort: ['none', 'high', 'max'],
+  effort: ['low', 'medium', 'high', 'max'],
+  glm5_2ReasoningEffort: ['high', 'max'],
+  glm5_3ReasoningEffort: ['low', 'high', 'max'],
+  gpt5_1ReasoningEffort: ['none', 'low', 'medium', 'high'],
+  gpt5_2ProReasoningEffort: ['medium', 'high', 'xhigh'],
+  gpt5_2ReasoningEffort: ['none', 'low', 'medium', 'high', 'xhigh'],
+  gpt5_6ReasoningEffort: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+  gpt5ReasoningEffort: ['minimal', 'low', 'medium', 'high'],
+  gpt6ReasoningEffort: ['low', 'medium', 'high', 'xhigh', 'max'],
+  grok4_3ReasoningEffort: ['none', 'low', 'medium', 'high'],
+  grok4_5ReasoningEffort: ['low', 'medium', 'high'],
+  grok4_6ReasoningEffort: ['low', 'medium', 'high', 'xhigh'],
+  grok4_7ReasoningEffort: ['low', 'medium', 'high', 'xhigh'],
+  grok4_20ReasoningEffort: ['low', 'medium', 'high', 'xhigh'],
+  hy3ReasoningEffort: ['no_think', 'low', 'high'],
+  kimiK3ReasoningEffort: ['low', 'high', 'max'],
+  opus47Effort: ['low', 'medium', 'high', 'xhigh', 'max'],
+  reasoningEffort: ['low', 'medium', 'high'],
+  reasoningMode: ['standard', 'pro'],
+  ring2_6ReasoningEffort: ['high', 'xhigh'],
+  step3_5ReasoningEffort: ['low', 'high'],
+  thinkingLevel: ['minimal', 'low', 'medium', 'high'],
+  thinkingLevel2: ['low', 'high'],
+  thinkingLevel3: ['low', 'medium', 'high'],
+  thinkingLevel4: ['minimal', 'high'],
+  thinkingLevel5: ['low', 'medium', 'high', 'xhigh'],
+};
+
+/**
+ * Fallback level shown when the user has not saved a model-instance value,
+ * mirroring each ControlsForm slider's defaultValue (gpt5_2ReasoningEffort is
+ * model-dependent there: 'medium' for gpt-5.5, 'none' otherwise).
+ */
+export const MODEL_REASONING_PARAM_DEFAULTS: {
+  [K in keyof AiModelReasoningConfig]-?: NonNullable<AiModelReasoningConfig[K]>;
+} = {
+  codexMaxReasoningEffort: 'medium',
+  deepseekV4GAReasoningEffort: 'high',
+  deepseekV4ReasoningEffort: 'high',
+  effort: 'high',
+  glm5_2ReasoningEffort: 'max',
+  glm5_3ReasoningEffort: 'max',
+  gpt5_1ReasoningEffort: 'none',
+  gpt5_2ProReasoningEffort: 'medium',
+  gpt5_2ReasoningEffort: 'none',
+  gpt5_6ReasoningEffort: 'medium',
+  gpt5ReasoningEffort: 'medium',
+  gpt6ReasoningEffort: 'medium',
+  grok4_3ReasoningEffort: 'low',
+  grok4_5ReasoningEffort: 'high',
+  grok4_6ReasoningEffort: 'high',
+  grok4_7ReasoningEffort: 'high',
+  grok4_20ReasoningEffort: 'medium',
+  hy3ReasoningEffort: 'high',
+  kimiK3ReasoningEffort: 'max',
+  opus47Effort: 'high',
+  reasoningEffort: 'medium',
+  reasoningMode: 'standard',
+  ring2_6ReasoningEffort: 'high',
+  step3_5ReasoningEffort: 'low',
+  thinkingLevel: 'high',
+  thinkingLevel2: 'high',
+  thinkingLevel3: 'high',
+  thinkingLevel4: 'minimal',
+  thinkingLevel5: 'high',
+};
+
 export interface AiModelConfig {
+  /**
+   * User-level default reasoning params for this model instance; see
+   * AiModelReasoningConfig. Not synced from remote model lists.
+   */
+  chatConfig?: AiModelReasoningConfig;
+
   /**
    * used in azure and volcengine
    */
@@ -337,7 +541,9 @@ export type ExtendParamsType =
   | 'enableAdaptiveThinking'
   | 'disableContextCaching'
   | 'effort'
+  | 'deepseekV4GAReasoningEffort'
   | 'deepseekV4ReasoningEffort'
+  | 'qwen38ReasoningEffort'
   | 'reasoningEffort'
   | 'reasoningMode'
   | 'gpt5ReasoningEffort'
@@ -345,10 +551,14 @@ export type ExtendParamsType =
   | 'gpt5_2ReasoningEffort'
   | 'gpt5_2ProReasoningEffort'
   | 'gpt5_6ReasoningEffort'
+  | 'gpt6ReasoningEffort'
   | 'glm5_2ReasoningEffort'
+  | 'glm5_3ReasoningEffort'
   | 'grok4_20ReasoningEffort'
   | 'grok4_3ReasoningEffort'
   | 'grok4_5ReasoningEffort'
+  | 'grok4_6ReasoningEffort'
+  | 'grok4_7ReasoningEffort'
   | 'hy3ReasoningEffort'
   | 'kimiK3ReasoningEffort'
   | 'ring2_6ReasoningEffort'
@@ -362,6 +572,7 @@ export type ExtendParamsType =
   | 'thinkingLevel2'
   | 'thinkingLevel3'
   | 'thinkingLevel4'
+  | 'thinkingLevel5'
   | 'imageAspectRatio'
   | 'imageAspectRatio2'
   | 'imageResolution'
@@ -383,6 +594,11 @@ export interface AiModelSettings {
    */
   searchImpl?: ModelSearchImplementType;
   searchProvider?: string;
+  /**
+   * The user's default voice for a `tts` model, used when a speech request names no voice.
+   * Takes precedence over the card's `parameters.voice.default`.
+   */
+  ttsVoice?: string;
 }
 
 export const ExtendParamsTypeSchema = z.enum([
@@ -394,7 +610,9 @@ export const ExtendParamsTypeSchema = z.enum([
   'enableAdaptiveThinking',
   'disableContextCaching',
   'effort',
+  'deepseekV4GAReasoningEffort',
   'deepseekV4ReasoningEffort',
+  'qwen38ReasoningEffort',
   'reasoningEffort',
   'reasoningMode',
   'gpt5ReasoningEffort',
@@ -402,10 +620,14 @@ export const ExtendParamsTypeSchema = z.enum([
   'gpt5_2ReasoningEffort',
   'gpt5_2ProReasoningEffort',
   'gpt5_6ReasoningEffort',
+  'gpt6ReasoningEffort',
   'glm5_2ReasoningEffort',
+  'glm5_3ReasoningEffort',
   'grok4_20ReasoningEffort',
   'grok4_3ReasoningEffort',
   'grok4_5ReasoningEffort',
+  'grok4_6ReasoningEffort',
+  'grok4_7ReasoningEffort',
   'hy3ReasoningEffort',
   'kimiK3ReasoningEffort',
   'ring2_6ReasoningEffort',
@@ -419,6 +641,7 @@ export const ExtendParamsTypeSchema = z.enum([
   'thinkingLevel2',
   'thinkingLevel3',
   'thinkingLevel4',
+  'thinkingLevel5',
   'imageAspectRatio',
   'imageAspectRatio2',
   'imageResolution',
@@ -440,10 +663,12 @@ export const AiModelSettingsSchema = z.object({
   extendParams: z.array(ExtendParamsTypeSchema).optional(),
   searchImpl: ModelSearchImplementTypeSchema.optional(),
   searchProvider: z.string().optional(),
+  ttsVoice: z.string().optional(),
 });
 
 export interface AIChatModelCard extends AIBaseModelCard {
   abilities?: ModelAbilities;
+  agentCompatibility?: AgentCompatibility;
   config?: AiModelConfig;
   maxOutput?: number;
   pricing?: Pricing;
@@ -470,14 +695,47 @@ export interface AIVideoModelCard extends AIBaseModelCard {
   type: 'video';
 }
 
+export interface AIText2MusicModelCard extends AIBaseModelCard {
+  /**
+   * How many songs one request returns.
+   * Generation pre-creates this many result rows.
+   * @default 1
+   */
+  outputsPerRequest?: number;
+  /**
+   * Standard music parameters the model accepts and their allowed values.
+   */
+  parameters?: MusicModelParamsSchema;
+  pricing?: Pricing;
+  type: 'text2music';
+}
+
 export interface AITTSModelCard extends AIBaseModelCard {
+  /**
+   * Standard TTS parameters the model accepts and their allowed values.
+   */
+  parameters?: TTSModelParamsSchema;
   pricing?: Pricing;
   type: 'tts';
+  /**
+   * Voice catalog. `payload.voice` takes one of these ids.
+   */
+  voices?: TTSVoice[];
 }
 
 export interface AIASRModelCard extends AIBaseModelCard {
   pricing?: Pricing;
   type: 'asr';
+}
+
+/**
+ * Decision models answer caller-defined typed questions with calibrated probabilities
+ * instead of generating text, and are called through `decide` rather than `chat`.
+ * @see https://openrouter.ai/docs/guides/community/jev
+ */
+export interface AIDecisionModelCard extends AIBaseModelCard {
+  pricing?: Pricing;
+  type: 'decision';
 }
 
 export interface AIRealtimeModelCard extends AIBaseModelCard {
@@ -510,15 +768,20 @@ export interface AIRealtimeModelCard extends AIBaseModelCard {
 
 export interface AiFullModelCard extends AIBaseModelCard {
   abilities?: ModelAbilities;
+  agentCompatibility?: AgentCompatibility;
   config?: AiModelConfig;
   contextWindowTokens?: number;
   displayName?: string;
   id: string;
   maxDimension?: number;
-  parameters?: ModelParamsSchema;
+  /** Songs returned per request, for `text2music` models. */
+  outputsPerRequest?: number;
+  /** Image generation params, standard TTS params for `tts`, or music params for `text2music`. */
+  parameters?: ModelParamsSchema | TTSModelParamsSchema | MusicModelParamsSchema;
   pricing?: Pricing;
   settings?: AiModelSettings;
   type: AiModelType;
+  voices?: TTSVoice[];
 }
 
 export interface LobeDefaultAiModelListItem extends AiFullModelCard {
@@ -548,6 +811,7 @@ export type CreateAiModelParams = z.infer<typeof CreateAiModelSchema>;
 
 export interface AiProviderModelListItem {
   abilities?: ModelAbilities;
+  agentCompatibility?: AgentCompatibility;
   config?: AiModelConfig;
   contextWindowTokens?: number;
   description?: string;
@@ -564,11 +828,16 @@ export interface AiProviderModelListItem {
   source?: AiModelSourceType;
   type: AiModelType;
   visible?: boolean;
+  /** Voice catalog of a built-in `tts` model, carried over from its card. */
+  voices?: TTSVoice[];
 }
 
 // Update
 export const UpdateAiModelSchema = z.object({
   abilities: AiModelAbilitiesSchema.optional(),
+  // NOTE: `chatConfig` is deliberately NOT accepted here — model-instance reasoning
+  // defaults go through the dedicated updateAiModelReasoningConfig procedure so the
+  // generic update path can never carry (and thus never stomp) that namespace.
   config: z
     .object({
       deploymentName: z.string().optional(),
@@ -639,7 +908,8 @@ export interface EnabledAiModel {
   id: string;
   knowledgeCutoff?: string;
   maxOutput?: number;
-  parameters?: ModelParamsSchema;
+  /** Image generation params, or standard TTS params for `tts` models. */
+  parameters?: ModelParamsSchema | TTSModelParamsSchema;
   pricing?: Pricing;
   providerId: string;
   releasedAt?: string;

@@ -16,13 +16,23 @@ import { createInsertSchema } from 'drizzle-zod';
 import { z } from 'zod';
 
 import type { LobeDocumentPage } from '@/types/document';
-import type { FileSource } from '@/types/files';
+import type { FileSource, FileUploadSessionStatus } from '@/types/files';
 
 import { idGenerator, randomSlug } from '../utils/idGenerator';
-import { accessedAt, createdAt, timestamps } from './_helpers';
+import {
+  accessedAt,
+  createdAt,
+  softDeleteColumns,
+  timestamps,
+  timestamptz,
+  updatedAt,
+} from './_helpers';
 import { asyncTasks } from './asyncTask';
 import { users } from './user';
 import { workspaces } from './workspace';
+
+export const nextDocumentUpdatedAt = () =>
+  sql`GREATEST(date_trunc('milliseconds', clock_timestamp()), "documents"."updated_at" + interval '1 millisecond')`;
 
 export const DOCUMENT_FOLDER_TYPE = 'custom/folder';
 
@@ -31,6 +41,31 @@ export const SKILL_BUNDLE_FILE_TYPE = 'skills/bundle';
 
 /** File type used by the SKILL.md index document inside a managed skill bundle. */
 export const SKILL_INDEX_FILE_TYPE = 'skills/index';
+
+/**
+ * File type of a file beside `SKILL.md` in a skill bundle, its path in
+ * `filename`. Text sits in `content`; a binary file links its `files` row
+ * through `fileId`. Its MIME type and a script's language sit in `metadata`.
+ */
+export const SKILL_FILE_FILE_TYPE = 'skills/file';
+
+/**
+ * What a bundle's files were written as before they held more than scripts.
+ * Still read; rewritten as `skills/file` the next time one is written.
+ */
+export const SKILL_SCRIPT_FILE_TYPE = 'skills/script';
+
+/**
+ * File type of a version snapshot of a user skill's `SKILL.md`, from before
+ * versions were published as archives in `files`. Still read, never written.
+ */
+export const SKILL_VERSION_FILE_TYPE = 'skills/version';
+
+/**
+ * Source attribution of a user-level skill: a bundle owned by the user, not
+ * bound to any agent, so any agent or run can load it by name.
+ */
+export const USER_SKILL_SOURCE = 'user-skills';
 
 /** Source attribution stored on documents created by skill-management tooling. */
 export const SKILL_MANAGEMENT_SOURCE = 'agent-signal:skill-management';
@@ -126,6 +161,13 @@ export const documents = pgTable(
     workspaceId: text('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
 
     /**
+     * Agent that created this document through a tool (e.g. notebook or
+     * knowledge base), used to separate agent output from user-authored
+     * documents. `NULL` means user-created.
+     */
+    createdByAgentId: text('created_by_agent_id'),
+
+    /**
      * Visibility within the owning workspace. `public` (default) means every
      * workspace member can see the document; `private` constrains it to the
      * creator (`user_id`). Within a documents tree (folder/Page hierarchy) the
@@ -140,7 +182,13 @@ export const documents = pgTable(
       .notNull(),
 
     // Timestamps
+    /** Recycle bin — see `schemas/trash.ts`. */
+    ...softDeleteColumns(),
     ...timestamps,
+    updatedAt: timestamptz('updated_at')
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => nextDocumentUpdatedAt()),
   },
   (table) => [
     index('documents_source_idx').on(table.source),
@@ -221,6 +269,8 @@ export const files = pgTable(
       .default('public')
       .notNull(),
 
+    /** Recycle bin — see `schemas/trash.ts`. */
+    ...softDeleteColumns(),
     ...timestamps,
   },
   (table) => {
@@ -246,8 +296,55 @@ export const files = pgTable(
 export type NewFile = typeof files.$inferInsert;
 export type FileItem = typeof files.$inferSelect;
 
+/**
+ * One row per direct S3 upload. Active rows reserve their declared bytes until
+ * the object is either attached to a durable file or cleaned up.
+ */
+export const fileUploads = pgTable(
+  'file_uploads',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: text('user_id')
+      .references(() => users.id, { onDelete: 'cascade' })
+      .notNull(),
+    workspaceId: text('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
+    pathname: text('pathname').notNull(),
+    /** Exact byte count reserved before upload credentials are issued. */
+    size: integer('size').notNull(),
+    status: text('status').$type<FileUploadSessionStatus>().default('active').notNull(),
+    multipartUploadId: text('multipart_upload_id'),
+    multipartPartSize: integer('multipart_part_size'),
+    /** Set after S3 confirms a single or multipart object is complete. */
+    completedAt: timestamptz('completed_at'),
+    fileId: text('file_id').references(() => files.id, { onDelete: 'set null' }),
+    expiresAt: timestamptz('expires_at').notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    index('file_uploads_user_scope_status_idx').on(table.userId, table.workspaceId, table.status),
+    index('file_uploads_workspace_status_idx').on(table.workspaceId, table.status),
+    index('file_uploads_status_expires_at_idx').on(table.status, table.expiresAt),
+    index('file_uploads_status_updated_at_id_idx').on(table.status, table.updatedAt, table.id),
+    uniqueIndex('file_uploads_live_pathname_unique')
+      .on(table.pathname)
+      .where(sql`${table.status} IN ('active', 'cleaning')`),
+  ],
+);
+
+export type NewFileUpload = typeof fileUploads.$inferInsert;
+export type FileUploadItem = typeof fileUploads.$inferSelect;
+
 /** Knowledge-base visibility — shared by column def and insert schema. */
 export const KNOWLEDGE_BASE_VISIBILITY = ['private', 'public'] as const;
+
+/**
+ * `knowledge_bases.type` values marking a library dedicated to one owner (an
+ * agent's or project's own space). A NULL type is an ordinary user library.
+ * Owned libraries are reached through their owner, never through library lists.
+ */
+export const DEDICATED_KNOWLEDGE_BASE_TYPES = ['agent', 'project'] as const;
+export type DedicatedKnowledgeBaseType = (typeof DEDICATED_KNOWLEDGE_BASE_TYPES)[number];
 
 export const knowledgeBases = pgTable(
   'knowledge_bases',
@@ -287,6 +384,8 @@ export const knowledgeBases = pgTable(
      */
     visibility: text('visibility', { enum: KNOWLEDGE_BASE_VISIBILITY }).default('public').notNull(),
 
+    /** Recycle bin — see `schemas/trash.ts`. */
+    ...softDeleteColumns(),
     ...timestamps,
   },
   (t) => [

@@ -1,7 +1,9 @@
 import { useChatStore } from '@/store/chat';
 import { threadSelectors } from '@/store/chat/selectors';
+import { getForwardableMessages } from '@/store/chat/slices/forward/helpers';
 
 import { type State } from '../../initialState';
+import { indexDisplayMessages } from '../data/messageIndex';
 import { dataSelectors } from '../data/selectors';
 
 /**
@@ -93,17 +95,31 @@ const isMessageGenerating = (id: string) => (s: State) =>
 const isAssistantGroupItemGenerating = (id: string) => (s: State) => {
   if (isMessageGenerating(id)(s)) return true;
 
-  const message = s.displayMessages.find((item) => item.id === id);
+  const { byId, groupOfBlock } = indexDisplayMessages(s.displayMessages);
+  const message = byId.get(id);
   if (message?.role === 'assistantGroup') {
     return message.children?.some((block) => isMessageGenerating(block.id)(s)) ?? false;
   }
 
-  const parentMessage = s.displayMessages.find(
-    (message) =>
-      message.role === 'assistantGroup' && message.children?.some((block) => block.id === id),
-  );
-
+  const parentMessage = groupOfBlock.get(id);
   return parentMessage ? isMessageGenerating(parentMessage.id)(s) : false;
+};
+
+const isRowGenerating = (id: string) => (s: State) =>
+  dataSelectors
+    .rowMemberIds(id)(s)
+    .some((memberId) => isAssistantGroupItemGenerating(memberId)(s));
+
+const selectedMemberMessageIds = (s: State) =>
+  s.selectedMessageIds.flatMap((id) => dataSelectors.rowMemberIds(id)(s));
+
+const selectedDeletableMessageIds = (s: State) => [
+  ...new Set(s.selectedMessageIds.flatMap((id) => dataSelectors.deletableRowMessageIds(id)(s))),
+];
+
+const forwardableSelectedMessages = (s: State) => {
+  const selected = new Set(selectedMemberMessageIds(s));
+  return getForwardableMessages(s.displayMessages.filter((m) => selected.has(m.id)));
 };
 
 /**
@@ -119,10 +135,17 @@ const isMessageContinuing = (id: string) => (s: State) =>
   s.operationState.getMessageOperationState(id).isContinuing;
 
 /**
- * Check if a message generation was interrupted by user
+ * Check if a message generation was interrupted by user: its operation was
+ * cancelled in this session, or the server persisted the stopped marker (which
+ * is what survives a refresh, on partial output and on a bare placeholder).
  */
-const isMessageInterrupted = (id: string) => (s: State) =>
-  s.operationState.getMessageOperationState(id).isInterrupted;
+const isMessageInterrupted = (id: string) => (s: State) => {
+  const { isGenerating, isInterrupted } = s.operationState.getMessageOperationState(id);
+  if (isInterrupted || isGenerating) return isInterrupted;
+
+  const message = dataSelectors.getDbMessageById(id)(s);
+  return !!message?.metadata?.interruptedMidStream;
+};
 
 /**
  * Check if a message is in reasoning state
@@ -190,6 +213,7 @@ const isThreadMode = (_s: State) => {
 };
 
 export const messageStateSelectors = {
+  forwardableSelectedMessages,
   hasThreadBySourceMsgId,
   isAIGenerating,
   isAssistantGroupItemGenerating,
@@ -207,12 +231,14 @@ export const messageStateSelectors = {
   isMessageRegenerating,
   isMessageSelected,
   isPluginApiInvoking,
+  isRowGenerating,
   isSelectionMode,
   isThreadMode,
   isToolApiNameShining,
   isToolCallStreaming,
   messageEditingIds,
   messageLoadingIds,
+  selectedDeletableMessageIds,
   selectedMessageCount,
   sendMessageError,
 };

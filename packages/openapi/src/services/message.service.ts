@@ -1,13 +1,21 @@
 import { and, asc, count, desc, eq, ilike, inArray, isNull } from 'drizzle-orm';
 
+import type { FileItem, SessionItem, TopicItem } from '@/database/schemas';
 import { messages, messagesFiles } from '@/database/schemas';
 import type { LobeChatDatabase } from '@/database/type';
 import { idGenerator } from '@/database/utils/idGenerator';
 import { FileService as CoreFileService } from '@/server/services/file';
 
 import { BaseService } from '../common/base.service';
-import { processPaginationConditions } from '../helpers/pagination';
+import {
+  projectPublicFile,
+  projectPublicMessage,
+  projectPublicSession,
+  projectPublicTopic,
+} from '../helpers/public-fields';
 import type { ServiceResult } from '../types';
+import type { DeletedResources } from '../types/common.type';
+import { evalPagination as processPaginationConditions } from '../types/eval-resource.type';
 import type {
   MessageListResponse,
   MessageResponse,
@@ -53,23 +61,23 @@ export class MessageService extends BaseService {
 
     return await Promise.all(
       messages.map(async (message) => {
-        const messageWithoutFiles = { ...message };
-        delete (messageWithoutFiles as any).filesToMessages;
-
         return {
-          ...messageWithoutFiles,
+          ...projectPublicMessage(message),
           files: await Promise.all(
             message.filesToMessages?.map(async ({ file }) => {
+              const publicFile = projectPublicFile(file as FileItem);
               if (file.url.startsWith('http')) {
-                return file;
+                return publicFile;
               }
 
               return {
-                ...file,
+                ...publicFile,
                 url: await this.coreFileService.getFullFileUrl(file.url),
               };
             }) ?? [],
           ),
+          session: message.session ? projectPublicSession(message.session as SessionItem) : null,
+          topic: message.topic ? projectPublicTopic(message.topic as TopicItem) : null,
         };
       }),
     );
@@ -148,6 +156,27 @@ export class MessageService extends BaseService {
     this.log('info', '统计消息数量', { query, userId: this.userId });
 
     try {
+      if (query.threadId || query.topicId) {
+        if (!query.topicId) throw this.createValidationError('topicId is required with threadId');
+        if (query.userId || query.topicIds)
+          throw this.createValidationError('Use topicId without userId or topicIds');
+        const permission = await this.resolveOperationPermission('MESSAGE_READ', {
+          targetTopicId: query.topicId,
+        });
+        if (!permission.isPermitted)
+          throw this.createAuthorizationError('No permission to read topic messages');
+        const [row] = await this.db
+          .select({ count: count() })
+          .from(messages)
+          .where(
+            and(
+              this.buildWorkspaceWhere(messages),
+              eq(messages.topicId, query.topicId),
+              query.threadId ? eq(messages.threadId, query.threadId) : undefined,
+            ),
+          );
+        return { count: row.count };
+      }
       // Count by user ID (requires special permission check)
       if (query.userId) {
         return await this.countMessagesByUserId(query.userId);
@@ -284,6 +313,10 @@ export class MessageService extends BaseService {
         conditions.push(this.buildWorkspaceWhere(messages));
       }
 
+      if (request.threadId) {
+        if (!request.topicId) throw this.createValidationError('topicId is required with threadId');
+        conditions.push(eq(messages.threadId, request.threadId));
+      }
       if (request.role) {
         conditions.push(eq(messages.role, request.role));
       }
@@ -301,7 +334,7 @@ export class MessageService extends BaseService {
       const listQuery = this.db.query.messages.findMany({
         limit,
         offset,
-        orderBy: asc(messages.createdAt),
+        orderBy: [asc(messages.createdAt), asc(messages.id)],
         where: whereExpr,
         with: {
           filesToMessages: {
@@ -615,9 +648,9 @@ export class MessageService extends BaseService {
   /**
    * Delete a single message
    * @param messageId Message ID
-   * @returns Promise<void>
+   * @returns Whether a message row was actually removed
    */
-  async deleteMessage(messageId: string): Promise<void> {
+  async deleteMessage(messageId: string): Promise<boolean> {
     try {
       // Permission check
       const permissionResult = await this.resolveOperationPermission('MESSAGE_DELETE', {
@@ -636,54 +669,50 @@ export class MessageService extends BaseService {
       if (permissionWhere) whereConditions.push(permissionWhere);
 
       // Use a transaction to delete messages and their associations with files
-      await this.db.transaction(async (trx) => {
-        await trx.delete(messages).where(and(...whereConditions));
+      const removed = await this.db.transaction(async (trx) => {
+        const rows = await trx
+          .delete(messages)
+          .where(and(...whereConditions))
+          .returning({ id: messages.id });
+        // Only unlink files of a message this caller actually deleted.
+        if (rows.length === 0) return false;
         await trx.delete(messagesFiles).where(eq(messagesFiles.messageId, messageId));
+        return true;
       });
 
-      this.log('info', '消息删除成功', { messageId });
+      this.log('info', '消息删除成功', { messageId, removed });
+      return removed;
     } catch (error) {
       return this.handleServiceError(error, '删除消息');
     }
   }
 
   /**
-   * Delete messages in batch
+   * Delete messages in batch. Best effort: an id the caller may not delete (or
+   * that no longer exists) is skipped rather than failing the whole batch.
    * @param messageIds Message ID array
-   * @returns Promise<{ success: number; failed: number; errors: any[] }>
+   * @returns `count` = message rows actually removed by this call
    */
-  async deleteBatchMessages(messageIds: string[]): Promise<{
-    errors: Array<{ error: string; messageId: string }>;
-    failed: number;
-    success: number;
-  }> {
+  async deleteBatchMessages(messageIds: string[]): Promise<DeletedResources> {
     try {
-      const result = {
-        errors: [] as Array<{ error: string; messageId: string }>,
-        failed: 0,
-        success: 0,
-      };
+      let count = 0;
+      let failed = 0;
 
       for (const messageId of messageIds) {
         try {
-          await this.deleteMessage(messageId);
-          result.success++;
+          if (await this.deleteMessage(messageId)) count++;
         } catch (error) {
-          result.failed++;
-          result.errors.push({
+          failed++;
+          this.log('warn', '批量删除消息时跳过一条', {
             error: error instanceof Error ? error.message : String(error),
             messageId,
           });
         }
       }
 
-      this.log('info', '批量删除消息完成', {
-        failed: result.failed,
-        success: result.success,
-        total: messageIds.length,
-      });
+      this.log('info', '批量删除消息完成', { count, failed, total: messageIds.length });
 
-      return result;
+      return { count, deleted: true };
     } catch (error) {
       return this.handleServiceError(error, '批量删除消息');
     }

@@ -1,3 +1,4 @@
+import type { EvalCaseEnvironment } from '@lobechat/types';
 import debug from 'debug';
 
 import { AgentEvalRunTopicModel } from '@/database/models/agentEval';
@@ -7,7 +8,7 @@ import { workflowClient } from '@/libs/qstash';
 const log = debug('lobe-server:workflows:agent-eval-run');
 
 // Workflow paths
-const WORKFLOW_PATHS = {
+export const WORKFLOW_PATHS = {
   executeTestCase: '/api/workflows/agent-eval-run/execute-test-case',
   finalizeRun: '/api/workflows/agent-eval-run/finalize-run',
   onThreadComplete: '/api/workflows/agent-eval-run/on-thread-complete',
@@ -49,7 +50,10 @@ export interface RunAgentTrajectoryPayload {
 
 export interface ResumeAgentTrajectoryPayload {
   appContext: { topicId: string };
+  caseId?: string;
+  environment?: EvalCaseEnvironment;
   envPrompt?: string;
+  expectedExecutionId?: string;
   maxSteps?: number;
   parentMessageId: string;
   runId: string;
@@ -69,6 +73,7 @@ export interface OnTrajectoryCompletePayload {
   duration?: number;
   errorDetail?: unknown;
   errorMessage?: string;
+  executionId?: string;
   llmCalls?: number;
   operationId: string;
   reason: string;
@@ -77,11 +82,13 @@ export interface OnTrajectoryCompletePayload {
   steps?: number;
   testCaseId: string;
   toolCalls?: number;
+  topicId?: string;
   totalTokens?: number;
   userId: string;
 }
 
 export interface RunThreadTrajectoryPayload {
+  executionId?: string;
   runId: string;
   testCaseId: string;
   threadId: string;
@@ -91,7 +98,10 @@ export interface RunThreadTrajectoryPayload {
 
 export interface ResumeThreadTrajectoryPayload {
   appContext: { threadId: string; topicId: string };
+  caseId?: string;
+  environment?: EvalCaseEnvironment;
   envPrompt?: string;
+  expectedExecutionId?: string;
   maxSteps?: number;
   parentMessageId: string;
   runId: string;
@@ -106,6 +116,7 @@ export interface OnThreadCompletePayload {
   cost?: number;
   duration?: number;
   errorMessage?: string;
+  executionId?: string;
   llmCalls?: number;
   operationId: string;
   reason: string;

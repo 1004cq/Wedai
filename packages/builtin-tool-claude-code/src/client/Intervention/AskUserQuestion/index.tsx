@@ -9,12 +9,17 @@ import {
   useAskUserForm,
 } from '@lobechat/shared-tool-ui/ask-user';
 import type { BuiltinInterventionProps } from '@lobechat/types';
-import { memo, useCallback } from 'react';
+import { Flexbox, Icon, Text } from '@lobehub/ui';
+import { CircleAlert } from 'lucide-react';
+import { type ComponentProps, memo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useConversationStore } from '@/features/Conversation/store';
 import { dataSelectors } from '@/features/Conversation/store/slices/data/selectors';
 import { useChatStore } from '@/store/chat';
+
+import PermissionRequestIntervention from '../PermissionRequest';
+import { useSubmissionReconcile } from '../useSubmissionReconcile';
 
 /**
  * CC AskUserQuestion intervention component.
@@ -32,7 +37,7 @@ import { useChatStore } from '@/store/chat';
  */
 const AskUserQuestionIntervention = memo<BuiltinInterventionProps<AskUserQuestionArgs>>((props) => {
   const { t } = useTranslation('tool');
-  const { actionsPortalTarget, args, messageId, onInteractionAction } = props;
+  const { actionsPortalTarget, args, disabled, messageId, onInteractionAction } = props;
 
   // Persisted draft — read from the tool message's pluginState so the form
   // stays where the user left it across unmount / HMR / refresh.
@@ -40,6 +45,20 @@ const AskUserQuestionIntervention = memo<BuiltinInterventionProps<AskUserQuestio
     const msg = dataSelectors.getDbMessageById(messageId)(s);
     return (msg?.pluginState as { [DRAFT_PLUGIN_STATE_KEY]?: unknown })?.[DRAFT_PLUGIN_STATE_KEY];
   });
+  // The producer stamps its own ask-user deadline onto the durable tool row.
+  // Hand it to the form so the countdown tracks the clock that actually
+  // decides when the answer stops being deliverable, instead of restarting on
+  // every remount and outliving the blocked producer.
+  const deadlineAt = useConversationStore((s) => {
+    const msg = dataSelectors.getDbMessageById(messageId)(s);
+    const stored = (
+      msg?.pluginState as { heterogeneousIntervention?: { deadline?: unknown } } | undefined
+    )?.heterogeneousIntervention?.deadline;
+    return typeof stored === 'number' ? stored : undefined;
+  });
+  const submissionPhase = useChatStore((s) => s.questionSubmissions[messageId]);
+  // Stream events normally settle the card; a missed ACK is re-read.
+  useSubmissionReconcile(messageId);
   const setInterventionDraft = useChatStore((s) => s.setInterventionDraft);
   const writeDraft = useCallback(
     (draft: AskUserDraft) => setInterventionDraft(messageId, draft),
@@ -49,6 +68,8 @@ const AskUserQuestionIntervention = memo<BuiltinInterventionProps<AskUserQuestio
   const form = useAskUserForm({
     args,
     countdownMs: DEFAULT_COUNTDOWN_MS,
+    deadlineAt,
+    disabled,
     onInteractionAction,
     persistedDraft,
     writeDraft,
@@ -60,22 +81,58 @@ const AskUserQuestionIntervention = memo<BuiltinInterventionProps<AskUserQuestio
     escapeEnter: t('claudeCode.askUserQuestion.escape.enter'),
     escapePlaceholder: t('claudeCode.askUserQuestion.escape.placeholder'),
     multiSelectTag: t('claudeCode.askUserQuestion.multiSelectTag'),
+    recommendedTag: t('claudeCode.askUserQuestion.recommendedTag'),
     skip: t('claudeCode.askUserQuestion.skip'),
     submit: t('claudeCode.askUserQuestion.submit'),
+    supplementEnter: t('claudeCode.askUserQuestion.supplement.enter'),
+    supplementPlaceholder: t('claudeCode.askUserQuestion.supplement.placeholder'),
     timeExpired: t('claudeCode.askUserQuestion.timeExpired'),
-    timeRemaining: (time: string) => t('claudeCode.askUserQuestion.timeRemaining', { time }),
+    timeExpiredNoAnswer: t('claudeCode.askUserQuestion.timeExpiredNoAnswer'),
+    timeRemaining: (time: string) =>
+      t(
+        form.autoSubmitOnTimeout
+          ? 'claudeCode.askUserQuestion.timeRemaining'
+          : 'claudeCode.askUserQuestion.timeRemainingNoAnswer',
+        { time },
+      ),
   };
 
   return (
-    <AskUserQuestionView
-      {...form}
-      showCountdown
-      actionsPortalTarget={actionsPortalTarget}
-      labels={labels}
-    />
+    <Flexbox gap={8}>
+      {(form.submissionFailed ||
+        submissionPhase === 'failed' ||
+        submissionPhase === 'uncertain') && (
+        <Text fontSize={12} role="alert" type="danger">
+          <Icon icon={CircleAlert} size={14} /> {t('askUserQuestion.submitFailed')}
+        </Text>
+      )}
+      <AskUserQuestionView
+        {...form}
+        showCountdown
+        actionsPortalTarget={actionsPortalTarget}
+        labels={labels}
+      />
+    </Flexbox>
   );
 });
 
 AskUserQuestionIntervention.displayName = 'CCAskUserQuestionIntervention';
 
-export default AskUserQuestionIntervention;
+/**
+ * A Claude Code permission request carries a
+ * `claudeCodePermission` detail beside the AskUserQuestion-shaped question:
+ * it gets its own card, which never counts down — Claude Code waits.
+ */
+const AskUserQuestionOrPermission = memo<BuiltinInterventionProps<AskUserQuestionArgs>>((props) =>
+  (props.args as { claudeCodePermission?: unknown } | undefined)?.claudeCodePermission ? (
+    <PermissionRequestIntervention
+      {...(props as unknown as ComponentProps<typeof PermissionRequestIntervention>)}
+    />
+  ) : (
+    <AskUserQuestionIntervention {...props} />
+  ),
+);
+
+AskUserQuestionOrPermission.displayName = 'CCAskUserQuestionOrPermission';
+
+export default AskUserQuestionOrPermission;

@@ -17,21 +17,32 @@ interface MockOperation {
 
 const mocks = vi.hoisted(() => ({
   copyToClipboard: vi.fn(),
-  isDevMode: true,
   messageOperationMap: {} as Record<string, string>,
   messageSuccess: vi.fn(),
   operations: {} as Record<string, MockOperation>,
 }));
 
-vi.mock('@lobehub/ui', () => ({
-  copyToClipboard: mocks.copyToClipboard,
-}));
+vi.mock('@lobehub/ui', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const factories: ((original: typeof importOriginal) => unknown)[] = [
+    () => ({
+      copyToClipboard: mocks.copyToClipboard,
+    }),
+    async (importOriginal) => ({
+      ...(await importOriginal<object>()),
+      toast: { success: mocks.messageSuccess },
+    }),
+  ];
+  const merged: Record<string, unknown> = { ...actual };
+  for (const factory of factories) {
+    const part = (await factory(importOriginal)) as Record<string, unknown>;
+    for (const [key, value] of Object.entries(part)) if (value !== actual[key]) merged[key] = value;
+  }
+  return merged;
+});
 
-vi.mock('@lobehub/ui/base-ui', () => ({
-  toast: { success: mocks.messageSuccess },
-}));
-
-vi.mock('antd', () => ({
+vi.mock('antd', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   App: { useApp: () => ({ message: { success: mocks.messageSuccess } }) },
 }));
 
@@ -58,20 +69,6 @@ vi.mock('@/store/chat/selectors', () => ({
   },
 }));
 
-vi.mock('@/store/user', () => ({
-  useUserStore: (selector: (state: unknown) => unknown) => selector({}),
-}));
-
-vi.mock('@/store/user/selectors', () => ({
-  userGeneralSettingsSelectors: {
-    config: () => ({ isDevMode: mocks.isDevMode }),
-  },
-}));
-
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
-
 const build = (
   data: Partial<UIChatMessage> = {},
   role: MessageActionContext['role'] = 'assistant',
@@ -89,15 +86,8 @@ const build = (
 describe('copyOperationIdAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.isDevMode = true;
     mocks.messageOperationMap = {};
     mocks.operations = {};
-  });
-
-  it('is absent when Advanced Tools (dev mode) is off', () => {
-    mocks.isDevMode = false;
-
-    expect(build({ metadata: { operationId: 'op-server' } })).toBeNull();
   });
 
   it('is absent when no operation id is resolvable', () => {
@@ -169,7 +159,7 @@ describe('copyOperationIdAction', () => {
   });
 
   it('is absent when the mapped operation has no AI-runtime ancestor', () => {
-    // messageOperationMap is last-write-wins: a later translate/tts operation
+    // messageOperationMap is last-write-wins: a later translate operation
     // can own the slot. Its id must not surface as the message's operation id.
     mocks.messageOperationMap = { 'message-1': 'op-translate' };
     mocks.operations = {

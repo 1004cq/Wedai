@@ -11,7 +11,6 @@ import { authSelectors } from '@/store/user/slices/auth/selectors';
 import { messageStateSelectors, useConversationStore } from '../../../store';
 import ExtraContainer from '../../components/Extras/ExtraContainer';
 import Translate from '../../components/Extras/Translate';
-import TTS from '../../components/Extras/TTS';
 import Usage from '../../components/Extras/Usage';
 
 interface AssistantMessageExtraProps {
@@ -29,7 +28,7 @@ export const AssistantMessageExtra = memo<AssistantMessageExtraProps>(
   ({ extra, id, content, performance, usage, tools, provider, model }) => {
     const loading = useConversationStore(messageStateSelectors.isMessageGenerating(id));
     const isLogin = useUserStore(authSelectors.isLogin);
-    const isDevMode = useUserStore((s) => userGeneralSettingsSelectors.config(s).isDevMode);
+    const showMessageUsage = useUserStore(userGeneralSettingsSelectors.showMessageUsage);
 
     // Local CLI hetero agents (claude-code, codex) only report `model` after
     // turn_metadata lands mid-stream, so gating on `!!model` alone would skip
@@ -38,23 +37,17 @@ export const AssistantMessageExtra = memo<AssistantMessageExtraProps>(
     // should bypass the model check, otherwise local agents render a lone
     // empty-model ModelIcon while streaming.
     const showUsage =
-      isDevMode &&
+      showMessageUsage &&
       content !== LOADING_FLAT &&
       (!!model || (!!provider && isRemoteHeterogeneousType(provider)));
-    const showTts = isLogin && !!extra?.tts;
     const showTranslate = isLogin && !!extra?.translate;
 
-    if (!showUsage && !showTts && !showTranslate) return null;
+    if (!showUsage && !showTranslate) return null;
 
     return (
       <Flexbox gap={8} style={{ marginTop: !!tools?.length ? 8 : 4 }}>
         {showUsage && (
           <Usage model={model!} performance={performance} provider={provider!} usage={usage} />
-        )}
-        {showTts && (
-          <ExtraContainer>
-            <TTS content={content} id={id} loading={loading} {...extra?.tts} />
-          </ExtraContainer>
         )}
         {showTranslate && (
           <ExtraContainer>

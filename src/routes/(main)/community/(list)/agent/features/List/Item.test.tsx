@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { fireEvent, render, screen } from '@testing-library/react';
-import type { MouseEventHandler, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { DiscoverAssistantItem } from '@/types/discover';
@@ -9,36 +9,6 @@ import AssistantItem from './Item';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
-}));
-
-vi.mock('@lobehub/ui', () => ({
-  Avatar: ({ avatar }: { avatar?: string }) => <div data-avatar={avatar} />,
-  Block: ({
-    children,
-    onClick,
-  }: {
-    children?: ReactNode;
-    onClick?: MouseEventHandler<HTMLDivElement>;
-  }) => (
-    <div data-testid="assistant-item" onClick={onClick}>
-      {children}
-    </div>
-  ),
-  Flexbox: ({
-    children,
-    onClick,
-  }: {
-    children?: ReactNode;
-    onClick?: MouseEventHandler<HTMLDivElement>;
-  }) => <div onClick={onClick}>{children}</div>,
-  Icon: () => <span />,
-  Tag: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
-  Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
-  Tooltip: ({ children }: { children?: ReactNode }) => <>{children}</>,
-}));
-
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
 }));
 
 vi.mock('@/components/PublishedTime', () => ({
@@ -84,7 +54,7 @@ describe('AssistantItem', () => {
       fireEvent.click(screen.getByText('LobeHub'));
 
       expect(openSpy).toHaveBeenCalledWith(
-        '/community/user/lobehub',
+        '/marketplace/user/lobehub',
         '_blank',
         'noopener,noreferrer',
       );
@@ -104,7 +74,7 @@ describe('AssistantItem', () => {
       fireEvent.click(screen.getByText('Acme Labs'));
 
       expect(openSpy).toHaveBeenCalledWith(
-        '/community/org/acme-labs',
+        '/marketplace/org/acme-labs',
         '_blank',
         'noopener,noreferrer',
       );

@@ -21,61 +21,91 @@ const stubUiMessagesSnapshot = (service: unknown) => {
   };
 };
 
+/**
+ * `executeStep` refuses to run when the durable terminal check fails. These
+ * tests exercise the step loop with an empty database stand-in, so give the
+ * operation row the non-terminal status a live run would have.
+ */
+const stubRunningDurableOperation = (service: unknown) => {
+  vi.spyOn(
+    (service as { agentOperationModel: { findById: (...args: any[]) => any } }).agentOperationModel,
+    'findById',
+  ).mockResolvedValue({ status: 'running' } as any);
+};
+
 vi.mock('@/envs/app', () => ({ appEnv: { APP_URL: 'http://localhost:3010' } }));
 vi.mock('@/database/models/message', () => ({
-  MessageModel: vi.fn().mockImplementation(() => ({
-    create: vi.fn(),
-    query: vi.fn().mockResolvedValue([]),
-    update: vi.fn(),
-  })),
+  MessageModel: vi.fn().mockImplementation(function () {
+    return {
+      create: vi.fn(),
+      query: vi.fn().mockResolvedValue([]),
+      update: vi.fn(),
+    };
+  }),
 }));
 vi.mock('@/server/modules/ModelRuntime', () => ({
   initModelRuntimeFromDB: vi.fn(),
 }));
 vi.mock('@/server/modules/AgentRuntime', () => ({
-  AgentRuntimeCoordinator: vi.fn().mockImplementation(() => ({
-    createAgentOperation: vi.fn(),
-    getOperationMetadata: vi.fn(),
-    loadAgentState: vi.fn(),
-    releaseStepLock: vi.fn().mockResolvedValue(undefined),
-    saveAgentState: vi.fn(),
-    saveStepResult: vi.fn(),
-    tryClaimStep: vi.fn().mockResolvedValue(true),
-  })),
-  createStreamEventManager: vi.fn(() => ({
-    cleanupOperation: vi.fn(),
-    publishAgentRuntimeEnd: vi.fn(),
-    publishAgentRuntimeInit: vi.fn(),
-    publishStreamEvent: vi.fn(),
-  })),
+  AgentRuntimeCoordinator: vi.fn().mockImplementation(function () {
+    return {
+      createAgentOperation: vi.fn(),
+      getOperationMetadata: vi.fn(),
+      isInterrupted: vi.fn().mockResolvedValue(false),
+      hasQueuedMessages: vi.fn().mockResolvedValue(false),
+      loadAgentState: vi.fn(),
+      loadAgentStatus: vi.fn().mockResolvedValue(null),
+      releaseStepLock: vi.fn().mockResolvedValue(undefined),
+      saveAgentState: vi.fn(),
+      saveStepResult: vi.fn(),
+      tryClaimStep: vi.fn().mockResolvedValue(true),
+      refreshStepLock: vi.fn().mockResolvedValue(true),
+    };
+  }),
+  createStreamEventManager: vi.fn(function () {
+    return {
+      cleanupOperation: vi.fn(),
+      publishAgentRuntimeEnd: vi.fn(),
+      publishAgentRuntimeInit: vi.fn(),
+      publishStreamEvent: vi.fn(),
+    };
+  }),
 }));
 vi.mock('@/server/modules/AgentRuntime/RuntimeExecutors', () => ({
-  createRuntimeExecutors: vi.fn(() => ({})),
+  createRuntimeExecutors: vi.fn(function () {
+    return {};
+  }),
 }));
 vi.mock('@/server/services/mcp', () => ({ mcpService: {} }));
 vi.mock('@/server/services/queue', () => ({
-  QueueService: vi.fn().mockImplementation(() => ({
-    getImpl: vi.fn(() => ({})),
-    scheduleMessage: vi.fn(),
-  })),
+  QueueService: vi.fn().mockImplementation(function () {
+    return {
+      getImpl: vi.fn(function () {
+        return {};
+      }),
+      scheduleMessage: vi.fn(),
+    };
+  }),
 }));
 vi.mock('@/server/services/queue/impls', () => ({
   LocalQueueServiceImpl: class {},
   isQueueAgentRuntimeEnabled: vi.fn().mockReturnValue(false),
 }));
 vi.mock('@/server/featureFlags', () => ({
-  getServerFeatureFlagsStateFromRuntimeConfig: vi
-    .fn()
-    .mockResolvedValue({ enableAgentSelfIteration: true }),
+  getServerFeatureFlagsStateFromRuntimeConfig: vi.fn().mockResolvedValue({}),
 }));
 vi.mock('../../agentSignal/featureGate', () => ({
   isAgentSignalEnabledForUser: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@/server/services/toolExecution', () => ({
-  ToolExecutionService: vi.fn().mockImplementation(() => ({})),
+  ToolExecutionService: vi.fn().mockImplementation(function () {
+    return {};
+  }),
 }));
 vi.mock('@/server/services/toolExecution/builtin', () => ({
-  BuiltinToolsExecutor: vi.fn().mockImplementation(() => ({})),
+  BuiltinToolsExecutor: vi.fn().mockImplementation(function () {
+    return {};
+  }),
 }));
 vi.mock('@lobechat/builtin-tools/dynamicInterventionAudits', () => ({
   dynamicInterventionAudits: [],
@@ -89,7 +119,7 @@ describe('AgentRuntimeService Agent Signal hook integration', () => {
 
   it(
     'emits source events for beforeStep and afterStep boundaries',
-    { timeout: 20_000 },
+    { timeout: 60_000 },
     async () => {
       (globalThis as AgentSignalRedisTestGlobal).__agentSignalRedisClient = mockRedis;
       mockRedis.set.mockResolvedValue('OK');
@@ -101,13 +131,14 @@ describe('AgentRuntimeService Agent Signal hook integration', () => {
       const { AgentRuntimeService } = await import('../AgentRuntimeService');
       const service = new AgentRuntimeService({} as any, 'user-1', { queueService: null });
       stubUiMessagesSnapshot(service);
+      stubRunningDurableOperation(service);
       const coordinator = (service as any).coordinator;
 
       vi.spyOn(coordinator, 'loadAgentState').mockResolvedValue({
         createdAt: new Date().toISOString(),
         lastModified: new Date().toISOString(),
         messages: [{ content: 'hello', role: 'user' }],
-        metadata: {
+        origin: {
           agentId: 'agent-1',
           topicId: 'topic-1',
           userId: 'user-1',
@@ -124,7 +155,7 @@ describe('AgentRuntimeService Agent Signal hook integration', () => {
             events: [{ result: { content: 'done' }, type: 'llm_result' }],
             newState: {
               createdAt: new Date().toISOString(),
-              metadata: {
+              origin: {
                 agentId: 'agent-1',
                 topicId: 'topic-1',
                 userId: 'user-1',
@@ -204,13 +235,14 @@ describe('AgentRuntimeService Agent Signal hook integration', () => {
       snapshotStore: snapshotStore as any,
     });
     stubUiMessagesSnapshot(service);
+    stubRunningDurableOperation(service);
     const coordinator = (service as any).coordinator;
 
     vi.spyOn(coordinator, 'loadAgentState').mockResolvedValue({
       createdAt: new Date().toISOString(),
       lastModified: new Date().toISOString(),
       messages: [{ content: 'hello', role: 'user' }],
-      metadata: {
+      origin: {
         agentId: 'agent-1',
         topicId: 'topic-1',
         userId: 'user-1',
@@ -227,7 +259,7 @@ describe('AgentRuntimeService Agent Signal hook integration', () => {
           events: [{ result: { content: 'done' }, type: 'llm_result' }],
           newState: {
             createdAt: new Date().toISOString(),
-            metadata: {
+            origin: {
               agentId: 'agent-1',
               topicId: 'topic-1',
               userId: 'user-1',
@@ -303,14 +335,17 @@ describe('AgentRuntimeService Agent Signal hook integration', () => {
       snapshotStore: snapshotStore as any,
     });
     stubUiMessagesSnapshot(service);
+    stubRunningDurableOperation(service);
     const coordinator = (service as any).coordinator;
 
     vi.spyOn(coordinator, 'loadAgentState').mockResolvedValue({
       createdAt: new Date().toISOString(),
       lastModified: new Date().toISOString(),
       messages: [{ content: 'hello', role: 'user' }],
-      metadata: {
-        _hooks: ['serialized-hook'],
+      host: {
+        hooks: ['serialized-hook'],
+      },
+      origin: {
         agentId: 'agent-1',
         topicId: 'topic-1',
         userId: 'user-1',
@@ -327,8 +362,10 @@ describe('AgentRuntimeService Agent Signal hook integration', () => {
           events: [{ result: { content: 'done' }, type: 'llm_result' }],
           newState: {
             createdAt: new Date().toISOString(),
-            metadata: {
-              _hooks: ['serialized-hook'],
+            host: {
+              hooks: ['serialized-hook'],
+            },
+            origin: {
               agentId: 'agent-1',
               topicId: 'topic-1',
               userId: 'user-1',

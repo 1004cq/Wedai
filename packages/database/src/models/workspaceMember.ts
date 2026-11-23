@@ -1,12 +1,41 @@
 import { INVITATION_EXPIRY_DAYS } from '@lobechat/const';
-import { and, eq, isNotNull, isNull, or } from 'drizzle-orm';
+import { canWorkspaceRoleBeTaskAssignee } from '@lobechat/const/rbac';
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  exists,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  or,
+  sql,
+} from 'drizzle-orm';
+import { nanoid as secureNanoid } from 'nanoid';
 import { nanoid } from 'nanoid/non-secure';
 
 import { devices } from '../schemas/device';
-import { workspaceInvitations, workspaceMembers } from '../schemas/workspace';
+import { messengerAccountLinks } from '../schemas/messengerAccountLink';
+import { projectMembers } from '../schemas/projectReview';
+import { tasks } from '../schemas/task';
+import { users } from '../schemas/user';
+import { workspaceInvitations, workspaceMembers, workspaceTeamMembers } from '../schemas/workspace';
 import type { LobeChatDatabase } from '../type';
+import { ilikeContains as containsIgnoreCase } from '../utils/like';
+import { memberNicknameSql } from '../utils/workspaceMemberNickname';
+import { ResourcePermissionModel } from './resourcePermission';
 
 type MemberRole = 'admin' | 'member' | 'viewer';
+
+// The built-in roles a `workspace_members.role` row can hold; narrowed at load
+// time to the ones that may own a task so the directory lookup can gate on the
+// column in SQL instead of filtering every row after the fact.
+const ASSIGNABLE_MEMBER_ROLES = (['owner', 'admin', 'member', 'viewer'] as const).filter((role) =>
+  canWorkspaceRoleBeTaskAssignee(role),
+);
 
 export class WorkspaceMemberModel {
   private readonly db: LobeChatDatabase;
@@ -49,12 +78,152 @@ export class WorkspaceMemberModel {
     });
   };
 
+  /**
+   * The caller's active roles across many workspaces in ONE read — for list
+   * surfaces whose rows span workspaces, where a `getMember` per workspace
+   * would turn a page into a chain of sequential queries.
+   */
+  getRolesInWorkspaces = async (
+    workspaceIds: string[],
+    userId: string,
+  ): Promise<Map<string, string>> => {
+    if (workspaceIds.length === 0) return new Map();
+    const rows = await this.db
+      .select({ role: workspaceMembers.role, workspaceId: workspaceMembers.workspaceId })
+      .from(workspaceMembers)
+      .where(
+        and(
+          inArray(workspaceMembers.workspaceId, workspaceIds),
+          eq(workspaceMembers.userId, userId),
+          isNull(workspaceMembers.deletedAt),
+        ),
+      );
+    return new Map(rows.map((row) => [row.workspaceId, row.role]));
+  };
+
+  /**
+   * `userId → nickname` for the active members of `workspaceId` among `userIds`
+   * who set one. Server surfaces that label people inside a workspace read it so
+   * a member goes by the same name there as in the member directory.
+   */
+  getNicknames = async (workspaceId: string, userIds: readonly string[]) => {
+    const ids = [...new Set(userIds)];
+    if (ids.length === 0) return new Map<string, string>();
+
+    const nickname = memberNicknameSql();
+    const rows = await this.db
+      .select({ nickname, userId: workspaceMembers.userId })
+      .from(workspaceMembers)
+      .where(
+        and(
+          eq(workspaceMembers.workspaceId, workspaceId),
+          inArray(workspaceMembers.userId, ids),
+          isNull(workspaceMembers.deletedAt),
+          isNotNull(nickname),
+        ),
+      );
+
+    return new Map(rows.flatMap(({ nickname, userId }) => (nickname ? [[userId, nickname]] : [])));
+  };
+
+  /** Lock an active membership row. Call only from an enclosing transaction. */
+  getMemberForUpdate = async (workspaceId: string, userId: string) => {
+    const [member] = await this.db
+      .select()
+      .from(workspaceMembers)
+      .where(
+        and(
+          eq(workspaceMembers.workspaceId, workspaceId),
+          eq(workspaceMembers.userId, userId),
+          isNull(workspaceMembers.deletedAt),
+        ),
+      )
+      .for('update');
+    return member;
+  };
+
   listMembers = async (workspaceId: string, options: { includeDeleted?: boolean } = {}) => {
     return this.db.query.workspaceMembers.findMany({
       where: options.includeDeleted
         ? eq(workspaceMembers.workspaceId, workspaceId)
         : and(eq(workspaceMembers.workspaceId, workspaceId), isNull(workspaceMembers.deletedAt)),
     });
+  };
+
+  /**
+   * Bounded assignee directory: active members whose role may own a task,
+   * optionally narrowed by `query` — an exact (case-folded) user id, or a
+   * case-insensitive part of the display name, @handle, email, or a messenger
+   * identity linked under this workspace's scope — and capped by `limit`.
+   * The narrowing and the cap run in SQL so a large workspace costs one page
+   * plus a count, never a full member scan on the application side. `total`
+   * is the number of matches before the cap.
+   */
+  searchAssignableMembers = async (
+    workspaceId: string,
+    options: { limit: number; query?: string },
+  ): Promise<{
+    rows: Array<{ nickname: string | null; role: string; userId: string }>;
+    total: number;
+  }> => {
+    const { limit, query } = options;
+    if (ASSIGNABLE_MEMBER_ROLES.length === 0 || limit <= 0) return { rows: [], total: 0 };
+
+    const matchesQuery = query
+      ? or(
+          sql`lower(${users.id}) = ${query}`,
+          containsIgnoreCase(memberNicknameSql(), query),
+          containsIgnoreCase(users.fullName, query),
+          containsIgnoreCase(users.username, query),
+          containsIgnoreCase(users.email, query),
+          // Same scope rule as `MessengerAccountLinkModel.findByUserIds`: only
+          // identities active under this workspace take part in resolution.
+          exists(
+            this.db
+              .select({ one: sql`1` })
+              .from(messengerAccountLinks)
+              .where(
+                and(
+                  eq(messengerAccountLinks.userId, workspaceMembers.userId),
+                  eq(messengerAccountLinks.workspaceId, workspaceId),
+                  or(
+                    containsIgnoreCase(messengerAccountLinks.platformUsername, query),
+                    sql`lower(${messengerAccountLinks.platformUserId}) = ${query}`,
+                  ),
+                ),
+              ),
+          ),
+        )
+      : undefined;
+    const nickname = memberNicknameSql();
+    const where = and(
+      eq(workspaceMembers.workspaceId, workspaceId),
+      isNull(workspaceMembers.deletedAt),
+      inArray(workspaceMembers.role, ASSIGNABLE_MEMBER_ROLES),
+      matchesQuery,
+    );
+
+    const [rows, [{ total }]] = await Promise.all([
+      this.db
+        .select({ nickname, role: workspaceMembers.role, userId: workspaceMembers.userId })
+        .from(workspaceMembers)
+        .innerJoin(users, eq(users.id, workspaceMembers.userId))
+        .where(where)
+        .orderBy(
+          // Members are listed by the name they go by in this workspace.
+          asc(sql`coalesce(${nickname}, ${users.fullName})`),
+          asc(users.username),
+          asc(workspaceMembers.userId),
+        )
+        .limit(limit),
+      this.db
+        .select({ total: count() })
+        .from(workspaceMembers)
+        .innerJoin(users, eq(users.id, workspaceMembers.userId))
+        .where(where),
+    ]);
+
+    return { rows, total: Number(total) };
   };
 
   removeMember = async (workspaceId: string, userId: string) => {
@@ -76,16 +245,54 @@ export class WorkspaceMemberModel {
       )
       .returning({ deviceId: devices.deviceId });
 
-    await this.db
-      .update(workspaceMembers)
-      .set({ deletedAt: new Date() })
-      .where(
-        and(
-          eq(workspaceMembers.workspaceId, workspaceId),
-          eq(workspaceMembers.userId, userId),
-          isNull(workspaceMembers.deletedAt),
-        ),
-      );
+    // Same reasoning one level up: a per-member resource grant (or team
+    // membership) only means anything while they belong to the workspace, and
+    // the soft delete is reactivated by `addMember`, so a row left behind would
+    // silently restore their old access or teams on re-invite. Workspace-wide
+    // rows carry no subject and stay. The job title, responsibilities and member
+    // config (nickname and badge color) are cleared for the same reason: a re-invited member starts without them.
+    //
+    // Soft-delete first, then revoke, both in one transaction: the update takes
+    // the membership row lock that a concurrent grant waits on, so a grant can
+    // never land in the window between the two statements. Reversing the order
+    // would leave exactly that gap.
+    await this.db.transaction(async (tx) => {
+      await tx
+        .update(workspaceMembers)
+        .set({
+          config: {},
+          deletedAt: new Date(),
+          responsibilities: null,
+          title: null,
+        })
+        .where(
+          and(
+            eq(workspaceMembers.workspaceId, workspaceId),
+            eq(workspaceMembers.userId, userId),
+            isNull(workspaceMembers.deletedAt),
+          ),
+        );
+
+      await new ResourcePermissionModel(tx, workspaceId).removeMemberGrants(userId);
+
+      await tx
+        .delete(projectMembers)
+        .where(and(eq(projectMembers.workspaceId, workspaceId), eq(projectMembers.userId, userId)));
+
+      await tx
+        .delete(workspaceTeamMembers)
+        .where(
+          and(
+            eq(workspaceTeamMembers.workspaceId, workspaceId),
+            eq(workspaceTeamMembers.userId, userId),
+          ),
+        );
+
+      await tx
+        .update(tasks)
+        .set({ assigneeUserId: null })
+        .where(and(eq(tasks.workspaceId, workspaceId), eq(tasks.assigneeUserId, userId)));
+    });
 
     // Surfaced so callers can best-effort unenroll any still-connected gateway
     // socket for these devices: deleting the row alone also removes it from the
@@ -95,16 +302,75 @@ export class WorkspaceMemberModel {
   };
 
   updateMemberRole = async (workspaceId: string, userId: string, role: MemberRole) => {
-    return this.db
+    return this.db.transaction(async (tx) => {
+      const updatedMembers = await tx
+        .update(workspaceMembers)
+        .set({ role })
+        .where(
+          and(
+            eq(workspaceMembers.workspaceId, workspaceId),
+            eq(workspaceMembers.userId, userId),
+            isNull(workspaceMembers.deletedAt),
+          ),
+        )
+        .returning({ userId: workspaceMembers.userId });
+
+      if (updatedMembers.length > 0 && !canWorkspaceRoleBeTaskAssignee(role)) {
+        await tx
+          .update(tasks)
+          .set({ assigneeUserId: null })
+          .where(and(eq(tasks.workspaceId, workspaceId), eq(tasks.assigneeUserId, userId)));
+      }
+
+      return updatedMembers;
+    });
+  };
+
+  /**
+   * Set an active member's workspace-scoped job title, responsibilities, and the
+   * nickname and badge color kept in `config`. `null` clears a field; an omitted field
+   * stays as it is, and other `config` keys are left alone. Returns the
+   * updated row, or `undefined` when the user is not an active member.
+   */
+  updateMemberProfile = async (
+    workspaceId: string,
+    userId: string,
+    profile: {
+      badgeColor?: string | null;
+      nickname?: string | null;
+      responsibilities?: string | null;
+      title?: string | null;
+    },
+  ) => {
+    // Each `config` key is merged or removed on its own, so one edit never
+    // drops another key set concurrently.
+    const configKeys = { badgeColor: profile.badgeColor, nickname: profile.nickname };
+    const changed = Object.entries(configKeys).filter(([, value]) => value !== undefined);
+    const set = Object.fromEntries(changed.filter(([, value]) => value !== null));
+    const config =
+      changed.length === 0
+        ? undefined
+        : changed
+            .filter(([, value]) => value === null)
+            .reduce((expr, [key]) => sql`${expr} - ${key}::text`, sql`${workspaceMembers.config}`)
+            .append(sql` || ${JSON.stringify(set)}::jsonb`);
+
+    const [result] = await this.db
       .update(workspaceMembers)
-      .set({ role })
+      .set({
+        config,
+        responsibilities: profile.responsibilities,
+        title: profile.title,
+      })
       .where(
         and(
           eq(workspaceMembers.workspaceId, workspaceId),
           eq(workspaceMembers.userId, userId),
           isNull(workspaceMembers.deletedAt),
         ),
-      );
+      )
+      .returning();
+    return result;
   };
 
   // ===== Invitations ===== //
@@ -133,13 +399,94 @@ export class WorkspaceMemberModel {
     });
   };
 
+  /** Pending single-use invitations; reusable links are managed separately. */
   listPendingInvitations = async (workspaceId: string) => {
     return this.db.query.workspaceInvitations.findMany({
       where: and(
         eq(workspaceInvitations.workspaceId, workspaceId),
         eq(workspaceInvitations.status, 'pending'),
+        eq(workspaceInvitations.reusable, false),
       ),
     });
+  };
+
+  // ===== Reusable link invitations (share links) ===== //
+
+  /**
+   * The workspace's live share links, newest first: reusable, not revoked and
+   * not past `expiresAt`. A workspace may hold several at once.
+   */
+  listLinkInvitations = async (workspaceId: string, now = new Date()) => {
+    return this.db.query.workspaceInvitations.findMany({
+      orderBy: [desc(workspaceInvitations.createdAt)],
+      where: and(
+        eq(workspaceInvitations.workspaceId, workspaceId),
+        eq(workspaceInvitations.reusable, true),
+        eq(workspaceInvitations.status, 'pending'),
+        or(isNull(workspaceInvitations.expiresAt), gt(workspaceInvitations.expiresAt, now)),
+      ),
+    });
+  };
+
+  /** Number of live share links, for the per-workspace cap. */
+  countLinkInvitations = async (workspaceId: string, now = new Date()) => {
+    const [row] = await this.db
+      .select({ value: count() })
+      .from(workspaceInvitations)
+      .where(
+        and(
+          eq(workspaceInvitations.workspaceId, workspaceId),
+          eq(workspaceInvitations.reusable, true),
+          eq(workspaceInvitations.status, 'pending'),
+          or(isNull(workspaceInvitations.expiresAt), gt(workspaceInvitations.expiresAt, now)),
+        ),
+      );
+    return row?.value ?? 0;
+  };
+
+  /**
+   * Create a share link: a reusable invitation any signed-in user can accept
+   * until it expires or is revoked. `expiresAt: null` never expires.
+   */
+  createLinkInvitation = async (params: {
+    expiresAt: Date | null;
+    role?: MemberRole;
+    workspaceId: string;
+  }) => {
+    const [invitation] = await this.db
+      .insert(workspaceInvitations)
+      .values({
+        expiresAt: params.expiresAt,
+        inviterId: this.userId,
+        reusable: true,
+        role: params.role ?? 'member',
+        // Long-lived and shared publicly, so draw the token from a CSPRNG.
+        token: secureNanoid(32),
+        workspaceId: params.workspaceId,
+      })
+      .returning();
+    return invitation;
+  };
+
+  /**
+   * Revoke one share link of the workspace. Returns whether a live link was
+   * revoked (false for an unknown id, another workspace's link, a single-use
+   * invitation, or a link that was already revoked).
+   */
+  revokeLinkInvitation = async (workspaceId: string, id: string) => {
+    const rows = await this.db
+      .update(workspaceInvitations)
+      .set({ status: 'revoked', updatedAt: new Date() })
+      .where(
+        and(
+          eq(workspaceInvitations.id, id),
+          eq(workspaceInvitations.workspaceId, workspaceId),
+          eq(workspaceInvitations.reusable, true),
+          eq(workspaceInvitations.status, 'pending'),
+        ),
+      )
+      .returning({ id: workspaceInvitations.id });
+    return rows.length > 0;
   };
 
   revokeInvitation = async (id: string) => {

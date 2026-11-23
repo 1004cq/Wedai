@@ -1,15 +1,20 @@
 /**
  * @vitest-environment happy-dom
  */
-import { type IEditor } from '@lobehub/editor';
-import { moment } from '@lobehub/editor';
-import { useEditor } from '@lobehub/editor/react';
+import { type IEditor, type ISlashMenuOption, type ISlashService } from '@lobehub/editor';
+import { genServiceId, moment } from '@lobehub/editor';
+import { type EditorProps, useEditor } from '@lobehub/editor/react';
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { memo, useEffect, useRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { type InternalEditorProps } from './InternalEditor';
 import InternalEditor from './InternalEditor';
+import { type InternalEditorProps } from './InternalEditor';
+import { registerBlockDecoratorCaretGuard } from './registerBlockDecoratorCaretGuard';
+
+vi.mock('./registerBlockDecoratorCaretGuard', () => ({
+  registerBlockDecoratorCaretGuard: vi.fn(() => vi.fn()),
+}));
 
 // Suppress console.warn for expected errors in tests
 const originalWarn = console.warn;
@@ -107,6 +112,76 @@ describe('InternalEditor', () => {
       const editorContainer = container.querySelector('[data-lexical-editor]')?.closest('div');
       // The style should include paddingBottom: 32 (default) merged with custom styles
       expect(editorContainer).toBeTruthy();
+    });
+
+    it('should allow wide block controls to bleed outside the text column when enabled', async () => {
+      const { container, rerender } = render(<MinimalTestWrapper />);
+
+      await act(async () => {
+        await moment();
+      });
+
+      expect(container.firstElementChild).toHaveStyle({ overflow: 'hidden' });
+
+      rerender(<MinimalTestWrapper allowContentBleed />);
+
+      expect(container.firstElementChild).toHaveStyle({ overflow: 'visible' });
+    });
+
+    it('should keep inline LaTeX as plain text when inline math is disabled', async () => {
+      let editorInstance: IEditor | undefined;
+
+      render(
+        <TestWrapper
+          enableInlineMath={false}
+          onEditorReady={(editor) => {
+            editorInstance = editor;
+          }}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(editorInstance).toBeDefined();
+      });
+
+      await act(async () => {
+        editorInstance!.setDocument('markdown', 'Budget variable: $x$');
+        await moment();
+      });
+
+      expect(editorInstance!.getDocument('text')).toBe('Budget variable: $x$');
+      expect(JSON.stringify(editorInstance!.getDocument('json'))).not.toContain('"type":"math"');
+    });
+  });
+
+  describe('video', () => {
+    it('reads a markdown <video> into a video node with the default plugins', async () => {
+      let editorInstance: IEditor | undefined;
+
+      render(
+        <TestWrapper
+          onEditorReady={(editor) => {
+            editorInstance = editor;
+          }}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(editorInstance).toBeDefined();
+      });
+
+      await act(async () => {
+        editorInstance!.setDocument(
+          'markdown',
+          '<video src="https://cdn.test/a.mp4" style="width: 50%" controls></video>',
+        );
+        await moment();
+      });
+
+      expect(JSON.stringify(editorInstance!.getDocument('json'))).toContain('"type":"video"');
+      expect(editorInstance!.getDocument('markdown')).toContain(
+        '<video src="https://cdn.test/a.mp4" style="width: 50%" controls></video>',
+      );
     });
   });
 
@@ -480,6 +555,58 @@ describe('InternalEditor', () => {
     });
   });
 
+  describe('block image caret guard', () => {
+    it('is not registered by default (document body keeps stock editor behaviour)', async () => {
+      vi.mocked(registerBlockDecoratorCaretGuard).mockClear();
+      let editorInstance: IEditor | undefined;
+
+      render(
+        <MinimalTestWrapper
+          onEditorReady={(e) => {
+            editorInstance = e;
+          }}
+        />,
+      );
+
+      await act(async () => {
+        await moment();
+      });
+      await waitFor(() => {
+        expect(editorInstance).toBeDefined();
+      });
+
+      expect(registerBlockDecoratorCaretGuard).not.toHaveBeenCalled();
+    });
+
+    it('registers the guard for the editor when blockImageCaretGuard is set and unregisters on unmount', async () => {
+      vi.mocked(registerBlockDecoratorCaretGuard).mockClear();
+      const unregister = vi.fn();
+      vi.mocked(registerBlockDecoratorCaretGuard).mockReturnValueOnce(unregister);
+      let editorInstance: IEditor | undefined;
+
+      const { unmount } = render(
+        <MinimalTestWrapper
+          blockImageCaretGuard
+          onEditorReady={(e) => {
+            editorInstance = e;
+          }}
+        />,
+      );
+
+      await act(async () => {
+        await moment();
+      });
+      await waitFor(() => {
+        expect(editorInstance).toBeDefined();
+      });
+
+      expect(registerBlockDecoratorCaretGuard).toHaveBeenCalledWith(editorInstance);
+
+      unmount();
+      expect(unregister).toHaveBeenCalled();
+    });
+  });
+
   describe('lexical editor access', () => {
     it('should expose getLexicalEditor method', async () => {
       let editorInstance: IEditor | undefined;
@@ -723,6 +850,73 @@ describe('InternalEditor', () => {
         },
         { timeout: 2000 },
       );
+    });
+  });
+
+  describe('mention menu', () => {
+    // The package exports the service type but not its id; ids are keyed by name.
+    const SLASH_SERVICE_ID = genServiceId<ISlashService>('SlashService');
+    const member: ISlashMenuOption = { key: 'member-lin', label: 'Lin' };
+    const mentionOptionWith = (items: ISlashMenuOption[]): EditorProps['mentionOption'] => ({
+      items,
+      onSelect: vi.fn(),
+    });
+
+    // Workspace members load asynchronously, so a comment box usually mounts
+    // before they arrive. The kernel only instantiates plugins that registered
+    // before it initialised: the `@` menu must already be live at mount and
+    // pick up the members once they land.
+    it('serves members that arrive after the editor mounted', async () => {
+      let editor: IEditor | undefined;
+      const onEditorReady = (instance: IEditor) => {
+        editor = instance;
+      };
+
+      const { rerender } = render(
+        <TestWrapper
+          floatingToolbar={false}
+          mentionOption={mentionOptionWith([])}
+          onEditorReady={onEditorReady}
+        />,
+      );
+
+      await waitFor(() => expect(editor?.getLexicalEditor?.()).toBeTruthy());
+
+      rerender(
+        <TestWrapper
+          floatingToolbar={false}
+          mentionOption={mentionOptionWith([member])}
+          onEditorReady={onEditorReady}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(editor!.requireService(SLASH_SERVICE_ID)?.getSlashOptions('@')?.items).toEqual([
+          member,
+        ]),
+      );
+    });
+
+    it('keeps the slash menu next to the mention menu', async () => {
+      let editor: IEditor | undefined;
+      const slashItem: ISlashMenuOption = { key: 'h1', label: 'Heading 1' };
+
+      render(
+        <TestWrapper
+          floatingToolbar={false}
+          mentionOption={mentionOptionWith([member])}
+          slashItems={[slashItem]}
+          onEditorReady={(instance) => {
+            editor = instance;
+          }}
+        />,
+      );
+
+      await waitFor(() => expect(editor?.getLexicalEditor?.()).toBeTruthy());
+
+      const service = editor!.requireService(SLASH_SERVICE_ID);
+      expect(service?.getSlashOptions('/')?.items).toEqual([slashItem]);
+      expect(service?.getSlashOptions('@')?.items).toEqual([member]);
     });
   });
 });

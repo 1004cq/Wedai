@@ -1,11 +1,16 @@
 /**
  * @vitest-environment happy-dom
  */
-import { render, screen } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import type { BuiltinInterventionProps } from '@lobechat/types';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import FallbackIntervention from './Fallback';
+import Intervention from './index';
+
+const { submitHeteroIntervention } = vi.hoisted(() => ({
+  submitHeteroIntervention: vi.fn(),
+}));
 
 const metaMap: Record<string, { avatar?: string; title?: string }> = {
   'calculator': { title: 'Calculator' },
@@ -13,22 +18,9 @@ const metaMap: Record<string, { avatar?: string; title?: string }> = {
   'search': { title: 'Web Search' },
 };
 
-vi.mock('@lobehub/ui', () => ({
-  ActionIcon: ({ children, ...props }: { children?: ReactNode; [key: string]: unknown }) => (
-    <button {...props}>{children}</button>
-  ),
-  Avatar: ({ avatar, title }: { avatar?: string; title?: string }) => (
-    <img alt={title} src={avatar} />
-  ),
-  Flexbox: ({ children, ...props }: { children?: ReactNode; [key: string]: unknown }) => (
-    <div {...props}>{children}</div>
-  ),
-  Icon: () => <span>icon</span>,
-}));
-
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, options?: { count?: number; defaultValue?: string }) =>
+    t: (key: string, options?: { count?: number; defaultValue?: string; name?: string }) =>
       (
         ({
           'builtins.lobe-activator.apiName.activateTools': 'Activate Tools',
@@ -38,8 +30,47 @@ vi.mock('react-i18next', () => ({
       )[key] ||
       (key === 'tool.intervention.viewParameters'
         ? `View parameters (${options?.count ?? 0})`
-        : options?.defaultValue || key),
+        : key === 'connector.account.usingAccount'
+          ? `Account: ${options?.name}`
+          : options?.defaultValue || key),
   }),
+}));
+
+vi.mock('@lobechat/builtin-tools/interventions', () => ({
+  getBuiltinIntervention: (identifier?: string, apiName?: string) => {
+    if (identifier === 'gated' && apiName === 'review') {
+      return ({ onApprovalBlockedChange }: BuiltinInterventionProps) => (
+        <>
+          <button type="button" onClick={() => onApprovalBlockedChange?.(true)}>
+            block
+          </button>
+          <button type="button" onClick={() => onApprovalBlockedChange?.(false)}>
+            release
+          </button>
+        </>
+      );
+    }
+    if (identifier !== 'devin' || apiName !== 'askUserQuestion') return;
+
+    return ({ onInteractionAction }: BuiltinInterventionProps) => (
+      <button
+        data-testid="devin-permission-option"
+        type="button"
+        onClick={() =>
+          void onInteractionAction?.({
+            payload: { 'Allow Devin to continue?': 'allow-once' },
+            type: 'submit',
+          })
+        }
+      >
+        Allow once
+      </button>
+    );
+  },
+}));
+
+vi.mock('../../../../../hooks/useConversationResourceAccess', () => ({
+  useConversationResourceAccess: () => ({ canUseResource: true }),
 }));
 
 vi.mock('@/store/tool/selectors', () => ({
@@ -55,6 +86,21 @@ vi.mock('@/store/tool', () => ({
   useToolStore: (selector: (state: unknown) => unknown) => selector({}),
 }));
 
+const accountNames: Record<string, string> = { lnk_work: 'work@acme.com' };
+
+vi.mock('@/store/tool/slices/connector', () => ({
+  connectorSelectors: {
+    // Names resolve only on the connector the call runs on, for the agent that ran it
+    connectorLinkNameForTool: (identifier: string, linkId: string, agentId?: string) => () =>
+      identifier === 'mail' && agentId === 'agt_mail' ? accountNames[linkId] : undefined,
+  },
+}));
+
+vi.mock('@/store/chat', () => ({
+  useChatStore: (selector: (state: unknown) => unknown) =>
+    selector({ runQuestionSubmission: vi.fn() }),
+}));
+
 vi.mock('@/store/user', () => ({
   useUserStore: (selector: (state: unknown) => unknown) => selector({}),
 }));
@@ -66,9 +112,27 @@ vi.mock('@/store/user/selectors', () => ({
 }));
 
 vi.mock('../../../../../store', () => ({
+  dataSelectors: {
+    getDbMessageById: () => () => undefined,
+  },
   useConversationStore: (
-    selector: (state: { updatePluginArguments: ReturnType<typeof vi.fn> }) => unknown,
-  ) => selector({ updatePluginArguments: vi.fn() }),
+    selector: (state: {
+      cancelToolInteraction: ReturnType<typeof vi.fn>;
+      skipToolInteraction: ReturnType<typeof vi.fn>;
+      submitHeteroIntervention: typeof submitHeteroIntervention;
+      submitToolInteraction: ReturnType<typeof vi.fn>;
+      updatePluginArguments: ReturnType<typeof vi.fn>;
+    }) => unknown,
+  ) =>
+    selector({
+      context: { agentId: 'agt_mail' },
+      dbMessages: [],
+      cancelToolInteraction: vi.fn(),
+      skipToolInteraction: vi.fn(),
+      submitHeteroIntervention,
+      submitToolInteraction: vi.fn(),
+      updatePluginArguments: vi.fn(),
+    }),
 }));
 
 vi.mock('../Arguments', () => ({
@@ -76,7 +140,11 @@ vi.mock('../Arguments', () => ({
 }));
 
 vi.mock('./ApprovalActions', () => ({
-  default: () => <div>approval-actions</div>,
+  default: ({ approveDisabled }: { approveDisabled?: boolean }) => (
+    <div data-approve-disabled={String(!!approveDisabled)} data-testid="approval-actions">
+      approval-actions
+    </div>
+  ),
 }));
 
 vi.mock('./KeyValueEditor', () => ({
@@ -118,6 +186,38 @@ describe('FallbackIntervention', () => {
     expect(screen.getByText(reason)).toBeInTheDocument();
   });
 
+  // Parameters start collapsed, so approving a connector call must name the
+  // account it acts as without expanding them.
+  it('names the account a multi-account connector call will use', () => {
+    render(
+      <FallbackIntervention
+        apiName="send_email"
+        assistantGroupId="assistant-group-1"
+        id="message-1"
+        identifier="mail"
+        requestArgs={JSON.stringify({ link_id: 'lnk_work', to: 'a@b.c' })}
+        toolCallId="tool-call-1"
+      />,
+    );
+
+    expect(screen.getByText('Account: work@acme.com')).toBeInTheDocument();
+  });
+
+  it('adds no account line when the id names no known account', () => {
+    render(
+      <FallbackIntervention
+        apiName="send_email"
+        assistantGroupId="assistant-group-1"
+        id="message-1"
+        identifier="mail"
+        requestArgs={JSON.stringify({ link_id: 'lnk_gone' })}
+        toolCallId="tool-call-1"
+      />,
+    );
+
+    expect(screen.queryByText(/^Account:/)).not.toBeInTheDocument();
+  });
+
   it('renders URL avatars as images instead of visible text', () => {
     const iconUrl = 'https://example.com/icon.png';
     metaMap.search.avatar = iconUrl;
@@ -135,5 +235,49 @@ describe('FallbackIntervention', () => {
 
     expect(screen.queryByText(iconUrl)).not.toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'Web Search' })).toHaveAttribute('src', iconUrl);
+  });
+});
+
+describe('heterogeneous custom intervention', () => {
+  it('routes a Devin permission option ID through submitHeteroIntervention', async () => {
+    render(
+      <Intervention
+        apiName="askUserQuestion"
+        id="message-devin-permission"
+        identifier="devin"
+        requestArgs='{"questions":[{"question":"Allow Devin to continue?","options":[{"id":"allow-once","label":"Allow once"}]}]}'
+        toolCallId="devin-permission-1"
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('devin-permission-option'));
+
+    await waitFor(() => {
+      expect(submitHeteroIntervention).toHaveBeenCalledWith('message-devin-permission', 'submit', {
+        'Allow Devin to continue?': 'allow-once',
+      });
+    });
+  });
+});
+
+describe('approval-mode builtin intervention', () => {
+  it('holds the approve action while the intervention blocks approval', () => {
+    render(
+      <Intervention
+        apiName="review"
+        id="message-gated"
+        identifier="gated"
+        requestArgs="{}"
+        toolCallId="gated-1"
+      />,
+    );
+    const actions = screen.getByTestId('approval-actions');
+    expect(actions).toHaveAttribute('data-approve-disabled', 'false');
+
+    fireEvent.click(screen.getByText('block'));
+    expect(actions).toHaveAttribute('data-approve-disabled', 'true');
+
+    fireEvent.click(screen.getByText('release'));
+    expect(actions).toHaveAttribute('data-approve-disabled', 'false');
   });
 });

@@ -6,10 +6,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type WorkspaceDetailContextConfig, WorkspaceDetailProvider } from '../DetailProvider';
 import WorkspaceHeader from './index';
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
-
 vi.mock('./Banner', () => ({
   default: () => <div data-testid="workspace-banner" />,
 }));
@@ -104,6 +100,10 @@ describe('WorkspaceHeader', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'user.openWorkspacePublicProfile' }));
 
-    expect(open).toHaveBeenCalledWith('/community/org/acme-labs', '_blank', 'noopener,noreferrer');
+    expect(open).toHaveBeenCalledWith(
+      '/marketplace/org/acme-labs',
+      '_blank',
+      'noopener,noreferrer',
+    );
   });
 });
