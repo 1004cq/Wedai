@@ -23,6 +23,7 @@ export * from './apiKey';
 export * from './artboard';
 export * from './asyncTask';
 export * from './betterAuth';
+export * from './billing';
 export * from './channel';
 export * from './chatGroup';
 export * from './connector';
