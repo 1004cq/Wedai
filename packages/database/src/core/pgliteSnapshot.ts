@@ -1,12 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 
 import { PGlite } from '@electric-sql/pglite';
 import { vector } from '@electric-sql/pglite/vector';
 import { drizzle as pgliteDrizzle } from 'drizzle-orm/pglite';
 
-import { migratePGlite } from './pgliteMigrate';
+import { migratePGlite, migrationsFolder } from './pgliteMigrate';
 
 /**
  * Env var holding the path of a fully migrated PGlite data dir dump.
@@ -19,7 +18,7 @@ import { migratePGlite } from './pgliteMigrate';
  */
 export const PGLITE_SNAPSHOT_ENV = 'LOBE_TEST_PGLITE_SNAPSHOT';
 
-export const migrationsFolder = join(__dirname, '../../migrations');
+export { migrationsFolder };
 
 export const createPGlite = (loadDataDir?: Blob) =>
   new PGlite({ extensions: { vector }, loadDataDir });

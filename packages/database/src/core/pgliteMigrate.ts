@@ -1,9 +1,12 @@
+import { join } from 'node:path';
+
+import type { PGlite } from '@electric-sql/pglite';
 import { sql } from 'drizzle-orm';
 import { readMigrationFiles } from 'drizzle-orm/migrator';
 import type { PgliteDatabase } from 'drizzle-orm/pglite';
-import type { PGlite } from '@electric-sql/pglite';
 
-import { migrationsFolder } from './pgliteSnapshot';
+/** Shared with snapshot/getTestDB — kept here to avoid a circular import. */
+export const migrationsFolder = join(__dirname, '../../migrations');
 
 /**
  * Apply drizzle migrations on PGlite.
