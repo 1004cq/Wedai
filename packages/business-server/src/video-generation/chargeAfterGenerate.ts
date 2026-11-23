@@ -2,6 +2,7 @@
  * chargeAfterGenerate (video) — settle or release video generation credits.
  */
 import { BillingCommandService } from '@lobechat/billing';
+import type { VideoGenerationRoute } from '@lobechat/types';
 
 import { getServerDB } from '@/database/core/db-adaptor';
 
@@ -18,6 +19,8 @@ interface ChargeParams {
   model: string;
   prechargeResult?: Record<string, unknown>;
   provider: string;
+  /** Provider route used for the generation (optional attribution). */
+  route?: VideoGenerationRoute;
   usage?: { completionTokens: number; totalTokens: number };
   userId: string;
   workspaceId?: string;

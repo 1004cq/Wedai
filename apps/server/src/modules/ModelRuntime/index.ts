@@ -580,7 +580,7 @@ export const initModelRuntimeFromDB = async (
   const platformCredentials = await resolvePlatformLlmCredentials(db, provider);
   if (platformCredentials) {
     keyVaults = mergePlatformCredentialsIntoKeyVaults(
-      keyVaults,
+      keyVaults as Record<string, unknown>,
       platformCredentials,
     ) as ProviderKeyVaults;
   }

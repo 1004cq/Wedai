@@ -2,6 +2,7 @@ import agent from './agent';
 import agentGroup from './agentGroup';
 import auth from './auth';
 import authError from './authError';
+import billing from './billing';
 import changelog from './changelog';
 import channel from './channel';
 import chat from './chat';
@@ -62,6 +63,7 @@ const resources = {
   agentGroup,
   auth,
   authError,
+  billing,
   changelog,
   chat,
   channel,

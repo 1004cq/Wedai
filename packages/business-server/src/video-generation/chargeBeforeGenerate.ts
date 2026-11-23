@@ -8,6 +8,7 @@
  */
 import { BillingCommandService } from '@lobechat/billing';
 import { BillingAccountModel } from '@lobechat/database';
+import type { SpendOrigin } from '@lobechat/types';
 import { and, eq, isNull } from 'drizzle-orm';
 
 import { getServerDB } from '@/database/core/db-adaptor';
@@ -23,7 +24,7 @@ interface ChargeParams {
   /** Provider-side generation params used for pricing / audit (optional). */
   providerParams?: Record<string, unknown>;
   /** Spend origin from the request context (optional). */
-  spendOrigin?: string;
+  spendOrigin?: SpendOrigin;
   userId: string;
   workspaceId?: string;
 }

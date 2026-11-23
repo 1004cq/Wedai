@@ -96,14 +96,20 @@ describe('public response field projections', () => {
       id: 'user-1',
       normalizedEmail: 'user@example.com',
       onboarding: { finishedAt: 'secret-state' },
+      phoneNumber: '+15551234567',
       preference: { telemetry: true },
       updatedAt: new Date(),
     } as unknown as UserItem);
 
-    expect(projected).toMatchObject({ email: 'user@example.com', id: 'user-1' });
+    expect(projected).toMatchObject({
+      email: 'user@example.com',
+      id: 'user-1',
+      phone: '+15551234567',
+    });
     expect(projected).not.toHaveProperty('banReason');
     expect(projected).not.toHaveProperty('normalizedEmail');
     expect(projected).not.toHaveProperty('onboarding');
+    expect(projected).not.toHaveProperty('phoneNumber');
     expect(projected).not.toHaveProperty('preference');
   });
 

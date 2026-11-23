@@ -171,9 +171,9 @@ function estimatePromptTokens(data: ChatStreamPayload): number {
       charCount += msg.content.length;
     } else if (Array.isArray(msg.content)) {
       for (const part of msg.content) {
-        if (typeof part === 'string') charCount += part.length;
-        else if (part && typeof part === 'object' && 'text' in part)
-          charCount += (part.text as string)?.length ?? 0;
+        if (part && typeof part === 'object' && 'text' in part && typeof part.text === 'string') {
+          charCount += part.text.length;
+        }
       }
     }
   }

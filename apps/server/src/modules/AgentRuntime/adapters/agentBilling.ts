@@ -34,7 +34,11 @@
  */
 import debug from 'debug';
 
-import { chargeAfterChat, chargeBeforeChat, InsufficientBalanceError } from '@/business/server/chat-billing';
+import {
+  chargeAfterChat,
+  chargeBeforeChat,
+  InsufficientBalanceError,
+} from '@/business/server/chat-billing';
 import { initModelRuntimeFromDB } from '@/server/modules/ModelRuntime';
 
 import type { RuntimeExecutorContext } from '../context';
@@ -68,7 +72,12 @@ export function agentRequestId(ctx: RuntimeExecutorContext, attempt = 0): string
  * @param call  The actual LLM call to execute.
  * @returns The result of the call.
  */
-export async function withAgentBilling<T extends { usage?: { inputTextTokens?: number; outputTextTokens?: number; totalTokens?: number } | undefined }>(
+export async function withAgentBilling<
+  T extends {
+    usage?:
+      { inputTextTokens?: number; outputTextTokens?: number; totalTokens?: number } | undefined;
+  },
+>(
   ctx: RuntimeExecutorContext,
   provider: string,
   model: string,
@@ -84,11 +93,22 @@ export async function withAgentBilling<T extends { usage?: { inputTextTokens?: n
 
   const requestId = agentRequestId(ctx, attempt);
 
-  // Detect BYOK: if the model runtime has a user-supplied baseURL the user pays the provider directly.
+  // Detect BYOK: prefer a user-supplied endpoint/key so the user pays the provider directly.
+  // ModelRuntime no longer exposes `baseURL` publicly — inspect the underlying runtime.
   let userHasProviderKey = false;
   try {
-    const modelRuntime = await initModelRuntimeFromDB(ctx.serverDB, ctx.userId, provider, ctx.workspaceId);
-    userHasProviderKey = modelRuntime.baseURL !== undefined;
+    const modelRuntime = await initModelRuntimeFromDB(
+      ctx.serverDB,
+      ctx.userId,
+      provider,
+      ctx.workspaceId,
+    );
+    const runtimeWithBase = modelRuntime as unknown as {
+      _runtime?: { baseURL?: string };
+      baseURL?: string;
+    };
+    userHasProviderKey =
+      runtimeWithBase.baseURL !== undefined || runtimeWithBase._runtime?.baseURL !== undefined;
   } catch {
     // Can't detect key — default to platform billing.
   }
@@ -107,10 +127,23 @@ export async function withAgentBilling<T extends { usage?: { inputTextTokens?: n
     });
   } catch (err) {
     if (err instanceof InsufficientBalanceError) {
-      log('insufficient_balance %O', { attempt, model, outcome: '402', provider, stepIndex: ctx.stepIndex });
+      log('insufficient_balance %O', {
+        attempt,
+        model,
+        outcome: '402',
+        provider,
+        stepIndex: ctx.stepIndex,
+      });
       throw err; // surface to agent — step fails cleanly
     }
-    log('hold_error %O', { attempt, err: (err as Error).message, model, outcome: 'error', provider, stepIndex: ctx.stepIndex });
+    log('hold_error %O', {
+      attempt,
+      err: (err as Error).message,
+      model,
+      outcome: 'error',
+      provider,
+      stepIndex: ctx.stepIndex,
+    });
     if (isStrict()) throw err;
     // Fail-open: proceed without billing.
     return call();

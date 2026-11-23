@@ -70,6 +70,7 @@
   "packages/shared-tool-ui/src/styles.ts",
   "src/business/client/BusinessSettingPages/Plans.tsx",
   "src/business/client/BusinessSettingPages/billingPageStyles.ts",
+  "src/components/BrandSplash/index.tsx",
   "src/features/AgentBreadcrumb/index.tsx",
   "src/features/AgentBuilder/TopicSelector.tsx",
   "src/features/AgentChannel/PlatformCard.tsx",

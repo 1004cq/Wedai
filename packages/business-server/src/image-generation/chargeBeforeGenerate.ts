@@ -18,6 +18,7 @@
  */
 import { BillingCommandService } from '@lobechat/billing';
 import { BillingAccountModel } from '@lobechat/database';
+import type { SpendOrigin } from '@lobechat/types';
 import { and, eq, isNull } from 'drizzle-orm';
 
 import { getServerDB } from '@/database/core/db-adaptor';
@@ -35,7 +36,7 @@ interface ChargeParams {
   imageNum: number;
   model: string;
   provider: string;
-  spendOrigin?: string;
+  spendOrigin?: SpendOrigin;
   userId: string;
   workspaceId?: string;
 }

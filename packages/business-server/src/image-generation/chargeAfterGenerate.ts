@@ -6,7 +6,8 @@
  * either settles (success) or releases (error) the hold.
  */
 import { BillingCommandService } from '@lobechat/billing';
-import { type ModelPricingContext } from '@lobechat/model-runtime';
+import { type ModelPricingContext, type RouteAttemptIdentity } from '@lobechat/model-runtime';
+import type { SpendOrigin } from '@lobechat/types';
 
 import { getServerDB } from '@/database/core/db-adaptor';
 import { type ModelPerformance, type ModelUsage } from '@/types/index';
@@ -31,7 +32,9 @@ interface ChargeParams {
   prechargeResult?: unknown;
   pricingContext?: ModelPricingContext;
   provider: string;
-  spendOrigin?: string;
+  /** Router attempt identity for spend attribution (optional). */
+  routeAttempt?: RouteAttemptIdentity;
+  spendOrigin?: SpendOrigin;
   userId: string;
   workspaceId?: string;
 }

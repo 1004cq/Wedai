@@ -71,8 +71,8 @@ const Plans: FC = () => {
     return { kind: 'idle' };
   });
 
-  const [creatingPriceId, setCreatingPriceId] = useState<string>();
-  const pollTimerRef = useRef<ReturnType<typeof setInterval>>();
+  const [creatingPriceId, setCreatingPriceId] = useState<string | undefined>(undefined);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const pollStartRef = useRef<number>(0);
 
   const {

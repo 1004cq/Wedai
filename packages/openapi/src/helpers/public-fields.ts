@@ -50,6 +50,11 @@ export const PUBLIC_AGENT_FIELDS = [
   'updatedAt',
 ] as const satisfies readonly (keyof AgentItem)[];
 
+/**
+ * Stable public user projection fields.
+ * Note: Better Auth maps the DB `phone` column to `phoneNumber` on UserItem;
+ * the public API still exposes it as `phone` via `projectPublicUser`.
+ */
 export const PUBLIC_USER_FIELDS = [
   'avatar',
   'createdAt',
@@ -59,7 +64,6 @@ export const PUBLIC_USER_FIELDS = [
   'id',
   'isOnboarded',
   'lastName',
-  'phone',
   'updatedAt',
   'username',
 ] as const satisfies readonly (keyof UserItem)[];
@@ -302,7 +306,10 @@ export type PublicAgent = Pick<AgentItem, (typeof PUBLIC_AGENT_FIELDS)[number]> 
   personal: boolean;
   plugins: ReturnType<typeof parsePluginEntry>[];
 };
-export type PublicUser = Pick<UserItem, (typeof PUBLIC_USER_FIELDS)[number]>;
+export type PublicUser = Pick<UserItem, (typeof PUBLIC_USER_FIELDS)[number]> & {
+  /** Public phone; sourced from UserItem.phoneNumber (Better Auth column map). */
+  phone: string | null;
+};
 export type PublicProvider = Pick<AiProviderSelectItem, (typeof PUBLIC_PROVIDER_FIELDS)[number]>;
 export type PublicModel = Pick<AiModelSelectItem, (typeof PUBLIC_MODEL_FIELDS)[number]>;
 export type PublicFile = Pick<FileItem, (typeof PUBLIC_FILE_FIELDS)[number]>;
@@ -344,8 +351,10 @@ export const projectPublicAgent = (value: AgentItem): PublicAgent => ({
   plugins: (value.plugins ?? []).map(parsePluginEntry),
 });
 
-export const projectPublicUser = (value: UserItem): PublicUser =>
-  pickPublicFields(value, PUBLIC_USER_FIELDS);
+export const projectPublicUser = (value: UserItem): PublicUser => ({
+  ...pickPublicFields(value, PUBLIC_USER_FIELDS),
+  phone: value.phoneNumber ?? null,
+});
 
 export const projectPublicProvider = (value: AiProviderSelectItem): PublicProvider =>
   pickPublicFields(value, PUBLIC_PROVIDER_FIELDS);
