@@ -1,3 +1,4 @@
+import { DEFAULT_INBOX_TITLE } from '@lobechat/const';
 import type { TaskDetailData } from '@lobechat/types';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -26,7 +27,7 @@ describe('buildViewedTaskPrompt', () => {
     const prompt = buildViewedTaskPrompt(detailContext);
 
     expect(prompt).toContain('The user is currently viewing the detail page of task T-858');
-    expect(prompt).toContain('Default Lobe AI agent id: agt_inbox');
+    expect(prompt).toContain(`Default ${DEFAULT_INBOX_TITLE} agent id: agt_inbox`);
   });
 
   it('returns undefined before the viewed task loads or outside Tasks', () => {

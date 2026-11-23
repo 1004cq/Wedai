@@ -1,3 +1,4 @@
+import { BRANDING_NAME } from '@lobechat/business-const';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -38,7 +39,7 @@ describe('tracking comment', () => {
       updatedAt: new Date('2026-09-20T15:12:00Z'),
     });
 
-    expect(body).toContain('**LobeHub is tracking this pull request.**');
+    expect(body).toContain(`**${BRANDING_NAME} is tracking this pull request.**`);
     expect(body).toContain(
       '| Acceptance | Status | Conversation | Notifications | Updated (UTC) |',
     );

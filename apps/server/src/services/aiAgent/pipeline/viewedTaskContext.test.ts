@@ -1,3 +1,4 @@
+import { DEFAULT_INBOX_TITLE } from '@lobechat/const';
 import type { TaskDetailData } from '@lobechat/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -44,7 +45,7 @@ describe('buildViewedTaskContextPrompt', () => {
       'T-858',
     );
     expect(getTaskDetail).not.toHaveBeenCalled();
-    expect(prompt).toContain('Default Lobe AI agent id: agt_inbox');
+    expect(prompt).toContain(`Default ${DEFAULT_INBOX_TITLE} agent id: agt_inbox`);
   });
 
   it('describes the task viewed on a task detail page', async () => {
@@ -57,7 +58,7 @@ describe('buildViewedTaskContextPrompt', () => {
     expect(getTaskDetail).toHaveBeenCalledWith('task-row-1');
     expect(prompt).toContain('The user is currently viewing the detail page of task T-858');
     expect(prompt).toContain('Make images in the task content draggable');
-    expect(prompt).toContain('Default Lobe AI agent id: agt_inbox');
+    expect(prompt).toContain(`Default ${DEFAULT_INBOX_TITLE} agent id: agt_inbox`);
   });
 
   it('keeps only the assignee defaults on the task list', async () => {
@@ -68,7 +69,7 @@ describe('buildViewedTaskContextPrompt', () => {
     );
 
     expect(getTaskDetail).not.toHaveBeenCalled();
-    expect(prompt).toContain('Default Lobe AI agent id: agt_inbox');
+    expect(prompt).toContain(`Default ${DEFAULT_INBOX_TITLE} agent id: agt_inbox`);
     expect(prompt).not.toContain('<task>');
   });
 
@@ -81,7 +82,7 @@ describe('buildViewedTaskContextPrompt', () => {
       'task-row-1',
     );
 
-    expect(prompt).toContain('Default Lobe AI agent id: agt_inbox');
+    expect(prompt).toContain(`Default ${DEFAULT_INBOX_TITLE} agent id: agt_inbox`);
     expect(prompt).not.toContain('T-858');
   });
 

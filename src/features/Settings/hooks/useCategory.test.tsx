@@ -58,7 +58,7 @@ afterEach(() => {
 });
 
 describe('settings useCategory', () => {
-  it('orders business groups with account, connection and resource contents', () => {
+  it('orders Wedai commercial groups with subscription under general', () => {
     const { result } = renderHook(() => useCategory(), {
       wrapper: createWrapper(true, true),
     });
@@ -67,40 +67,38 @@ describe('settings useCategory', () => {
       result.current.find((group) => group.key === key)?.items.map((item) => item.key);
 
     expect(result.current.map((group) => group.key)).toEqual([
-      SettingsGroupKey.Account,
+      SettingsGroupKey.General,
       SettingsGroupKey.Subscription,
       SettingsGroupKey.Agent,
-      SettingsGroupKey.Resource,
       SettingsGroupKey.System,
+      SettingsGroupKey.Developer,
     ]);
 
-    expect(groupKeys(SettingsGroupKey.Account)).toEqual([
+    expect(groupKeys(SettingsGroupKey.General)).toEqual([
       SettingsTabs.Profile,
+      SettingsTabs.Stats,
       SettingsTabs.Appearance,
-      SettingsTabs.Conversation,
+      SettingsTabs.Devices,
       SettingsTabs.Hotkey,
       SettingsTabs.Notification,
-      SettingsTabs.Stats,
     ]);
 
-    expect(groupKeys(SettingsGroupKey.Connection)).toBeUndefined();
-    expect(getItemKeys()).not.toContain(SettingsTabs.Skill);
-    expect(getItemKeys()).not.toContain(SettingsTabs.Connector);
+    expect(groupKeys(SettingsGroupKey.Subscription)).toEqual([
+      SettingsTabs.Plans,
+      SettingsTabs.Usage,
+      SettingsTabs.Credits,
+      SettingsTabs.Billing,
+    ]);
 
-    // The sandbox drives moved to Docs → Sandbox Storage; settings keep only the
-    // environment definitions.
-    const keys = groupKeys(SettingsGroupKey.Resource);
-    expect(keys).toContain(SettingsTabs.Environments);
-    // Credentials share the Environments page: one entry for what a run starts
-    // from and the secrets it reads.
-    expect(keys).not.toContain(SettingsTabs.Creds);
-    expect(keys).not.toContain('drive');
+    const agentKeys = groupKeys(SettingsGroupKey.Agent);
+    expect(agentKeys).toContain(SettingsTabs.Skill);
+    expect(agentKeys).toContain(SettingsTabs.Connector);
+    expect(agentKeys).toContain(SettingsTabs.Messenger);
   });
 
-  it('keeps Provider and hides Messenger and OAuth Apps by default', () => {
+  it('keeps Provider and hides OAuth Apps by default', () => {
     const keys = getItemKeys();
 
-    expect(keys).not.toContain('messenger');
     expect(keys).toContain(SettingsTabs.Provider);
     expect(keys).not.toContain(SettingsTabs.OAuthApps);
   });
@@ -135,39 +133,21 @@ describe('settings useCategory', () => {
     expect(renderWithApiKeyFlag(true).filter((key) => key === SettingsTabs.APIKey)).toHaveLength(1);
   });
 
-  // The retired Advanced Tools switch used to reveal API Key past the
-  // deployment flag; a value still stored for it must not.
-  it('hides API Key when the deployment disables it, even with the retired switch stored', () => {
+  // Wedai also surfaces API Key under Developer when isDevMode is on.
+  it('lists API Key in Developer when isDevMode is on even if the flag is off', () => {
     useUserStore.setState({
       settings: { general: { isDevMode: true } },
     } as unknown as Parameters<typeof useUserStore.setState>[0]);
 
-    expect(renderWithApiKeyFlag(false)).not.toContain(SettingsTabs.APIKey);
+    expect(renderWithApiKeyFlag(false)).toContain(SettingsTabs.APIKey);
   });
 
-  // With Advanced Tools gone, gateway mode is all Advanced holds on the web.
-  it('lists Advanced on the web only when gateway mode is available', () => {
-    const keysWithGateway = (enableGatewayMode: boolean) =>
-      renderHook(() => useCategory(), {
-        wrapper: ({ children }: { children: ReactNode }) => (
-          <Provider
-            createStore={() =>
-              initServerConfigStore({
-                featureFlags: mapFeatureFlagsEnvToState({}),
-                serverConfig: { aiProvider: {}, enableGatewayMode, telemetry: {} },
-              })
-            }
-          >
-            {children}
-          </Provider>
-        ),
-      }).result.current.flatMap((group) => group.items.map((item) => item.key));
-
-    expect(keysWithGateway(false)).not.toContain(SettingsTabs.Advanced);
-    expect(keysWithGateway(true)).toContain(SettingsTabs.Advanced);
+  it('always lists Advanced under Developer on Wedai', () => {
+    const keys = getItemKeys();
+    expect(keys).toContain(SettingsTabs.Advanced);
   });
 
-  it('shows OAuth Apps when the Labs preference is enabled', () => {
+  it('shows OAuth Apps in Developer when the Labs preference is enabled', () => {
     useUserStore.setState({
       preference: {
         ...initialUserStoreState.preference,
@@ -178,43 +158,8 @@ describe('settings useCategory', () => {
     const { result } = renderHook(() => useCategory(), {
       wrapper: createWrapper(true),
     });
-    const systemGroup = result.current.find((group) => group.key === SettingsGroupKey.System);
+    const developerGroup = result.current.find((group) => group.key === SettingsGroupKey.Developer);
 
-    expect(systemGroup?.items.map((item) => item.key)).toContain(SettingsTabs.OAuthApps);
-  });
-});
-
-describe('settings useCategory automations', () => {
-  const connectionKeys = (enableWebhook: boolean) => {
-    const Wrapper = ({ children }: { children: ReactNode }) => (
-      <Provider
-        createStore={() =>
-          initServerConfigStore({
-            featureFlags: { ...mapFeatureFlagsEnvToState({}), enableWebhook },
-            serverConfig: { aiProvider: {}, telemetry: {} },
-          })
-        }
-      >
-        {children}
-      </Provider>
-    );
-    const { result } = renderHook(() => useCategory(), { wrapper: Wrapper });
-
-    return result.current
-      .find((group) => group.key === SettingsGroupKey.Connection)
-      ?.items.map((item) => item.key);
-  };
-
-  // Unreleased: the tab follows the `webhook` flag (LOBE-UX-015).
-  it('hides Automations while MCP Events is off', () => {
-    expect(connectionKeys(false) ?? []).not.toContain(SettingsTabs.Automations);
-  });
-
-  it('keeps Automations and Webhooks now that connectors live in the Marketplace', () => {
-    const keys = connectionKeys(true) ?? [];
-
-    expect(keys).not.toContain(SettingsTabs.Connector);
-    expect(keys).not.toContain('integrations');
-    expect(keys.indexOf(SettingsTabs.Webhooks)).toBe(keys.indexOf(SettingsTabs.Automations) + 1);
+    expect(developerGroup?.items.map((item) => item.key)).toContain(SettingsTabs.OAuthApps);
   });
 });

@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { executeToolWithRetry } from '@lobechat/agent-runtime';
 import { CloudSandboxExecutionRuntime } from '@lobechat/builtin-tool-cloud-sandbox/executionRuntime';
+import { BRANDING_NAME } from '@lobechat/business-const';
 import { SdkErrorCode, SdkHttpError } from '@modelcontextprotocol/client';
 import { TRPCError } from '@trpc/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -985,7 +986,9 @@ describe('ToolExecutionService', () => {
       expect(callTool).not.toHaveBeenCalled();
       expect(result.success).toBe(false);
       expect((result.error as any)?.code).toBe('MCP_DEVICE_UNAVAILABLE');
-      expect(result.content).toContain('Open the LobeHub desktop app or run `lh connect`');
+      expect(result.content).toContain(
+        `Open the ${BRANDING_NAME} desktop app or run \`lh connect\``,
+      );
     });
 
     it('fails closed when no serverDB is available to apply device visibility', async () => {

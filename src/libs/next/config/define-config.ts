@@ -17,6 +17,13 @@ interface CustomNextConfig {
   turbopack?: NextConfig['turbopack'];
 }
 
+/**
+ * The file-parse worker is started by absolute path at runtime, which no tracer can follow, so the
+ * built artifact (`bun run build:file-parse-worker`) is listed explicitly. Standalone and Vercel
+ * output must both carry it; a deployment without it fails closed instead of parsing in-process.
+ */
+const FILE_PARSE_WORKER_TRACE = 'dist/file-parse-worker/**/*';
+
 export function defineConfig(config: CustomNextConfig) {
   const isProd = process.env.NODE_ENV === 'production';
   const buildWithDocker = process.env.DOCKER === 'true';
@@ -35,6 +42,7 @@ export function defineConfig(config: CustomNextConfig) {
       '*': [
         'public/**/*',
         '.next/static/**/*',
+        FILE_PARSE_WORKER_TRACE,
 
         // Only needed for Docker standalone builds.
         // On Vercel (serverless), including native bindings can easily exceed function size limits.
@@ -59,13 +67,28 @@ export function defineConfig(config: CustomNextConfig) {
     },
   };
 
-  const assetPrefix = process.env.NEXT_PUBLIC_ASSET_PREFIX;
+  const assetPrefix = (process.env.ASSET_BASE_URL || process.env.NEXT_PUBLIC_ASSET_PREFIX)?.replace(
+    /\/+$/,
+    '',
+  );
+
+  const requiredTracingIncludes = isStandaloneMode
+    ? standaloneConfig.outputFileTracingIncludes!['*']
+    : [FILE_PARSE_WORKER_TRACE];
 
   const nextConfig: NextConfig = {
     ...(isStandaloneMode ? standaloneConfig : {}),
+    outputFileTracingIncludes: {
+      ...config.outputFileTracingIncludes,
+      // Deployment-specific assets must not replace the worker or standalone runtime files.
+      '*': [...requiredTracingIncludes, ...(config.outputFileTracingIncludes?.['*'] ?? [])],
+    },
     // Stop `next dev` from auto-injecting the nextjs-agent-rules block into AGENTS.md.
     agentRules: false,
     assetPrefix,
+    // Gated, not unconditional: an asset host that omits Access-Control-Allow-Origin
+    // turns every tag into one the browser refuses to execute. Same-origin needs no opt-in.
+    crossOrigin: assetPrefix ? 'anonymous' : undefined,
 
     compiler: {
       emotion: true,
@@ -89,30 +112,36 @@ export function defineConfig(config: CustomNextConfig) {
       ...config.experimental,
     },
     async headers() {
-      const securityHeaders = [
-        {
-          key: 'x-robots-tag',
-          value: 'all',
-        },
-      ];
-
-      if (shouldUseCSP) {
-        securityHeaders.push(
-          {
-            key: 'X-Frame-Options',
-            value: 'DENY',
-          },
-          {
-            key: 'Content-Security-Policy',
-            value: "frame-ancestors 'none';",
-          },
-        );
-      }
+      // Artboard board pages are framed by the app itself; their route sends its own sandbox CSP.
+      const frameDenyHeaders = shouldUseCSP
+        ? [
+            {
+              key: 'X-Frame-Options',
+              value: 'DENY',
+            },
+            {
+              key: 'Content-Security-Policy',
+              value: "frame-ancestors 'none';",
+            },
+          ]
+        : [];
 
       return [
         {
-          headers: securityHeaders,
+          headers: [{ key: 'x-robots-tag', value: 'all' }],
           source: '/:path*',
+        },
+        ...(frameDenyHeaders.length
+          ? [{ headers: frameDenyHeaders, source: '/((?!artboard-files/).*)' }]
+          : []),
+        // Agent Share visitor pages live under `/agent/:slugOrId` and are
+        // reachable by anyone holding the link. Keep them out of search
+        // indexes (privacy) — the SPA shell is static per variant, so a
+        // per-route `<meta name="robots">` is not an option; the header is.
+        // Listed after the global rule so it overrides `x-robots-tag: all`.
+        {
+          headers: [{ key: 'x-robots-tag', value: 'noindex, nofollow' }],
+          source: '/agent/:path*',
         },
         {
           headers: [
@@ -121,7 +150,7 @@ export function defineConfig(config: CustomNextConfig) {
               value: 'public, max-age=31536000, immutable',
             },
           ],
-          source: '/icons/(.*).(png|jpe?g|gif|svg|ico|webp)',
+          source: '/app-icons/(.*).(png|jpe?g|gif|svg|ico|webp)',
         },
         {
           headers: [
@@ -138,7 +167,7 @@ export function defineConfig(config: CustomNextConfig) {
               value: 'public, max-age=31536000, immutable',
             },
           ],
-          source: '/images/(.*).(png|jpe?g|gif|svg|ico|webp)',
+          source: '/static/app-images/(.*).(png|jpe?g|gif|svg|ico|webp)',
         },
         {
           headers: [
@@ -257,6 +286,10 @@ export function defineConfig(config: CustomNextConfig) {
           ],
           source: '/.well-known/assetlinks.json',
         },
+        {
+          source: '/.well-known/mcp-webhook-receiver.json',
+          headers: [{ key: 'Content-Type', value: 'application/json' }],
+        },
         ...(config.headers ?? []),
       ];
     },
@@ -269,10 +302,11 @@ export function defineConfig(config: CustomNextConfig) {
     ...(config.outputFileTracingExcludes && {
       outputFileTracingExcludes: config.outputFileTracingExcludes,
     }),
-    ...(config.outputFileTracingIncludes && {
-      outputFileTracingIncludes: config.outputFileTracingIncludes,
-    }),
     reactStrictMode: true,
+    // Old clients keep their image URLs; App routes take precedence over this fallback.
+    rewrites: async () => ({
+      fallback: [{ destination: '/static/app-images/:path*', source: '/app-images/:path*' }],
+    }),
     redirects: async () => [
       // Sitemap generation lives on the landing site; keep legacy app sitemap URLs crawlable.
       {
@@ -300,34 +334,46 @@ export function defineConfig(config: CustomNextConfig) {
         permanent: true,
         source: '/manifest.json',
       },
+      // The Community page became the Marketplace (`/community` → `/marketplace`).
+      // Old plural aliases point straight at the final page to avoid a second hop.
       {
-        destination: '/community/agent',
+        destination: '/marketplace/agent',
         permanent: true,
         source: '/community/assistants',
       },
       {
-        destination: '/community/plugin',
+        destination: '/marketplace/mcp',
         permanent: true,
         source: '/community/plugins',
       },
       {
-        destination: '/community/model',
+        destination: '/marketplace/model',
         permanent: true,
         source: '/community/models',
       },
       {
-        destination: '/community/provider',
+        destination: '/marketplace/provider',
         permanent: true,
         source: '/community/providers',
       },
-      // Legacy redirects from /discover to /community
       {
-        destination: '/community',
+        destination: '/marketplace',
+        permanent: true,
+        source: '/community',
+      },
+      {
+        destination: '/marketplace/:path*',
+        permanent: true,
+        source: '/community/:path*',
+      },
+      // Legacy redirects from /discover
+      {
+        destination: '/marketplace',
         permanent: true,
         source: '/discover',
       },
       {
-        destination: '/community/:path*',
+        destination: '/marketplace/:path*',
         permanent: true,
         source: '/discover/:path*',
       },
@@ -356,12 +402,11 @@ export function defineConfig(config: CustomNextConfig) {
       ...(config.redirects ?? []),
     ],
     // when external packages in dev mode with turbopack, this config will lead to bundle error
-    // @napi-rs/canvas is a native module that can't be bundled by Turbopack
-    // pdfjs-dist uses @napi-rs/canvas for DOMMatrix polyfill in Node.js environment
     serverExternalPackages: config.serverExternalPackages ?? [
       'pdfkit',
-      '@napi-rs/canvas',
       '@lobehub/editor',
+      // Must share one instance with @lobehub/editor's own Yjs binding.
+      'yjs',
       'discord.js',
       'ffmpeg-static',
       'pdfjs-dist',

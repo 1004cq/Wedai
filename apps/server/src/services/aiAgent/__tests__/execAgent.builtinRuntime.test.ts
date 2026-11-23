@@ -1,7 +1,7 @@
 import { GeneralChatAgent, GraphAgent } from '@lobechat/agent-runtime';
 import { PageAgentIdentifier } from '@lobechat/builtin-tool-page-agent';
 import { SELF_FEEDBACK_INTENT_IDENTIFIER } from '@lobechat/builtin-tool-self-iteration';
-import { promptAssistantName } from '@lobechat/const';
+import { DEFAULT_INBOX_TITLE, promptAssistantName } from '@lobechat/const';
 import { RequestTrigger } from '@lobechat/types';
 import type * as ModelBankModule from 'model-bank';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -878,7 +878,7 @@ describe('AiAgentService.execAgent - builtin agent runtime config', () => {
       topicId: 'topic-1',
     });
     expect(callArgs.initialContext.initialContext.taskManager.contextPrompt).toContain(
-      'Default Lobe AI agent id: agt_inbox',
+      `Default ${DEFAULT_INBOX_TITLE} agent id: agt_inbox`,
     );
   });
 

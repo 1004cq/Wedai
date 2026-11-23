@@ -1,3 +1,4 @@
+import { BRANDING_NAME } from '@lobechat/business-const';
 // @vitest-environment node
 import type { LobeChatDatabase } from '@lobechat/database';
 import { asyncTasks, users } from '@lobechat/database/schemas';
@@ -177,7 +178,9 @@ describe('DataExportService', () => {
     const result = await service.getDownloadUrl(pendingId);
 
     expect(result.url).toBe('https://s3/signed');
-    expect(result.fileName).toMatch(/^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}_LobeHub-data\.json$/);
+    expect(result.fileName).toMatch(
+      new RegExp(`^\\d{4}-\\d{2}-\\d{2}-\\d{2}-\\d{2}_${BRANDING_NAME}-data\\.json$`),
+    );
     expect(mocks.createDownloadUrl).toHaveBeenCalledWith(
       `exports/${userId}/${pendingId}.json`,
       result.fileName,

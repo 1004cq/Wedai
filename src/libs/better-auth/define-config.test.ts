@@ -56,6 +56,7 @@ vi.mock('better-auth/plugins', () => ({
   emailOTP: vi.fn(() => ({ id: 'email-otp' })),
   genericOAuth: vi.fn(() => ({ id: 'generic-oauth' })),
   magicLink: vi.fn(() => ({ id: 'magic-link' })),
+  phoneNumber: vi.fn(() => ({ id: 'phone-number' })),
 }));
 
 vi.mock('undici', () => ({
@@ -85,6 +86,15 @@ vi.mock('@/libs/better-auth/email-templates', () => ({
   getVerificationOTPEmailTemplate: vi.fn(() => ({})),
 }));
 
+vi.mock('@/libs/better-auth/plugins/change-email-uniqueness', () => ({
+  changeEmailUniqueness: vi.fn(() => ({ id: 'change-email-uniqueness' })),
+}));
+vi.mock('@/libs/better-auth/plugins/deferred-session-refresh', () => ({
+  deferredSessionRefresh: vi.fn(() => ({ id: 'deferred-session-refresh' })),
+}));
+vi.mock('@/libs/better-auth/session-options', () => ({
+  sessionOptions: { cookieCache: { enabled: true, maxAge: 120 }, storeSessionInDatabase: true },
+}));
 vi.mock('@/libs/better-auth/plugins/email-whitelist', () => ({
   emailWhitelist: vi.fn(() => ({ id: 'email-whitelist' })),
 }));
@@ -112,6 +122,13 @@ vi.mock('@/libs/oidc-provider/session-cleanup', () => ({
 
 vi.mock('@/server/services/email', () => ({
   EmailService: vi.fn(),
+}));
+
+vi.mock('@/server/services/sms', () => ({
+  SmsRateLimitError: class SmsRateLimitError extends Error {},
+  checkVerifyCode: vi.fn(),
+  normalizePhoneToE164: vi.fn((v) => v),
+  sendVerifyCode: vi.fn(),
 }));
 
 vi.mock('@/server/services/user', () => ({
@@ -155,7 +172,7 @@ describe('defineConfig', () => {
       expect.objectContaining({
         origin: ['https://example.com'],
         rpID: 'example.com',
-        rpName: 'LobeHub',
+        rpName: 'Wedai',
       }),
     );
   });
