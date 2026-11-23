@@ -1,3 +1,10 @@
-# Database migrations require approval from core maintainers
+# Wedai — commercial fork maintained by @1004cq
+# (Upstream LobeHub CODEOWNERS replaced; do not restore @arvinxx etc.)
 
-/packages/database/migrations/ @arvinxx @nekomeowww @tjx666
+* @1004cq
+
+# Database migrations: review carefully (billing + auth schema)
+/packages/database/migrations/ @1004cq
+/packages/database/src/schemas/billing.ts @1004cq
+/packages/billing/ @1004cq
+/deploy/ @1004cq

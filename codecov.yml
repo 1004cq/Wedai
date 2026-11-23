@@ -9,6 +9,10 @@ component_management:
       name: 'Database'
       paths:
         - packages/database/**
+    - component_id: billing
+      name: 'Billing'
+      paths:
+        - packages/billing/**
     - component_id: builtin_tools
       name: 'Builtin Tools'
       paths:

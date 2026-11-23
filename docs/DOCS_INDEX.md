@@ -47,6 +47,7 @@
 
 | 文档 | 说明 |
 |------|------|
+| [REPO_HYGIENE.md](./REPO_HYGIENE.md) | **分支 / CI / 密钥治理约定（先看）** |
 | [IMPORT_LOBEHUB.md](./IMPORT_LOBEHUB.md) | 官方源码导入与同步 |
 | [CODEX_TASK.md](./CODEX_TASK.md) | Codex 任务边界摘要 |
 | [../README.md](../README.md) | Wedai 产品 README |
