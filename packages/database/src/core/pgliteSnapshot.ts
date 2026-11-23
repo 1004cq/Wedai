@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { vector } from '@electric-sql/pglite/vector';
 import { drizzle as pgliteDrizzle } from 'drizzle-orm/pglite';
-import { migrate as pgliteMigrate } from 'drizzle-orm/pglite/migrator';
+
+import { migratePGlite } from './pgliteMigrate';
 
 /**
  * Env var holding the path of a fully migrated PGlite data dir dump.
@@ -31,7 +32,8 @@ export const writeMigratedPGliteSnapshot = async (filePath: string) => {
 
   try {
     // pg_search migrations skip themselves when the extension is unavailable, as in PGlite.
-    await pgliteMigrate(pgliteDrizzle({ client: pglite }), { migrationsFolder });
+    // Use migratePGlite so Wedai multi-statement commercial SQL (no breakpoints) applies.
+    await migratePGlite(pglite, pgliteDrizzle({ client: pglite }));
     const dump = await pglite.dumpDataDir('none');
     await writeFile(filePath, Buffer.from(await dump.arrayBuffer()));
   } finally {

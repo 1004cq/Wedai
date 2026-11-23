@@ -126,6 +126,7 @@ jobs:
     needs: check-duplicate-run
     if: needs.check-duplicate-run.outputs.should_skip != 'true'
     strategy:
+      fail-fast: false
       matrix:
         shard: [1, 2]
     name: Test App (shard ${{ matrix.shard }}/2)
@@ -150,7 +151,8 @@ jobs:
         run: pnpm install
 
       - name: Run tests
-        run: bunx vitest --coverage --silent='passed-only' --reporter=default --reporter=blob --shard=${{ matrix.shard }}/2 --exclude '**/apps/server/**'
+        # Vitest projects: use --project app (happy-dom). Do not use --exclude alone.
+        run: bunx vitest --coverage --silent='passed-only' --reporter=default --reporter=blob --project app --shard=${{ matrix.shard }}/2
 
       - name: Upload blob report
         if: ${{ !cancelled() }}
@@ -276,6 +278,7 @@ jobs:
     needs: check-duplicate-run
     if: needs.check-duplicate-run.outputs.should_skip != 'true'
     strategy:
+      fail-fast: false
       matrix:
         shard: [1, 2]
     name: Test Server (shard ${{ matrix.shard }}/2)
@@ -302,7 +305,8 @@ jobs:
         run: pnpm install
 
       - name: Test Server Coverage
-        run: bunx vitest --coverage --silent='passed-only' --reporter=default --reporter=blob --coverage.reportsDirectory=./apps/server/coverage --dir apps/server --shard=${{ matrix.shard }}/2
+        # Vitest projects: use --project server (node env for t3-env / apps/server).
+        run: bunx vitest --coverage --silent='passed-only' --reporter=default --reporter=blob --coverage.reportsDirectory=./apps/server/coverage --project server --shard=${{ matrix.shard }}/2
 
       - name: Upload blob report
         if: ${{ !cancelled() }}
