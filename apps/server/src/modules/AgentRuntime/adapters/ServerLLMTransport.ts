@@ -63,6 +63,7 @@ import type { LlmExecutionSite } from '../llmRelay/resolveLlmExecutionSite';
 import { resolveLlmExecutionSite } from '../llmRelay/resolveLlmExecutionSite';
 import { getAgentRuntimeRedisClient } from '../redis';
 import type { IStreamEventManager } from '../types';
+import { agentRequestId, withAgentBilling } from './agentBilling';
 import { createServerCallLlmAttempt } from './serverCallLlmAttempt';
 
 const getErrorMessage = (error: unknown): string => {
@@ -402,47 +403,67 @@ export class ServerLLMTransport implements LLMTransport {
     // Compression shares the run's provider, so it must share the same wire protocol:
     // the browser resolved `apiMode` from the provider switch, a server run has to as well.
     const apiMode = await this.getResponseApiMode(payload.provider);
-    let content = '';
-    let usage: LLMStreamResult['usage'];
-    let streamError: unknown;
-
-    const response = await runtime.chat(
-      {
-        ...runtimePayload,
-        ...(deploymentName && { deploymentName }),
-        ...(apiMode && { apiMode }),
-      } as any,
-      {
-        callback: {
-          onCompletion: async (data: any) => {
-            if (data.usage) usage = data.usage;
-          },
-          onError: async (errorData: unknown) => {
-            streamError = errorData;
-            handlers?.onError?.(errorData);
-          },
-          onText: async (text: string) => {
-            content += text;
-            handlers?.onText?.(text);
-          },
-        },
-        // `stream()` only serves context compression. Without a trigger, RouterRuntime
-        // rejects the call in development (skipping compression) and bills it as
-        // trigger=null in production.
-        metadata: { topicId: this.ctx.topicId, trigger: RequestTrigger.ContextCompression },
-        user: this.ctx.userId,
-      },
+    const promptEstimate = Math.max(
+      1,
+      Math.ceil(
+        ((runtimePayload as any).messages ?? []).reduce(
+          (sum: number, m: any) => sum + (typeof m.content === 'string' ? m.content.length : 0),
+          0,
+        ) / 4,
+      ),
     );
 
-    await consumeStreamUntilDone(response);
+    return withAgentBilling(
+      this.ctx,
+      payload.provider,
+      (runtimePayload as any).model ?? payload.model ?? '',
+      /* attempt */ 0,
+      promptEstimate,
+      (runtimePayload as any).max_tokens ?? 4096,
+      async () => {
+        let content = '';
+        let usage: LLMStreamResult['usage'];
+        let streamError: unknown;
 
-    if (streamError) {
-      throw new Error(getErrorMessage(streamError));
-    }
+        const response = await runtime.chat(
+          {
+            ...runtimePayload,
+            ...(deploymentName && { deploymentName }),
+            ...(apiMode && { apiMode }),
+          } as any,
+          {
+            callback: {
+              onCompletion: async (data: any) => {
+                if (data.usage) usage = data.usage;
+              },
+              onError: async (errorData: unknown) => {
+                streamError = errorData;
+                handlers?.onError?.(errorData);
+              },
+              onText: async (text: string) => {
+                content += text;
+                handlers?.onText?.(text);
+              },
+            },
+            // `stream()` only serves context compression. Without a trigger, RouterRuntime
+            // rejects the call in development (skipping compression) and bills it as
+            // trigger=null in production.
+            metadata: { topicId: this.ctx.topicId, trigger: RequestTrigger.ContextCompression },
+            user: this.ctx.userId,
+          },
+        );
 
-    const result = { content, usage };
-    handlers?.onFinish?.(result);
-    return result;
+        await consumeStreamUntilDone(response);
+
+        if (streamError) {
+          throw new Error(getErrorMessage(streamError));
+        }
+
+        const result = { content, usage };
+        handlers?.onFinish?.(result);
+        return result;
+      },
+    );
   }
 
   /**
@@ -739,8 +760,34 @@ export class ServerLLMTransport implements LLMTransport {
       userAgent: input.state.principal?.audit?.userAgent,
     });
 
+    const promptEstimate = Math.max(
+      1,
+      Math.ceil(
+        chatPayload.messages.reduce(
+          (sum, m) => sum + (typeof m.content === 'string' ? m.content.length : 0),
+          0,
+        ) / 4,
+      ),
+    );
+
+    // Billing wrapper: hold before attempt, settle/release after.
+    const requestId = agentRequestId(this.ctx, input.attempt);
+    void requestId;
+
     try {
-      await attempt.execute();
+      await withAgentBilling(
+        this.ctx,
+        input.provider,
+        input.model,
+        input.attempt,
+        promptEstimate,
+        (chatPayload as any).max_tokens ?? 4096,
+        async () => {
+          await attempt.execute();
+          const output = attempt.snapshot();
+          return { usage: (output as any).usage };
+        },
+      );
       return { ok: true, output: attempt.snapshot() };
     } catch (error) {
       attempt.clearBuffers();
