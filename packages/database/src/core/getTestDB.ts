@@ -46,11 +46,13 @@ export const getTestDB = async (): Promise<LobeChatDatabase> => {
   const pglite = new PGlite({ extensions: { vector } });
   testClientDB = pgliteDrizzle({ client: pglite, schema });
 
-  // Custom migration that skips pg_search-related SQL for PGlite compatibility
+  // Custom migration that skips pg_search-related SQL for PGlite compatibility.
+  // Use pglite.exec (not drizzle execute) so multi-statement Wedai SQL files
+  // and comment-embedded semicolons work without rewriting migration hashes.
   const migrations = readMigrationFiles({ migrationsFolder });
 
-  await testClientDB.execute(sql`CREATE SCHEMA IF NOT EXISTS "drizzle"`);
-  await testClientDB.execute(sql`
+  await pglite.exec(`CREATE SCHEMA IF NOT EXISTS "drizzle"`);
+  await pglite.exec(`
     CREATE TABLE IF NOT EXISTS "drizzle"."__drizzle_migrations" (
       id SERIAL PRIMARY KEY,
       hash text NOT NULL,
@@ -65,28 +67,7 @@ export const getTestDB = async (): Promise<LobeChatDatabase> => {
 
     if (!skipSql) {
       for (const stmt of migration.sql) {
-        // Hand-written Wedai migrations may omit `--> statement-breakpoint`.
-        // PGlite cannot exec multi-statement SQL as one prepared query (42601).
-        // Never split dollar-quoted bodies (`DO $$ … $$`) — those contain internal `;`.
-        const parts =
-          stmt.includes(';') && !/\$\$/.test(stmt)
-            ? stmt
-                .split(';')
-                .map((part) => part.trim())
-                .filter((part) => {
-                  if (!part) return false;
-                  const withoutComments = part
-                    .split('\n')
-                    .map((line) => line.trim())
-                    .filter((line) => line && !line.startsWith('--'))
-                    .join('\n');
-                  return withoutComments.length > 0;
-                })
-            : [stmt];
-
-        for (const part of parts) {
-          await testClientDB.execute(sql.raw(part));
-        }
+        await pglite.exec(stmt);
       }
     }
 
