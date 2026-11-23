@@ -7,9 +7,8 @@
  *  - Application middleware calls this adapter, then passes the result to
  *    billing domain commands.
  */
-import Stripe from 'stripe';
-
 import type { PriceSnapshot } from '@lobechat/billing';
+import Stripe from 'stripe';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Singleton Stripe client (lazy; throws if key absent at call time)
@@ -21,7 +20,7 @@ function getStripe(): Stripe {
   if (_stripe) return _stripe;
   const key = process.env.STRIPE_SECRET_KEY;
   if (!key) throw new Error('STRIPE_SECRET_KEY is not configured');
-  _stripe = new Stripe(key, { apiVersion: '2025-06-30.basil', typescript: true });
+  _stripe = new Stripe(key, { apiVersion: '2025-02-24.acacia', typescript: true });
   return _stripe;
 }
 
@@ -30,18 +29,18 @@ function getStripe(): Stripe {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface CheckoutSessionParams {
+  /** Absolute URL that Stripe redirects to on cancel. */
+  cancelUrl: string;
   /** Internal order ID used as idempotency key and metadata. */
   orderId: string;
   /** Internal order number shown to the user. */
   orderNo: string;
   /** Price snapshot read from the server (never trusted from the client). */
   priceSnapshot: PriceSnapshot;
-  /** Absolute URL that Stripe redirects to on success. */
-  successUrl: string;
-  /** Absolute URL that Stripe redirects to on cancel. */
-  cancelUrl: string;
   /** Stripe customer ID, if the user has one. */
   stripeCustomerId?: string;
+  /** Absolute URL that Stripe redirects to on success. */
+  successUrl: string;
 }
 
 export interface CheckoutSessionResult {

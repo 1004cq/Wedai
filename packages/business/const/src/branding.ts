@@ -4,8 +4,20 @@
 
 export const LOBE_CHAT_CLOUD = 'Wedai Cloud';
 
-export const BRANDING_NAME = 'Wedai';
+/** Typed as `string` so white-label forks can compare against upstream defaults. */
+export const BRANDING_NAME: string = 'Wedai';
 export const BRANDING_LOGO_URL = '/brand/cq-logo.png';
+
+/**
+ * Display name of the built-in default assistant (the inbox agent).
+ *
+ * Kept separate from `BRANDING_NAME` because it reads as a persona, not a
+ * product: white-label deployments usually want something like
+ * `'<Brand> AI'` rather than the bare product name. Drives
+ * `DEFAULT_INBOX_TITLE` and the i18n brand post-processor, so overriding this
+ * one constant renames the assistant everywhere.
+ */
+export const BRANDING_INBOX_TITLE: string = 'Wedai AI';
 
 export const ORG_NAME = 'Wedai';
 

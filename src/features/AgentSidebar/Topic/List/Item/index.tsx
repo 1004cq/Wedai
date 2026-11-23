@@ -1,44 +1,64 @@
-import { AGENT_CHAT_TOPIC_URL } from '@lobechat/const';
+import { AGENT_CHAT_TOPIC_URL, DEFAULT_INBOX_AVATAR } from '@lobechat/const';
 import type { ChatTopicMetadata, ChatTopicStatus } from '@lobechat/types';
 import { formatElapsedClockTime } from '@lobechat/utils';
 import {
   getTopicMetadataWorkingDirectoryEffectivePath,
   getTopicMetadataWorkingDirectorySourcePath,
 } from '@lobechat/utils/client/topic';
-import { Flexbox, Icon, Popover, Skeleton, Tag, Text, Tooltip } from '@lobehub/ui';
-import { createStaticStyles, cssVar, useTheme } from 'antd-style';
+import {
+  createStaticStyles,
+  cssVar,
+  Flexbox,
+  Icon,
+  Popover,
+  Skeleton,
+  Tag,
+  Text,
+  Tooltip,
+  useTheme,
+} from '@lobehub/ui';
 import dayjs from 'dayjs';
-import { HashIcon, MessageSquareDashed } from 'lucide-react';
+import isEqual from 'fast-deep-equal';
+import { MessageSquareDashed, TargetIcon } from 'lucide-react';
 import type { CSSProperties, DragEvent, RefObject } from 'react';
 import { memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useActiveWorkspaceSlug } from '@/business/client/hooks/useActiveWorkspaceSlug';
+import AgentAvatar from '@/components/AgentAvatar';
 import DotsLoading from '@/components/DotsLoading';
 import { TOPIC_STATUS_VISUALS } from '@/components/ExecutionStatus';
 import RingLoadingIcon from '@/components/RingLoading';
 import UnreadDot from '@/components/UnreadDot';
 import { isDesktop } from '@/const/version';
+import { getPlatformIcon } from '@/features/AgentChannel/const';
+import { TopicMigrationIndicator } from '@/features/AgentTransferMigration';
 import DirIcon from '@/features/ChatInput/ControlBar/DirIcon';
 import { useHasDraft } from '@/features/ChatInput/draftStorage';
 import { startTopicDrag } from '@/features/ChatInput/InputEditor/ReferTopic/topicDragData';
 import NavItem from '@/features/NavPanel/components/NavItem';
+import { getProjectTopicPath } from '@/features/Projects/Layout/navigation';
 import TopicCreatorAvatar, { useTopicCreator } from '@/features/TopicCreatorAvatar';
 import { buildWorkspaceAwarePath } from '@/features/Workspace/workspaceAwarePath';
 import { getWorkingDirectoryName } from '@/helpers/workingDirectoryPath';
-import { getPlatformIcon } from '@/routes/(main)/agent/channel/const';
+import { useTopicOnlyMine } from '@/hooks/useTopicOnlyMine';
 import { useAgentStore } from '@/store/agent';
-import { agentSelectors } from '@/store/agent/selectors';
+import { agentSelectors, builtinAgentSelectors } from '@/store/agent/selectors';
 import { useChatStore } from '@/store/chat';
 import { operationSelectors } from '@/store/chat/selectors';
 import { messageMapKey } from '@/store/chat/utils/messageMapKey';
-import { useElectronStore } from '@/store/electron';
+import { useUserStore } from '@/store/user';
+import { userProfileSelectors } from '@/store/user/selectors';
 
+import { useTopicHoverPrefetch } from '../../hooks/topicHoverPrefetch/useTopicHoverPrefetch';
+import { markSidebarTopicActivation } from '../../hooks/useScrollActiveTopicIntoView';
 import { useTopicNavigation } from '../../hooks/useTopicNavigation';
 import ThreadList from '../../TopicListContent/ThreadList';
+import { useTopicListScope } from '../../TopicListScope';
+import { useScopedTopic } from '../../useScopedTopics';
 import Actions from './Actions';
 import TopicItemContextMenu from './ContextMenu';
-import { getPullRequestState, getTopicMetaCard, PR_STATE_VISUAL } from './metaCardData';
+import { getTopicMetaCard } from './metaCardData';
 import MetaHoverCard from './MetaHoverCard';
 
 // Base UI Popover plays an opacity/scale enter+exit transition driven by these
@@ -55,6 +75,11 @@ const META_HOVER_CARD_STYLES = {
 };
 
 const styles = createStaticStyles(({ css }) => ({
+  markerIcon: css`
+    position: relative;
+    display: inline-flex;
+    flex: none;
+  `,
   runningElapsedTime: css`
     flex: none;
 
@@ -68,17 +93,22 @@ const styles = createStaticStyles(({ css }) => ({
   `,
 }));
 
-// Module-scoped so a click on any topic cancels a pending click on another.
-// Per-item refs can't do that, which lets rapid clicks across items all
-// fire — each racing to write activeTopicId (see ).
-let pendingSingleClickTimer: ReturnType<typeof setTimeout> | null = null;
-
-const cancelPendingSingleClick = () => {
-  if (pendingSingleClickTimer) {
-    clearTimeout(pendingSingleClickTimer);
-    pendingSingleClickTimer = null;
-  }
-};
+/**
+ * The mobile surface renders its topic list in a modal and never mounts the
+ * working sidebar — the desktop host of a topic's thread list. Without nesting
+ * the rows under the topic row, mobile users can't reach an existing subtopic
+ * at all, so the nesting lives here on that surface only.
+ *
+ * Scoped to the route's topic (`showThreadList`): opening a thread under an
+ * inactive topic would call `openThreadInPortal` while `activeTopicId` still
+ * points at another topic, so the thread would resolve against the wrong topic's
+ * context — and every mounted list would fetch its own threads.
+ *
+ * Read per call rather than once at module load so a test can stub `__MOBILE__`.
+ */
+const isMobileSurface = () => typeof __MOBILE__ !== 'undefined' && __MOBILE__;
+// Nesting cue: keeps the rows visually under their topic row.
+const NESTED_THREAD_LIST_INDENT = 32;
 
 const getWorkingDirectoryDisplay = (metadata: ChatTopicMetadata | undefined) => {
   const config = metadata?.workingDirectoryConfig;
@@ -102,15 +132,32 @@ const getWorkingDirectoryDisplay = (metadata: ChatTopicMetadata | undefined) => 
 
 interface RunningElapsedTimeProps {
   agentId?: string;
+  /**
+   * Server-side start of the topic's current run (list query's
+   * `runStartedAt`). Fallback for topics that are running on the server but
+   * have no local operation — after a page refresh only the ACTIVE topic is
+   * reconnected into the in-memory store, so every other running row would
+   * otherwise render no timer at all.
+   */
+  runStartedAt?: Date | string | number | null;
   topicId: string;
 }
 
-const RunningElapsedTime = memo<RunningElapsedTimeProps>(({ agentId, topicId }) => {
-  const startTime = useChatStore(
+const RunningElapsedTime = memo<RunningElapsedTimeProps>(({ agentId, runStartedAt, topicId }) => {
+  const localStartTime = useChatStore(
     agentId
       ? operationSelectors.getVisibleAgentRuntimeStartTimeByContext({ agentId, topicId })
       : () => undefined,
   );
+
+  // Prefer the in-memory operation: it tracks the local run precisely and
+  // updates the moment a run starts/stops. The server stamp only covers the
+  // refresh case above. Normalize like the server fallback does — the value
+  // crosses the wire as an ISO string.
+  const serverStartTimeMs = runStartedAt == null ? undefined : new Date(runStartedAt).getTime();
+  const startTime =
+    localStartTime ?? (Number.isFinite(serverStartTimeMs) ? serverStartTimeMs : undefined);
+
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -132,18 +179,30 @@ const RunningElapsedTime = memo<RunningElapsedTimeProps>(({ agentId, topicId }) 
 RunningElapsedTime.displayName = 'RunningElapsedTime';
 
 interface TopicItemProps {
-  active?: boolean;
   fav?: boolean;
+  /** A goal was planned in this conversation — marks the row's identity slot. */
+  hasGoal?: boolean;
   id?: string;
   metadata?: ChatTopicMetadata;
   /**
-   * Show the topic's project directory as a second line under the title. Used by
+   * Server-side start of the topic's current run (list query's
+   * `runStartedAt`). Lets running topics that have no local operation
+   * (refreshed, non-active) still show an elapsed timer — see
+   * `RunningElapsedTime`.
+   */
+  runStartedAt?: Date | string | number | null;
+  /** Show the topic's project directory as a second line under the title. Used by
    * the by-status grouping, where the row otherwise carries no project context
    * (by-project mode already puts the directory in the group header).
    */
   showWorkingDirectory?: boolean;
   status?: ChatTopicStatus | null;
-  threadId?: string;
+  /**
+   * Group headers that already identify the owning agent (the by-agent
+   * grouping) suppress the row's leading agent avatar — the identity lives in
+   * the header, and the row keeps its status/identity icons instead.
+   */
+  suppressAgentAvatar?: boolean;
   title: string;
   /** Creator of the topic; drives the workspace creator avatar. */
   userId?: string;
@@ -158,6 +217,7 @@ interface TopicItemRowProps extends TopicItemProps {
   defaultTopicActive: boolean;
   isTopicActive: boolean;
   navRef: RefObject<TopicNavigationActions>;
+  /** Route's topic — only its row may carry its thread list (see the mobile mount). */
   showThreadList: boolean;
 }
 
@@ -166,7 +226,9 @@ const TopicItemRow = memo<TopicItemRowProps>(
     id,
     title,
     fav,
+    hasGoal,
     metadata,
+    runStartedAt,
     status,
     showWorkingDirectory,
     userId,
@@ -174,26 +236,34 @@ const TopicItemRow = memo<TopicItemRowProps>(
     isTopicActive,
     navRef,
     showThreadList,
+    suppressAgentAvatar,
   }) => {
+    const scopedTopic = useScopedTopic(id);
+    const scope = useTopicListScope();
+    const inboxId = useAgentStore(builtinAgentSelectors.inboxAgentId);
     const { t } = useTranslation('topic');
     const { isDarkMode } = useTheme();
-    const activeAgentId = useAgentStore((s) => s.activeAgentId);
+    // Rows render by the dozen, so agent-level reads share ONE subscription.
+    // Only workspace-shared (`public`) agents get the creator avatar — a
+    // workspace-private agent's topics all belong to the viewer.
+    const [fallbackAgentId, isSharedAgent] = useAgentStore((s) => [
+      s.activeAgentId,
+      agentSelectors.currentAgentVisibility(s) === 'public',
+    ]);
+    const activeAgentId = scopedTopic?.agentId ?? fallbackAgentId;
     const activeWorkspaceSlug = useActiveWorkspaceSlug();
-    // Heterogeneous agents (Claude Code, Codex, …) don't have the chat-style
-    // topic semantics, so skip the default `#` placeholder icon for their rows.
-    const isHeterogeneousAgent = useAgentStore(agentSelectors.isCurrentAgentHeterogeneous);
-    const addTab = useElectronStore((s) => s.addTab);
-    const prefetchMessages = useChatStore((s) => s.prefetchMessages);
-    // A workspace-private agent is a purely personal conversation space even
-    // inside a workspace — its topics all belong to the viewer, so the creator
-    // avatar carries no information there. Only workspace-shared (`public`)
-    // agents get the avatar treatment.
-    const isSharedAgent = useAgentStore(
-      (s) => agentSelectors.currentAgentVisibility(s) === 'public',
-    );
     // Creator of the topic — resolves only inside an active workspace; drives
     // the identity-first icon layout below.
-    const author = useTopicCreator(isSharedAgent ? userId : undefined);
+    // "Only my topics" makes the viewer's own rows self-evident, so the creator
+    // avatar carries no information there — drop it and fall back to the
+    // personal-mode row. A teammate's topic can still be listed (the active
+    // topic is retained under the filter) and keeps its ownership cue. Bot
+    // topics still resolve their initiator via `botCreator`.
+    const onlyMine = useTopicOnlyMine();
+    const currentUserId = useUserStore(userProfileSelectors.userId);
+    const hideOwnCreator = onlyMine && userId === currentUserId;
+    const creatorUserId = isSharedAgent && !metadata?.bot && !hideOwnCreator ? userId : undefined;
+    const author = useTopicCreator(creatorUserId, metadata?.botCreator);
 
     const loadingRingColor = isDarkMode
       ? cssVar.colorWarningBorder
@@ -202,59 +272,46 @@ const TopicItemRow = memo<TopicItemRowProps>(
     // Construct href for cmd+click support
     const href = useMemo(() => {
       if (!activeAgentId || !id) return undefined;
-      return buildWorkspaceAwarePath(AGENT_CHAT_TOPIC_URL(activeAgentId, id), activeWorkspaceSlug);
-    }, [activeAgentId, activeWorkspaceSlug, id]);
+      return buildWorkspaceAwarePath(
+        scope ? getProjectTopicPath(scope.projectId, id) : AGENT_CHAT_TOPIC_URL(activeAgentId, id),
+        activeWorkspaceSlug,
+      );
+    }, [activeAgentId, activeWorkspaceSlug, id, scope]);
 
-    const isLoading = useChatStore((s) => (id ? s.topicLoadingIds.includes(id) : false));
-
-    const isUnreadCompleted = useChatStore(
-      id ? operationSelectors.isTopicUnreadCompleted(id) : () => false,
-    );
-    const hasLocalRunningRuntime = useChatStore(
-      id && activeAgentId
-        ? operationSelectors.isAgentRuntimeRunningByContext({ agentId: activeAgentId, topicId: id })
-        : () => false,
-    );
-    const isRuntimeVisiblyRunning = useChatStore(
-      id && activeAgentId
-        ? operationSelectors.isAgentRuntimeVisiblyRunningByContext({
+    const [isLoading, isUnreadCompleted, hasLocalRunningRuntime, isRuntimeVisiblyRunning] =
+      useChatStore((s) => [
+        !!id && operationSelectors.isTopicVisiblyRunning(id)(s),
+        !!id && operationSelectors.isTopicUnreadCompleted(id)(s),
+        !!id &&
+          !!activeAgentId &&
+          operationSelectors.isAgentRuntimeRunningByContext({
             agentId: activeAgentId,
             topicId: id,
-          })
-        : () => false,
-    );
+          })(s),
+        !!id &&
+          !!activeAgentId &&
+          operationSelectors.isAgentRuntimeVisiblyRunningByContext({
+            agentId: activeAgentId,
+            topicId: id,
+          })(s),
+      ]);
 
     const handleDragStart = useCallback(
       (event: DragEvent) => {
         if (!id) return;
-        cancelPendingSingleClick();
         startTopicDrag(event, { topicId: id, topicTitle: title });
       },
       [id, title],
     );
 
+    // A plain click only switches the topic. Opening a new tab takes an explicit
+    // gesture (Cmd/Ctrl+click, middle click, or the context menu): a double
+    // click used to open one, and a lagging UI turned repeated clicks into
+    // unwanted tabs.
     const handleClick = useCallback(() => {
-      if (isDesktop) {
-        cancelPendingSingleClick();
-        pendingSingleClickTimer = setTimeout(() => {
-          pendingSingleClickTimer = null;
-          void navRef.current.navigateToTopic(id);
-        }, 250);
-      } else {
-        void navRef.current.navigateToTopic(id);
-      }
-    }, [id, navRef]);
-
-    const handleDoubleClick = useCallback(async () => {
-      if (!id || !activeAgentId || !isDesktop) return;
-      cancelPendingSingleClick();
-      if (await navRef.current.focusTopicPopup(id)) {
-        void navRef.current.navigateToTopic(id, { skipPopupFocus: true });
-        return;
-      }
-      addTab(buildWorkspaceAwarePath(AGENT_CHAT_TOPIC_URL(activeAgentId, id), activeWorkspaceSlug));
+      if (id) markSidebarTopicActivation(id);
       void navRef.current.navigateToTopic(id);
-    }, [id, activeAgentId, activeWorkspaceSlug, addTab, navRef]);
+    }, [id, navRef]);
 
     const isFailed = status === 'failed';
     const isRunning = status === 'running';
@@ -270,30 +327,40 @@ const TopicItemRow = memo<TopicItemRowProps>(
     // topic's working directory as a muted second line. Data is already on the
     // topic (`metadata.workingDirectoryConfig` / `workingDirectory`) — no fetch.
     // On web it's a github repo URL; on desktop a local path.
-    const workingDirectoryDisplay = getWorkingDirectoryDisplay(metadata);
-    const workingDirectoryNode =
-      showWorkingDirectory && workingDirectoryDisplay ? (
-        <Flexbox horizontal align={'center'} gap={4} style={{ overflow: 'hidden' }}>
-          <DirIcon repoType={workingDirectoryDisplay.repoType} size={13} />
-          <Text ellipsis fontSize={12} style={{ color: cssVar.colorTextDescription }}>
-            {workingDirectoryDisplay.label}
-          </Text>
-        </Flexbox>
-      ) : undefined;
+    const workingDirectoryDisplay = useMemo(
+      () => (showWorkingDirectory ? getWorkingDirectoryDisplay(metadata) : undefined),
+      [metadata, showWorkingDirectory],
+    );
+    const workingDirectoryNode = workingDirectoryDisplay ? (
+      <Flexbox horizontal align={'center'} gap={4} style={{ overflow: 'hidden' }}>
+        <DirIcon repoType={workingDirectoryDisplay.repoType} size={13} />
+        <Text ellipsis fontSize={12} style={{ color: cssVar.colorTextDescription }}>
+          {workingDirectoryDisplay.label}
+        </Text>
+      </Flexbox>
+    ) : undefined;
 
     // Surface the unread dot right away during the masked tail instead of a
     // blank icon gap until markTopicUnread's persisted 'unread' lands. Skipped
     // while the user is viewing the topic, like markTopicUnread's own guard.
     const isRunningTailUnread = isMaskedRunningTail && !isTopicActive;
 
-    const hasUnread = id && (isUnreadCompleted || isRunningTailUnread);
-    const unreadIcon = <UnreadDot />;
+    // `status` is the row's own copy: a project list keeps its topics outside
+    // the chat store, so `isUnreadCompleted` never sees them there.
+    const hasUnread = id && (isUnreadCompleted || status === 'unread' || isRunningTailUnread);
+    const hoverPrefetchHandlers = useTopicHoverPrefetch({
+      agentId: activeAgentId,
+      status,
+      topicId: id,
+    });
 
     useEffect(() => {
       if (!activeAgentId || !id || !isUnreadCompleted || hasLocalRunningRuntime) return;
 
-      void prefetchMessages({ agentId: activeAgentId, scope: 'main', topicId: id });
-    }, [activeAgentId, hasLocalRunningRuntime, id, isUnreadCompleted, prefetchMessages]);
+      void useChatStore
+        .getState()
+        .prefetchMessages({ agentId: activeAgentId, scope: 'main', topicId: id });
+    }, [activeAgentId, hasLocalRunningRuntime, id, isUnreadCompleted]);
 
     // Surface a WeChat-style red "[Draft]" hint when this topic holds unsent
     // input. Drafts live in localStorage keyed by messageMapKey; the default
@@ -309,6 +376,21 @@ const TopicItemRow = memo<TopicItemRowProps>(
         {t('draft')}
       </Text>
     ) : undefined;
+    // On a two-line row (title + working directory) the hint sits under the
+    // leading avatar instead, so it no longer eats into the title width.
+    const draftBelowIcon = hasDraft ? (
+      <Text
+        fontSize={10}
+        style={{ color: cssVar.colorError, flex: 'none', lineHeight: 1, whiteSpace: 'nowrap' }}
+      >
+        {t('draft')}
+      </Text>
+    ) : undefined;
+
+    // Codex-style hover detail card: when the topic carries git context, hovering
+    // the row reveals a card on the right with repo / branch / worktree / PR / CI —
+    // keeping the row itself clean.
+    const metaCard = useMemo(() => getTopicMetaCard(metadata), [metadata]);
 
     // For default topic (no id)
     if (!id) {
@@ -346,11 +428,6 @@ const TopicItemRow = memo<TopicItemRowProps>(
         />
       );
     }
-
-    // Codex-style hover detail card: when the topic carries git context, hovering
-    // the row reveals a card on the right with repo / branch / worktree / PR / CI —
-    // keeping the row itself clean.
-    const metaCard = getTopicMetaCard(metadata);
 
     // Execution / attention state. In workspace mode this moves to the row's
     // trailing side so the leading slot can carry the creator identity.
@@ -393,9 +470,9 @@ const TopicItemRow = memo<TopicItemRowProps>(
       // Unread is the third `pending` attention state (see `resolveStatusBucket`
       // in `@lobechat/utils/client/topic`), so it ranks with its two siblings
       // above — and above the PR marker, which shares this single icon slot.
-      if (hasUnread) return unreadIcon;
+      if (hasUnread) return <UnreadDot />;
       // Persisted execution state is the topic's primary status. Keep every
-      // non-idle state above git metadata so scheduled / paused / completed
+      // non-idle state above git metadata so scheduled / completed
       // topics cannot be mistaken for merely open / merged / closed PRs.
       // `running` is handled exclusively by shouldShowRunningIcon above so
       // the masked post-output tail cannot fall back to a static running icon.
@@ -406,18 +483,23 @@ const TopicItemRow = memo<TopicItemRowProps>(
       return null;
     })();
 
-    // Identity-flavored icons the row owns (bot platform, PR marker) — these
+    // Identity-flavored icons the row owns (goal, PR marker, bot platform) — these
     // keep the leading slot even in workspace mode, with the creator shrunk to
     // a corner badge.
     const identityIconNode = (() => {
-      // GitHub PR state marker (open=green, merged=purple, closed=red),
-      // like Codex. It is secondary metadata, so only an idle topic uses it
-      // as the leading icon.
-      if (metaCard?.pullRequest) {
-        const prVisual = PR_STATE_VISUAL[getPullRequestState(metaCard.pullRequest)];
+      // The conversation a goal was planned in says more about the row than
+      // the PR it produced, so it outranks the PR marker (which stays in the
+      // meta hover card).
+      if (hasGoal) {
         return (
-          <Tooltip title={t(prVisual.labelKey)}>
-            <Icon icon={prVisual.icon} size={'small'} style={{ color: prVisual.color }} />
+          <Tooltip title={t('metaCard.goal')}>
+            <span aria-label={t('metaCard.goal')} className={styles.markerIcon}>
+              <Icon
+                icon={TargetIcon}
+                size={'small'}
+                style={{ color: cssVar.colorTextDescription }}
+              />
+            </span>
           </Tooltip>
         );
       }
@@ -430,58 +512,98 @@ const TopicItemRow = memo<TopicItemRowProps>(
       return null;
     })();
 
-    const hashIconNode = (
-      <Icon
-        icon={HashIcon}
-        size={'small'}
-        style={{
-          color: cssVar.colorTextDescription,
-          // Heterogeneous agents (Claude Code, Codex, …) have no chat-style
-          // topic semantics, so suppress the `#` glyph while keeping its
-          // box so the title stays aligned with sibling rows.
-          visibility: isHeterogeneousAgent ? 'hidden' : undefined,
-        }}
-      />
-    );
+    const idleIconPlaceholder = <span aria-hidden style={{ flex: 'none', width: 16 }} />;
 
     // Workspace mode (creator resolvable): the creator's round avatar is the
     // primary visual and always leads the row; the row's own icon — execution
-    // status first, then identity icons (Discord / WeChat / PR marker) —
+    // status first, then identity icons (Discord / WeChat) —
     // shrinks into a bottom-right corner badge. Personal mode keeps the
     // original layout untouched.
     const ownIconNode = statusIconNode ?? identityIconNode;
-    const leadingIconNode = author ? (
-      <TopicCreatorAvatar corner={ownIconNode} userId={userId} />
-    ) : (
-      (ownIconNode ?? hashIconNode)
-    );
+    const leadingIconNode =
+      scopedTopic && !suppressAgentAvatar ? (
+        <AgentAvatar
+          agentId={scopedTopic.agentId}
+          name={scopedTopic.agentName || scopedTopic.agentTitle || undefined}
+          shape={'circle'}
+          size={20}
+          title={scopedTopic.agentName || scopedTopic.agentTitle || undefined}
+          avatar={
+            scopedTopic.agentAvatar ||
+            (activeAgentId === inboxId ? DEFAULT_INBOX_AVATAR : undefined)
+          }
+        />
+      ) : author ? (
+        <TopicCreatorAvatar
+          botCreator={metadata?.botCreator}
+          corner={ownIconNode}
+          userId={creatorUserId}
+        />
+      ) : (
+        (ownIconNode ?? idleIconPlaceholder)
+      );
 
     const navItem = (
       <TopicItemContextMenu fav={fav} id={id} status={status} title={title}>
         <NavItem
           draggable
-          actions={() => <Actions fav={fav} id={id} status={status} title={title} />}
+          titleMarquee
           active={isTopicActive}
           description={workingDirectoryNode}
-          extra={<RunningElapsedTime agentId={activeAgentId} topicId={id} />}
           href={href}
           icon={leadingIconNode}
-          slots={{ titlePrefix: draftPrefix }}
           title={title === '...' ? <DotsLoading gap={3} size={4} /> : title}
           titleColor={cssVar.colorText}
+          actions={() => (
+            <Actions
+              fav={fav}
+              id={id}
+              // Archiving a topic mid-run would hide work that is still going.
+              showInlineArchive={!shouldShowRunningIcon}
+              status={status}
+              title={title}
+            />
+          )}
+          extra={
+            <>
+              {scopedTopic && !suppressAgentAvatar && ownIconNode}
+              <TopicMigrationIndicator agentId={activeAgentId} topicId={id} />
+              {/* Gated on the SAME boolean that draws the running ring: both say
+                  "this row is visibly running", and a row that stopped spinning
+                  must not keep counting. The server `runStartedAt` fallback only
+                  knows the persisted `running` status, which outlives the answer
+                  — it stays set through the post-visible-output tail where the
+                  ring is deliberately masked (#16518) and the terminal
+                  bookkeeping can run for tens of seconds. */}
+              {shouldShowRunningIcon && (
+                <RunningElapsedTime
+                  agentId={activeAgentId}
+                  runStartedAt={runStartedAt}
+                  topicId={id}
+                />
+              )}
+            </>
+          }
+          slots={
+            workingDirectoryNode ? { iconBelow: draftBelowIcon } : { titlePrefix: draftPrefix }
+          }
           onClick={handleClick}
-          onDoubleClick={() => void handleDoubleClick()}
           onDragStart={handleDragStart}
         />
       </TopicItemContextMenu>
     );
 
     return (
-      <Flexbox data-testid="topic-item" style={{ position: 'relative' }}>
+      <Flexbox
+        data-testid="topic-item"
+        data-topic-id={id}
+        style={{ position: 'relative' }}
+        {...hoverPrefetchHandlers}
+      >
         {metaCard ? (
           <Popover
             arrow={false}
-            content={<MetaHoverCard metadata={metadata} title={title} topicId={id} />}
+            content={<MetaHoverCard metadata={metadata} title={title} />}
             mouseEnterDelay={0.8}
             placement={'right'}
             styles={META_HOVER_CARD_STYLES}
@@ -492,16 +614,18 @@ const TopicItemRow = memo<TopicItemRowProps>(
         ) : (
           navItem
         )}
-        {showThreadList && (
+        {isMobileSurface() && showThreadList && id && (
           <Suspense
             fallback={
               <Flexbox gap={8} paddingBlock={8} paddingInline={24} width={'100%'}>
-                <Skeleton.Button active size={'small'} style={{ height: 18, width: '100%' }} />
-                <Skeleton.Button active size={'small'} style={{ height: 18, width: '100%' }} />
+                <Skeleton height={18} width={'100%'} />
+                <Skeleton height={18} width={'100%'} />
               </Flexbox>
             }
           >
-            <ThreadList topicId={id} />
+            <Flexbox style={{ paddingInlineStart: NESTED_THREAD_LIST_INDENT }} width={'100%'}>
+              <ThreadList topicId={id} />
+            </Flexbox>
           </Suspense>
         )}
       </Flexbox>
@@ -522,7 +646,8 @@ TopicItemRow.displayName = 'TopicItemRow';
  * navigation; passing them as props would defeat the row's memo.
  */
 const TopicItem = memo<TopicItemProps>((props) => {
-  const { active, id, threadId } = props;
+  const { id } = props;
+  const scope = useTopicListScope();
   const {
     focusTopicPopup,
     navigateToTopic,
@@ -531,6 +656,12 @@ const TopicItem = memo<TopicItemProps>((props) => {
     routeTopicId,
     urlTopicId,
   } = useTopicNavigation();
+
+  // Active/thread state is subscribed here instead of arriving as props:
+  // threading it through the group accordion re-rendered every group (and its
+  // motion chain) on each topic switch, when only the two affected rows change.
+  const active = useChatStore((s) => (id ? s.activeTopicId === id : !s.activeTopicId));
+  const hasActiveThread = useChatStore((s) => !!s.activeThreadId);
 
   const navRef = useRef<TopicNavigationActions>({ focusTopicPopup, navigateToTopic });
   useEffect(() => {
@@ -544,13 +675,17 @@ const TopicItem = memo<TopicItemProps>((props) => {
       {...props}
       defaultTopicActive={Boolean(active && !isInAgentSubRoute && !isInTopicContextRoute)}
       navRef={navRef}
-      showThreadList={Boolean(id && id === urlTopicId)}
+      showThreadList={Boolean(!scope && id && id === urlTopicId)}
       isTopicActive={Boolean(
-        (active || isRouteTopicActive) && !threadId && (!isInAgentSubRoute || isRouteTopicActive),
+        (scope ? isRouteTopicActive : active || isRouteTopicActive) &&
+        !hasActiveThread &&
+        (!isInAgentSubRoute || isRouteTopicActive),
       )}
     />
   );
-});
+  // A list refresh rebuilds every topic/metadata object even when only one
+  // topic changed — deep-compare props so unchanged rows still bail out.
+}, isEqual);
 
 TopicItem.displayName = 'TopicItem';
 

@@ -1,10 +1,22 @@
 import { INVITATION_EXPIRY_DAYS } from '@lobechat/const';
 import { and, eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getTestDB } from '../../core/getTestDB';
-import { devices, users, workspaceInvitations, workspaceMembers, workspaces } from '../../schemas';
+import {
+  devices,
+  messengerAccountLinks,
+  resourcePermissions,
+  tasks,
+  users,
+  workspaceInvitations,
+  workspaceMembers,
+  workspaces,
+  workspaceTeamMembers,
+  workspaceTeams,
+} from '../../schemas';
 import type { LobeChatDatabase } from '../../type';
+import { WorkspaceAuditLogModel } from '../workspaceAuditLog';
 import { WorkspaceMemberModel } from '../workspaceMember';
 
 const serverDB: LobeChatDatabase = await getTestDB();
@@ -25,6 +37,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await serverDB.delete(users);
 });
 
@@ -112,6 +125,33 @@ describe('WorkspaceMemberModel', () => {
     });
   });
 
+  describe('getRolesInWorkspaces', () => {
+    it("returns the user's active role per workspace in one read", async () => {
+      const model = new WorkspaceMemberModel(serverDB, inviterId);
+      await model.addMember({ role: 'viewer', userId: memberId, workspaceId });
+      await model.addMember({ role: 'admin', userId: memberId, workspaceId: otherWorkspaceId });
+      await model.addMember({ userId: otherUserId, workspaceId });
+
+      const roles = await model.getRolesInWorkspaces([workspaceId, otherWorkspaceId], memberId);
+
+      expect(Object.fromEntries(roles)).toEqual({
+        [otherWorkspaceId]: 'admin',
+        [workspaceId]: 'viewer',
+      });
+    });
+
+    it('omits workspaces the user left or never joined', async () => {
+      const model = new WorkspaceMemberModel(serverDB, inviterId);
+      await model.addMember({ userId: memberId, workspaceId });
+      await model.removeMember(workspaceId, memberId);
+
+      expect(await model.getRolesInWorkspaces([workspaceId, otherWorkspaceId], memberId)).toEqual(
+        new Map(),
+      );
+      expect(await model.getRolesInWorkspaces([], memberId)).toEqual(new Map());
+    });
+  });
+
   describe('listMembers', () => {
     it('lists only active members by default', async () => {
       const model = new WorkspaceMemberModel(serverDB, inviterId);
@@ -154,6 +194,164 @@ describe('WorkspaceMemberModel', () => {
     });
   });
 
+  describe('searchAssignableMembers', () => {
+    const viewerId = 'wm-viewer';
+
+    const seedDirectory = async () => {
+      const model = new WorkspaceMemberModel(serverDB, inviterId);
+      await serverDB.insert(users).values({ id: viewerId });
+      await serverDB
+        .update(users)
+        .set({ email: 'alice@lobehub.com', fullName: 'Alice Chen', username: 'alice' })
+        .where(eq(users.id, memberId));
+      await serverDB
+        .update(users)
+        .set({ fullName: 'Bob Li', username: 'bob' })
+        .where(eq(users.id, otherUserId));
+      // `addMember` only hands out non-owner roles; seed the owner row directly.
+      await serverDB
+        .insert(workspaceMembers)
+        .values({ role: 'owner', userId: inviterId, workspaceId });
+      await model.addMember({ userId: memberId, workspaceId });
+      await model.addMember({ userId: otherUserId, workspaceId });
+      await model.addMember({ role: 'viewer', userId: viewerId, workspaceId });
+      // Alice's Discord identity is active in this workspace; her Telegram one
+      // belongs to another workspace and must stay invisible here.
+      await serverDB.insert(messengerAccountLinks).values([
+        {
+          platform: 'discord',
+          platformUserId: '4521',
+          platformUsername: 'Neko',
+          userId: memberId,
+          workspaceId,
+        },
+        {
+          platform: 'telegram',
+          platformUserId: 'tg-777',
+          platformUsername: 'alice_tg',
+          userId: memberId,
+          workspaceId: otherWorkspaceId,
+        },
+      ]);
+      return model;
+    };
+
+    it('lists active members whose role can own a task, name-ordered with a total', async () => {
+      const model = await seedDirectory();
+
+      const { rows, total } = await model.searchAssignableMembers(workspaceId, { limit: 50 });
+
+      // Viewers cannot own tasks; members without a name sort last.
+      expect(rows.map((r) => r.userId)).toEqual([memberId, otherUserId, inviterId]);
+      expect(rows.find((r) => r.userId === inviterId)?.role).toBe('owner');
+      expect(total).toBe(3);
+    });
+
+    it('narrows by id, name, handle, email or an IM identity linked under this workspace', async () => {
+      const model = await seedDirectory();
+      const ids = async (query: string) =>
+        (await model.searchAssignableMembers(workspaceId, { limit: 50, query })).rows.map(
+          (r) => r.userId,
+        );
+
+      expect(await ids('chen')).toEqual([memberId]);
+      expect(await ids('bob')).toEqual([otherUserId]);
+      expect(await ids('alice@lobehub.com')).toEqual([memberId]);
+      expect(await ids(memberId)).toEqual([memberId]);
+      expect(await ids('neko')).toEqual([memberId]);
+      expect(await ids('4521')).toEqual([memberId]);
+      // The Telegram identity is scoped to another workspace: no match here.
+      expect(await ids('alice_tg')).toEqual([]);
+      expect(await ids('tg-777')).toEqual([]);
+      // LIKE wildcards are literal characters, not patterns.
+      expect(await ids('%')).toEqual([]);
+      expect(await ids('_')).toEqual([]);
+    });
+
+    it('matches and orders by the workspace nickname, scoped to this workspace', async () => {
+      const model = await seedDirectory();
+      await model.addMember({ userId: otherUserId, workspaceId: otherWorkspaceId });
+      // Bob goes by "Aaron" here, so he now sorts ahead of Alice.
+      await model.updateMemberProfile(workspaceId, otherUserId, { nickname: 'Aaron' });
+      await model.updateMemberProfile(otherWorkspaceId, otherUserId, { nickname: 'Zed' });
+
+      const { rows } = await model.searchAssignableMembers(workspaceId, { limit: 50 });
+      expect(rows.map((r) => r.userId)).toEqual([otherUserId, memberId, inviterId]);
+      expect(rows[0].nickname).toBe('Aaron');
+
+      // A blank nickname is unset: Bob sorts by his full name again.
+      await serverDB
+        .update(workspaceMembers)
+        .set({ config: { nickname: '   ' } })
+        .where(
+          and(
+            eq(workspaceMembers.workspaceId, workspaceId),
+            eq(workspaceMembers.userId, otherUserId),
+          ),
+        );
+      const reordered = await model.searchAssignableMembers(workspaceId, { limit: 50 });
+      expect(reordered.rows.map((r) => [r.userId, r.nickname])).toEqual([
+        [memberId, null],
+        [otherUserId, null],
+        [inviterId, null],
+      ]);
+      await model.updateMemberProfile(workspaceId, otherUserId, { nickname: 'Aaron' });
+
+      const ids = async (query: string) =>
+        (await model.searchAssignableMembers(workspaceId, { limit: 50, query })).rows.map(
+          (r) => r.userId,
+        );
+      expect(await ids('aaron')).toEqual([otherUserId]);
+      // Another workspace's nickname does not match here.
+      expect(await ids('zed')).toEqual([]);
+    });
+
+    it('caps the page with limit and reports the total before the cap', async () => {
+      const model = await seedDirectory();
+
+      const { rows, total } = await model.searchAssignableMembers(workspaceId, { limit: 1 });
+
+      expect(rows).toEqual([{ nickname: null, role: 'member', userId: memberId }]);
+      expect(total).toBe(3);
+    });
+
+    it('ignores soft-deleted members and other workspaces', async () => {
+      const model = await seedDirectory();
+      await model.removeMember(workspaceId, otherUserId);
+      await model.addMember({ userId: otherUserId, workspaceId: otherWorkspaceId });
+
+      const { rows, total } = await model.searchAssignableMembers(workspaceId, { limit: 50 });
+
+      expect(rows.map((r) => r.userId)).toEqual([memberId, inviterId]);
+      expect(total).toBe(2);
+    });
+  });
+
+  describe('getNicknames', () => {
+    it('maps active members of this workspace to their nickname', async () => {
+      const model = new WorkspaceMemberModel(serverDB, inviterId);
+      await model.addMember({ userId: memberId, workspaceId });
+      await model.addMember({ userId: otherUserId, workspaceId });
+      await model.addMember({ userId: otherUserId, workspaceId: otherWorkspaceId });
+      await model.updateMemberProfile(workspaceId, memberId, { nickname: 'Kuro' });
+      await model.updateMemberProfile(otherWorkspaceId, otherUserId, { nickname: 'Elsewhere' });
+
+      const nicknames = await model.getNicknames(workspaceId, [memberId, otherUserId, 'nobody']);
+
+      expect([...nicknames]).toEqual([[memberId, 'Kuro']]);
+      expect(await model.getNicknames(workspaceId, [])).toEqual(new Map());
+    });
+
+    it('drops a removed member', async () => {
+      const model = new WorkspaceMemberModel(serverDB, inviterId);
+      await model.addMember({ userId: memberId, workspaceId });
+      await model.updateMemberProfile(workspaceId, memberId, { nickname: 'Kuro' });
+      await model.removeMember(workspaceId, memberId);
+
+      expect((await model.getNicknames(workspaceId, [memberId])).size).toBe(0);
+    });
+  });
+
   describe('removeMember', () => {
     it('soft-deletes an active member', async () => {
       const model = new WorkspaceMemberModel(serverDB, inviterId);
@@ -168,6 +366,47 @@ describe('WorkspaceMemberModel', () => {
           and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, memberId)),
         );
       expect(row.deletedAt).not.toBeNull();
+    });
+
+    it('clears their job title, responsibilities and config (nickname included) so a re-invite starts without them', async () => {
+      const model = new WorkspaceMemberModel(serverDB, inviterId);
+      await model.addMember({ userId: memberId, workspaceId });
+      await model.updateMemberProfile(workspaceId, memberId, {
+        badgeColor: '#1f8a5b',
+        nickname: 'Ally',
+        title: 'Designer',
+        responsibilities: 'Design system',
+      });
+
+      await model.removeMember(workspaceId, memberId);
+      const revived = await model.addMember({ userId: memberId, workspaceId });
+
+      expect(revived.title).toBeNull();
+      expect(revived.responsibilities).toBeNull();
+      expect(revived.config).toEqual({});
+    });
+
+    it('drops their team memberships so a re-invite does not restore them', async () => {
+      const model = new WorkspaceMemberModel(serverDB, inviterId);
+      await model.addMember({ userId: memberId, workspaceId });
+      await model.addMember({ userId: memberId, workspaceId: otherWorkspaceId });
+      await serverDB.insert(workspaceTeams).values([
+        { id: 'wm-team', identifier: 'ENG', name: 'Eng', workspaceId },
+        { id: 'wm-other-team', identifier: 'ENG', name: 'Eng', workspaceId: otherWorkspaceId },
+      ]);
+      await serverDB.insert(workspaceTeamMembers).values([
+        { teamId: 'wm-team', userId: memberId, workspaceId },
+        { teamId: 'wm-other-team', userId: memberId, workspaceId: otherWorkspaceId },
+      ]);
+
+      await model.removeMember(workspaceId, memberId);
+      await model.addMember({ userId: memberId, workspaceId });
+
+      const rows = await serverDB
+        .select({ teamId: workspaceTeamMembers.teamId })
+        .from(workspaceTeamMembers)
+        .where(eq(workspaceTeamMembers.userId, memberId));
+      expect(rows).toEqual([{ teamId: 'wm-other-team' }]);
     });
 
     it('does not touch members of other workspaces', async () => {
@@ -234,6 +473,104 @@ describe('WorkspaceMemberModel', () => {
         .sort();
       expect(remaining).toEqual(['dep-personal', 'other-ws-private', 'team-box']);
     });
+
+    it('revokes the departing member grants, so a re-invite does not restore them', async () => {
+      const model = new WorkspaceMemberModel(serverDB, inviterId);
+      await model.addMember({ userId: memberId, workspaceId });
+      await serverDB.insert(resourcePermissions).values([
+        // the departing member's grant, and one in another workspace
+        {
+          accessLevel: 'edit',
+          resourceId: 'kb-1',
+          resourceType: 'knowledgeBase',
+          userId: memberId,
+          workspaceId,
+        },
+        {
+          accessLevel: 'edit',
+          resourceId: 'kb-9',
+          resourceType: 'knowledgeBase',
+          userId: memberId,
+          workspaceId: otherWorkspaceId,
+        },
+        // another member's grant, and the workspace-wide row on the same resource
+        {
+          accessLevel: 'edit',
+          resourceId: 'kb-1',
+          resourceType: 'knowledgeBase',
+          userId: otherUserId,
+          workspaceId,
+        },
+        { accessLevel: 'use', resourceId: 'kb-1', resourceType: 'knowledgeBase', workspaceId },
+      ]);
+
+      await model.removeMember(workspaceId, memberId);
+      // membership is only soft-deleted, and re-inviting revives that same row
+      await model.addMember({ userId: memberId, workspaceId });
+
+      const remaining = await serverDB
+        .select({
+          resourceId: resourcePermissions.resourceId,
+          userId: resourcePermissions.userId,
+          workspaceId: resourcePermissions.workspaceId,
+        })
+        .from(resourcePermissions);
+      expect(remaining).toEqual(
+        expect.arrayContaining([
+          { resourceId: 'kb-9', userId: memberId, workspaceId: otherWorkspaceId },
+          { resourceId: 'kb-1', userId: otherUserId, workspaceId },
+          { resourceId: 'kb-1', userId: null, workspaceId },
+        ]),
+      );
+      expect(remaining).toHaveLength(3);
+    });
+
+    it('clears only the departing member task assignments in that workspace', async () => {
+      const model = new WorkspaceMemberModel(serverDB, inviterId);
+      await model.addMember({ userId: memberId, workspaceId });
+      await serverDB.insert(tasks).values([
+        {
+          assigneeUserId: memberId,
+          createdByUserId: inviterId,
+          id: 'wm-task-departing-member',
+          identifier: 'WM-1',
+          instruction: 'Assigned to the departing member',
+          seq: 1,
+          workspaceId,
+        },
+        {
+          assigneeUserId: otherUserId,
+          createdByUserId: inviterId,
+          id: 'wm-task-other-member',
+          identifier: 'WM-2',
+          instruction: 'Assigned to another member',
+          seq: 2,
+          workspaceId,
+        },
+        {
+          assigneeUserId: memberId,
+          createdByUserId: otherUserId,
+          id: 'wm-task-other-workspace',
+          identifier: 'OTHER-1',
+          instruction: 'Assigned in another workspace',
+          seq: 1,
+          workspaceId: otherWorkspaceId,
+        },
+      ]);
+
+      await model.removeMember(workspaceId, memberId);
+
+      const taskRows = await serverDB.select().from(tasks);
+      expect(
+        taskRows.find((task) => task.id === 'wm-task-departing-member')?.assigneeUserId,
+      ).toBeNull();
+      expect(taskRows.find((task) => task.id === 'wm-task-other-member')?.assigneeUserId).toBe(
+        otherUserId,
+      );
+      expect(taskRows.find((task) => task.id === 'wm-task-other-workspace')?.assigneeUserId).toBe(
+        memberId,
+      );
+    });
   });
 
   describe('updateMemberRole', () => {
@@ -260,6 +597,138 @@ describe('WorkspaceMemberModel', () => {
         .where(eq(workspaceMembers.userId, memberId));
       expect(row.role).toBe('member');
     });
+
+    it('clears task assignments when a member becomes a viewer', async () => {
+      const model = new WorkspaceMemberModel(serverDB, inviterId);
+      await model.addMember({ role: 'member', userId: memberId, workspaceId });
+      await serverDB.insert(tasks).values({
+        assigneeUserId: memberId,
+        createdByUserId: inviterId,
+        id: 'wm-task-role-downgrade',
+        identifier: 'WM-ROLE-1',
+        instruction: 'Assigned before the role downgrade',
+        seq: 1,
+        workspaceId,
+      });
+
+      await model.updateMemberRole(workspaceId, memberId, 'viewer');
+
+      const [task] = await serverDB
+        .select()
+        .from(tasks)
+        .where(eq(tasks.id, 'wm-task-role-downgrade'));
+      expect(task.assigneeUserId).toBeNull();
+    });
+
+    it('preserves task assignments when a member changes to another eligible role', async () => {
+      const model = new WorkspaceMemberModel(serverDB, inviterId);
+      await model.addMember({ role: 'member', userId: memberId, workspaceId });
+      await serverDB.insert(tasks).values({
+        assigneeUserId: memberId,
+        createdByUserId: inviterId,
+        id: 'wm-task-eligible-role',
+        identifier: 'WM-ROLE-2',
+        instruction: 'Assigned before the eligible role change',
+        seq: 1,
+        workspaceId,
+      });
+
+      await model.updateMemberRole(workspaceId, memberId, 'admin');
+
+      const [task] = await serverDB
+        .select()
+        .from(tasks)
+        .where(eq(tasks.id, 'wm-task-eligible-role'));
+      expect(task.assigneeUserId).toBe(memberId);
+    });
+  });
+
+  describe('updateMemberProfile', () => {
+    it('sets and clears the profile of an active member', async () => {
+      const model = new WorkspaceMemberModel(serverDB, inviterId);
+      await model.addMember({ userId: memberId, workspaceId });
+
+      const updated = await model.updateMemberProfile(workspaceId, memberId, {
+        title: 'Product Manager',
+        responsibilities: 'Owns the mobile roadmap',
+      });
+      expect(updated?.title).toBe('Product Manager');
+      expect(updated?.responsibilities).toBe('Owns the mobile roadmap');
+
+      const nicknamed = await model.updateMemberProfile(workspaceId, memberId, {
+        nickname: 'Kuro',
+      });
+      expect(nicknamed?.config).toEqual({ nickname: 'Kuro' });
+      expect(nicknamed?.title).toBe('Product Manager');
+
+      const cleared = await model.updateMemberProfile(workspaceId, memberId, {
+        nickname: null,
+        title: null,
+      });
+      expect(cleared?.title).toBeNull();
+      // an omitted field is left untouched
+      expect(cleared?.responsibilities).toBe('Owns the mobile roadmap');
+      expect(cleared?.config).toEqual({});
+    });
+
+    it('keeps the badge color in config, leaving other config keys and fields alone', async () => {
+      const model = new WorkspaceMemberModel(serverDB, inviterId);
+      await model.addMember({ userId: memberId, workspaceId });
+      await serverDB
+        .update(workspaceMembers)
+        .set({ config: { other: 1 } as never })
+        .where(
+          and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, memberId)),
+        );
+
+      const colored = await model.updateMemberProfile(workspaceId, memberId, {
+        badgeColor: '#1f8a5b',
+        title: 'Designer',
+      });
+      expect(colored?.config).toEqual({ badgeColor: '#1f8a5b', other: 1 });
+      expect(colored?.title).toBe('Designer');
+
+      const recolored = await model.updateMemberProfile(workspaceId, memberId, {
+        badgeColor: '#123456',
+      });
+      expect(recolored?.config).toEqual({ badgeColor: '#123456', other: 1 });
+      expect(recolored?.title).toBe('Designer');
+
+      const reset = await model.updateMemberProfile(workspaceId, memberId, { badgeColor: null });
+      expect(reset?.config).toEqual({ other: 1 });
+
+      // One edit can set one config key and clear another.
+      await model.updateMemberProfile(workspaceId, memberId, { badgeColor: '#abcdef' });
+      const swapped = await model.updateMemberProfile(workspaceId, memberId, {
+        badgeColor: null,
+        nickname: 'Kuro',
+      });
+      expect(swapped?.config).toEqual({ nickname: 'Kuro', other: 1 });
+    });
+
+    it('keeps the profile per workspace', async () => {
+      const model = new WorkspaceMemberModel(serverDB, inviterId);
+      await model.addMember({ userId: memberId, workspaceId });
+      await model.addMember({ userId: memberId, workspaceId: otherWorkspaceId });
+
+      await model.updateMemberProfile(workspaceId, memberId, { nickname: 'Al', title: 'Engineer' });
+      await model.updateMemberProfile(otherWorkspaceId, memberId, { title: 'Advisor' });
+
+      expect((await model.getMember(workspaceId, memberId))?.title).toBe('Engineer');
+      expect((await model.getMember(otherWorkspaceId, memberId))?.title).toBe('Advisor');
+      expect((await model.getMember(workspaceId, memberId))?.config.nickname).toBe('Al');
+      expect((await model.getMember(otherWorkspaceId, memberId))?.config.nickname).toBeUndefined();
+    });
+
+    it('does not update a soft-deleted member', async () => {
+      const model = new WorkspaceMemberModel(serverDB, inviterId);
+      await model.addMember({ userId: memberId, workspaceId });
+      await model.removeMember(workspaceId, memberId);
+
+      const result = await model.updateMemberProfile(workspaceId, memberId, { title: 'Ghost' });
+
+      expect(result).toBeUndefined();
+    });
   });
 
   describe('createInvitation', () => {
@@ -285,7 +754,7 @@ describe('WorkspaceMemberModel', () => {
       expect(result.role).toBe('admin');
       expect(result.email).toBeNull();
       const expectedMs = INVITATION_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
-      const diff = result.expiresAt.getTime() - before;
+      const diff = result.expiresAt!.getTime() - before;
       // allow generous slack for test execution time
       expect(diff).toBeGreaterThan(expectedMs - 60_000);
       expect(diff).toBeLessThan(expectedMs + 60_000);
@@ -298,6 +767,28 @@ describe('WorkspaceMemberModel', () => {
       const b = await model.createInvitation({ workspaceId });
 
       expect(a.token).not.toBe(b.token);
+    });
+
+    it('allows a null expiry only on reusable invitations (database check constraint)', async () => {
+      await expect(
+        serverDB.insert(workspaceInvitations).values({
+          inviterId,
+          token: 'single-use-without-expiry',
+          workspaceId,
+        }),
+      ).rejects.toThrow();
+
+      const [link] = await serverDB
+        .insert(workspaceInvitations)
+        .values({ inviterId, reusable: true, token: 'link-without-expiry', workspaceId })
+        .returning();
+      expect(link).toMatchObject({ expiresAt: null, reusable: true });
+
+      const single = await new WorkspaceMemberModel(serverDB, inviterId).createInvitation({
+        workspaceId,
+      });
+      expect(single.reusable).toBe(false);
+      expect(single.expiresAt).toBeInstanceOf(Date);
     });
   });
 
@@ -315,6 +806,129 @@ describe('WorkspaceMemberModel', () => {
       const model = new WorkspaceMemberModel(serverDB, inviterId);
 
       expect(await model.findInvitationByToken('does-not-exist')).toBeUndefined();
+    });
+  });
+
+  describe('share link invitations', () => {
+    it('createLinkInvitation creates reusable links; several can be live at once', async () => {
+      const model = new WorkspaceMemberModel(serverDB, inviterId);
+
+      const first = await model.createLinkInvitation({ expiresAt: null, workspaceId });
+      expect(first).toMatchObject({
+        email: null,
+        expiresAt: null,
+        inviterId,
+        reusable: true,
+        role: 'member',
+        status: 'pending',
+      });
+      expect(first.token).toHaveLength(32);
+
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      const second = await model.createLinkInvitation({ expiresAt, role: 'viewer', workspaceId });
+      expect(second.token).not.toBe(first.token);
+      expect(second.expiresAt?.getTime()).toBe(expiresAt.getTime());
+
+      // Both stay live: creating a link does not revoke the others.
+      expect((await model.listLinkInvitations(workspaceId)).map((row) => row.id)).toEqual([
+        second.id,
+        first.id,
+      ]);
+      expect(await model.countLinkInvitations(workspaceId)).toBe(2);
+    });
+
+    it('listLinkInvitations leaves out revoked, expired, single-use and other workspaces', async () => {
+      const model = new WorkspaceMemberModel(serverDB, inviterId);
+      const live = await model.createLinkInvitation({ expiresAt: null, workspaceId });
+      const revoked = await model.createLinkInvitation({ expiresAt: null, workspaceId });
+      await model.revokeLinkInvitation(workspaceId, revoked.id);
+      await model.createLinkInvitation({ expiresAt: new Date(Date.now() - 1000), workspaceId });
+      await model.createInvitation({ workspaceId });
+      await new WorkspaceMemberModel(serverDB, otherUserId).createLinkInvitation({
+        expiresAt: null,
+        workspaceId: otherWorkspaceId,
+      });
+
+      expect((await model.listLinkInvitations(workspaceId)).map((row) => row.id)).toEqual([
+        live.id,
+      ]);
+      expect(await model.countLinkInvitations(workspaceId)).toBe(1);
+    });
+
+    it('countLinkInvitations degrades to 0 when the aggregate returns no row', async () => {
+      // `count()` always yields exactly one row, so the `?? 0` is a driver-level
+      // guard: a backend that answers with no row must not hand `undefined` to
+      // the per-workspace cap check.
+      const spy = vi.spyOn(serverDB, 'select').mockReturnValueOnce({
+        from: () => ({ where: async () => [] }),
+      } as unknown as ReturnType<LobeChatDatabase['select']>);
+
+      expect(
+        await new WorkspaceMemberModel(serverDB, inviterId).countLinkInvitations(workspaceId),
+      ).toBe(0);
+      expect(spy).toHaveBeenCalledTimes(1);
+    });
+
+    it('revokeLinkInvitation revokes only that live link of that workspace', async () => {
+      const model = new WorkspaceMemberModel(serverDB, inviterId);
+      const a = await model.createLinkInvitation({ expiresAt: null, workspaceId });
+      const b = await model.createLinkInvitation({ expiresAt: null, workspaceId });
+      const single = await model.createInvitation({ workspaceId });
+
+      // Wrong workspace, single-use invitation and unknown id are no-ops.
+      expect(await model.revokeLinkInvitation(otherWorkspaceId, a.id)).toBe(false);
+      expect(await model.revokeLinkInvitation(workspaceId, single.id)).toBe(false);
+      expect(await model.revokeLinkInvitation(workspaceId, 'missing')).toBe(false);
+
+      expect(await model.revokeLinkInvitation(workspaceId, a.id)).toBe(true);
+      expect(await model.revokeLinkInvitation(workspaceId, a.id)).toBe(false);
+
+      expect((await model.findInvitationByToken(a.token))?.status).toBe('revoked');
+      expect((await model.findInvitationByToken(b.token))?.status).toBe('pending');
+      expect((await model.findInvitationByToken(single.token))?.status).toBe('pending');
+    });
+
+    it('listPendingInvitations excludes share links', async () => {
+      const model = new WorkspaceMemberModel(serverDB, inviterId);
+      const single = await model.createInvitation({ workspaceId });
+      await model.createLinkInvitation({ expiresAt: null, workspaceId });
+
+      const rows = await model.listPendingInvitations(workspaceId);
+
+      expect(rows.map((row) => row.id)).toEqual([single.id]);
+    });
+
+    it('countJoinsByInvitation counts member.joined entries per invitation', async () => {
+      const audit = new WorkspaceAuditLogModel(serverDB);
+      const join = (invitationId: string, userId: string) =>
+        audit.create({
+          action: 'member.joined',
+          metadata: { invitationId, source: 'link' },
+          resourceId: userId,
+          resourceType: 'member',
+          userId,
+          workspaceId,
+        });
+      await join('link-a', inviterId);
+      await join('link-a', otherUserId);
+      await join('link-b', inviterId);
+      await audit.create({
+        action: 'invitation.revoked',
+        metadata: { invitationId: 'link-a' },
+        resourceId: 'link-a',
+        resourceType: 'invitation',
+        userId: inviterId,
+        workspaceId,
+      });
+
+      const counts = await audit.countJoinsByInvitation(workspaceId, [
+        'link-a',
+        'link-b',
+        'link-c',
+      ]);
+
+      expect(Object.fromEntries(counts)).toEqual({ 'link-a': 2, 'link-b': 1 });
+      expect((await audit.countJoinsByInvitation(workspaceId, [])).size).toBe(0);
     });
   });
 

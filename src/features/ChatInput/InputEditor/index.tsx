@@ -1,37 +1,41 @@
 import { isDesktop, TRACING_SCENARIOS } from '@lobechat/const';
-import { HotkeyEnum, KeyEnum } from '@lobechat/const/hotkeys';
 import { HETEROGENEOUS_TYPE_LABELS } from '@lobechat/heterogeneous-agents';
 import {
   chainInputCompletion,
   INPUT_COMPLETION_PROMPT_VERSION,
   INPUT_COMPLETION_SCHEMA_NAME,
 } from '@lobechat/prompts';
+import { RequestTrigger } from '@lobechat/types';
 import { isCommandPressed } from '@lobechat/utils';
 import type { IEditor, ISlashMenuOption, ISlashSectionOption } from '@lobehub/editor';
 import { INSERT_MENTION_COMMAND, ReactAutoCompletePlugin } from '@lobehub/editor';
 import { Editor, useEditorState } from '@lobehub/editor/react';
-import { combineKeys } from '@lobehub/ui';
-import { css, cx } from 'antd-style';
+// oxlint-disable-next-line stylex-migration/no-emotion-styles -- Lexical editor paragraphs take no className
+import { createStaticStyles, cx } from '@lobehub/ui';
+import * as stylex from '@stylexjs/stylex';
 import Fuse from 'fuse.js';
 import { KEY_ESCAPE_COMMAND } from 'lexical';
 import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef } from 'react';
-import { useHotkeysContext } from 'react-hotkeys-hook';
 import { useTranslation } from 'react-i18next';
 
 import { usePasteFile, useUploadFiles } from '@/components/DragUploadZone';
 import { useEnterToSend } from '@/hooks/useEnterToSend';
 import { useIMECompositionEvent } from '@/hooks/useIMECompositionEvent';
 import { usePermission } from '@/hooks/usePermission';
+import { useSingleton } from '@/hooks/useSingleton';
 import { aiChatService } from '@/services/aiChat';
+import {
+  prepareMentionedMarketAgent,
+  prepareMentionedMarketSkill,
+} from '@/services/mentionMarketInstall';
 import { useAgentStore } from '@/store/agent';
 import { agentByIdSelectors } from '@/store/agent/selectors';
 import { useChatStore } from '@/store/chat';
 import { useServerConfigStore } from '@/store/serverConfig';
 import { useUserStore } from '@/store/user';
 import {
-  labPreferSelectors,
-  settingsSelectors,
   systemAgentSelectors,
+  userGeneralSettingsSelectors,
   userProfileSelectors,
 } from '@/store/user/selectors';
 
@@ -39,40 +43,50 @@ import { useAgentId } from '../hooks/useAgentId';
 import { useChatInputDraft } from '../hooks/useChatInputDraft';
 import { useChatInputHistory } from '../hooks/useChatInputHistory';
 import { useChatInputResourceAccess } from '../hooks/useChatInputResourceAccess';
+import { useChatInputUploadKey } from '../hooks/useChatInputUpload';
 import { useEffectiveModel } from '../hooks/useEffectiveModel';
+import { useLargeFileLocalPath } from '../hooks/useLargeFileLocalPath';
 import { useChatInputStore, useStoreApi } from '../store';
 import {
   INSERT_ACTION_TAG_COMMAND,
   type InsertActionTagPayload,
   useSlashActionItems,
 } from './ActionTag';
+import { useImageRefTagSync } from './ImageRefTag';
 import { createInputCompletionError, isInputCompletionAbortError } from './inputCompletionError';
 import InputHistoryPopup, { getHistoryPreviewText } from './InputHistoryPopup';
 import { INSERT_LOCAL_FILE_TAG_COMMAND } from './LocalFileTag';
-import { mentionFilledClassName } from './mentionStyle';
+import { searchMarketForMention, toMarketAgentItem, toMarketSkillItem } from './marketMentionItems';
+import {
+  AGENT_CATEGORY_IDS,
+  DEFAULT_MENTION_GROUP_LIMIT,
+  limitMentionGroups,
+  mergeIntoCategory,
+  SEARCH_MENTION_GROUP_LIMIT,
+  SKILL_PRECEDING_IDS,
+} from './mentionMenuSections';
+import { mentionPlainClassName } from './mentionStyle';
 import Placeholder, { type PlaceholderVariant } from './Placeholder';
-import { CHAT_INPUT_EMBED_PLUGINS, createChatInputRichPlugins } from './plugins';
+import { createChatInputRichPlugins } from './plugins';
 import { INSERT_REFER_TOPIC_COMMAND } from './ReferTopic';
 import { useLocalFileTag } from './useLocalFileTag';
 import { useMentionCategories } from './useMentionCategories';
 
-const className = cx(
-  css`
+const fallback = createStaticStyles(({ css }) => ({
+  editor: css`
     p {
       margin-block-end: 0;
     }
   `,
-  mentionFilledClassName,
-);
+}));
+
+const className = cx(fallback.editor, mentionPlainClassName);
 
 // Single-line dimmed preview of the highlighted history entry, shown through the
 // editor's placeholder slot while the input is empty (history popup open).
-const ghostClassName = cx(css`
-  overflow: hidden;
-  display: block;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-`);
+const ghostStyles = stylex.create({
+  root: { overflow: 'hidden', display: 'block', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+});
 
 type MentionOption = ISlashMenuOption | ISlashSectionOption;
 
@@ -116,9 +130,7 @@ const InputEditor = memo<{
   // view-level General access on the bound agent/group = full read-only input,
   // matching the workspace-viewer treatment (ChatInputNotice explains why).
   const { canUseResource } = useChatInputResourceAccess();
-  const hotkey = useUserStore(settingsSelectors.getHotkeyById(HotkeyEnum.AddUserMessage));
   const userId = useUserStore(userProfileSelectors.userId);
-  const { enableScope, disableScope } = useHotkeysContext();
   const agentId = useAgentId();
   const inputHistoryScope = useMemo(() => ({ agentId, userId }), [agentId, userId]);
 
@@ -138,7 +150,7 @@ const InputEditor = memo<{
   });
 
   // --- Category-based mention system ---
-  const categories = useMentionCategories();
+  const { categories, market } = useMentionCategories();
 
   // Get agent's model info for vision support check and handle paste upload
   const { model, provider } = useEffectiveModel(agentId);
@@ -149,9 +161,11 @@ const InputEditor = memo<{
   const { enableLocalFileTag, searchLocalFiles } = useLocalFileTag();
 
   const allMentionItems = useMemo(() => categories.flatMap((c) => c.items), [categories]);
+  // Before the user types, agents and skills (installed first, then the
+  // Market's top entries) show only a few each; typing filters all of them.
   const mentionSections = useMemo<ISlashSectionOption[]>(
     () =>
-      categories.map((category) => ({
+      limitMentionGroups(categories, DEFAULT_MENTION_GROUP_LIMIT).map((category) => ({
         items: category.items,
         key: `mention-section-${category.id}`,
         label: category.label,
@@ -163,7 +177,9 @@ const InputEditor = memo<{
   const fuse = useMemo(
     () =>
       new Fuse(allMentionItems, {
-        keys: ['key', 'label', 'metadata.topicTitle'],
+        // Agent labels are ReactNodes (name + role + description), which Fuse
+        // skips — their searchable text lives in `metadata.label`/`searchText`.
+        keys: ['key', 'label', 'metadata.label', 'metadata.searchText', 'metadata.topicTitle'],
         threshold: 0.3,
       }),
     [allMentionItems],
@@ -174,30 +190,58 @@ const InputEditor = memo<{
       search: { leadOffset: number; matchingString: string; replaceableString: string } | null,
     ) => {
       if (search?.matchingString) {
-        const [localFileItems, mentionItems] = await Promise.all([
+        const [localFileItems, mentionItems, marketResult] = await Promise.all([
           searchLocalFiles(search.matchingString),
           Promise.resolve(fuse.search(search.matchingString).map((r) => r.item)),
+          searchMarketForMention(search.matchingString, market),
         ]);
 
         const rankByKey = new Map(mentionItems.map((item, index) => [String(item.key), index]));
-        const matchedSections = categories
-          .map((category): ISlashSectionOption => {
-            const items = category.items
-              .filter((item) => rankByKey.has(String(item.key)))
-              .sort(
-                (a, b) =>
-                  (rankByKey.get(String(a.key)) ?? Number.MAX_SAFE_INTEGER) -
-                  (rankByKey.get(String(b.key)) ?? Number.MAX_SAFE_INTEGER),
-              );
+        let matchedCategories = categories.map((category) => ({
+          ...category,
+          items: category.items
+            .filter((item) => rankByKey.has(String(item.key)))
+            .sort(
+              (a, b) =>
+                (rankByKey.get(String(a.key)) ?? Number.MAX_SAFE_INTEGER) -
+                (rankByKey.get(String(b.key)) ?? Number.MAX_SAFE_INTEGER),
+            ),
+        }));
 
-            return {
-              items,
-              key: `mention-section-${category.id}`,
-              label: category.label,
-              type: 'section',
-            };
-          })
-          .filter((section) => section.items.length > 0);
+        // Search reaches beyond the prefetched top entries; uninstalled matches
+        // join the same sections as installed ones.
+        if (market.agentCategory) {
+          matchedCategories = mergeIntoCategory(
+            matchedCategories,
+            {
+              ...market.agentCategory,
+              items: marketResult.agents
+                .filter((agent) => !market.installedAgentSources.has(agent.identifier))
+                .map((agent) => toMarketAgentItem(agent, market.agentVisibility)),
+            },
+            AGENT_CATEGORY_IDS,
+          );
+        }
+        matchedCategories = mergeIntoCategory(
+          matchedCategories,
+          {
+            ...market.skillCategory,
+            items: marketResult.skills
+              .filter((skill) => !market.installedSkills.has(skill.identifier))
+              .map(toMarketSkillItem),
+          },
+          SKILL_PRECEDING_IDS,
+        );
+
+        const matchedSections = limitMentionGroups(
+          matchedCategories,
+          SEARCH_MENTION_GROUP_LIMIT,
+        ).map((category): ISlashSectionOption => ({
+          items: category.items,
+          key: `mention-section-${category.id}`,
+          label: category.label,
+          type: 'section',
+        }));
 
         if (localFileItems.length > 0) {
           return [
@@ -215,10 +259,12 @@ const InputEditor = memo<{
       }
       return mentionSections;
     },
-    [categories, fuse, mentionSections, searchLocalFiles, t],
+    [categories, fuse, market, mentionSections, searchLocalFiles, t],
   );
 
-  const enableMention = isMentionEnabled && (allMentionItems.length > 0 || enableLocalFileTag);
+  const enableMention =
+    isMentionEnabled &&
+    (allMentionItems.length > 0 || enableLocalFileTag || market.agents || market.skills);
   const heterogeneousName = heterogeneousType
     ? (HETEROGENEOUS_TYPE_LABELS[heterogeneousType] ?? heterogeneousType)
     : undefined;
@@ -227,10 +273,24 @@ const InputEditor = memo<{
     isMentionEnabled &&
     !heterogeneousName &&
     categories.some((category) => category.id === 'agent');
-  const { handleUploadFiles } = useUploadFiles({ agentId, model, provider });
+  const uploadContextKey = useChatInputUploadKey();
+  const { handleUploadFiles } = useUploadFiles({
+    agentId,
+    contextKey: uploadContextKey,
+    model,
+    provider,
+  });
+  const routeLargeFilesToLocalPaths = useLargeFileLocalPath(agentId, editor);
+  const handlePasteFiles = useCallback(
+    (files: File[]) => handleUploadFiles(routeLargeFilesToLocalPaths(files)),
+    [handleUploadFiles, routeLargeFilesToLocalPaths],
+  );
 
   // Listen to editor's paste event for file uploads
-  usePasteFile(editor, handleUploadFiles);
+  usePasteFile(editor, handlePasteFiles);
+  // Attaching an image inserts no inline reference; references saved in older drafts and
+  // messages still follow removals and renumbering.
+  useImageRefTagSync(editor);
 
   useEffect(() => {
     const fn = (e: BeforeUnloadEvent) => {
@@ -246,7 +306,7 @@ const InputEditor = memo<{
     };
   }, [state.isEmpty]);
 
-  const enableRichRender = useUserStore(labPreferSelectors.enableInputMarkdown);
+  const enablePasteAutoConvert = useUserStore(userGeneralSettingsSelectors.enablePasteAutoConvert);
 
   const slashActionItems = useSlashActionItems();
   const slashItems = useCallback(
@@ -269,18 +329,20 @@ const InputEditor = memo<{
     storeApi.getState().clearInputCompletionError();
   }, [inputCompletionConfig.model, inputCompletionConfig.provider, storeApi]);
 
-  const getMessagesRef = useRef(storeApi.getState().getMessages);
+  const getMessagesRef = useSingleton(() => ({
+    current: storeApi.getState().getMessages,
+  }));
   useEffect(() => {
     return storeApi.subscribe((s) => {
       getMessagesRef.current = s.getMessages;
     });
-  }, [storeApi]);
+  }, [getMessagesRef, storeApi]);
 
   // Map each in-flight suggestion to its tracing row so the Tab/Esc/typing
   // callbacks below can report `recordFeedback` against the correct id.
   // Keyed by editor-provided `suggestionId`; entries are dropped on
   // accept/reject (the plugin guarantees one of those eventually fires).
-  const tracingIdBySuggestionRef = useRef<Map<string, string>>(new Map());
+  const tracingIdBySuggestion = useSingleton(() => new Map<string, string>());
 
   const handleAutoComplete = useCallback(
     async ({
@@ -321,6 +383,7 @@ const InputEditor = memo<{
         envelope = (await aiChatService.generateJSON(
           {
             messages,
+            metadata: { trigger: RequestTrigger.InputCompletion },
             model: config.model,
             provider: config.provider,
             schema,
@@ -355,11 +418,11 @@ const InputEditor = memo<{
       if (!completion) return null;
 
       if (suggestionId && envelope?.tracingId) {
-        tracingIdBySuggestionRef.current.set(suggestionId, envelope.tracingId);
+        tracingIdBySuggestion.set(suggestionId, envelope.tracingId);
       }
       return completion;
     },
-    [isComposingRef, storeApi, agentId],
+    [agentId, getMessagesRef, isComposingRef, storeApi, tracingIdBySuggestion],
   );
 
   const handleSuggestionAccepted = useCallback(
@@ -372,9 +435,9 @@ const InputEditor = memo<{
       suggestionId: string;
       visibleMs: number;
     }) => {
-      const tracingId = tracingIdBySuggestionRef.current.get(suggestionId);
+      const tracingId = tracingIdBySuggestion.get(suggestionId);
       if (!tracingId) return;
-      tracingIdBySuggestionRef.current.delete(suggestionId);
+      tracingIdBySuggestion.delete(suggestionId);
       aiChatService
         .recordTracingFeedback({
           data: { acceptedText, visibleMs },
@@ -386,7 +449,7 @@ const InputEditor = memo<{
           console.warn('[InputCompletion] recordFeedback (accepted) failed', err);
         });
     },
-    [],
+    [tracingIdBySuggestion],
   );
 
   const handleSuggestionRejected = useCallback(
@@ -399,9 +462,9 @@ const InputEditor = memo<{
       suggestionId: string;
       visibleMs: number;
     }) => {
-      const tracingId = tracingIdBySuggestionRef.current.get(suggestionId);
+      const tracingId = tracingIdBySuggestion.get(suggestionId);
       if (!tracingId) return;
-      tracingIdBySuggestionRef.current.delete(suggestionId);
+      tracingIdBySuggestion.delete(suggestionId);
       // IME composition starts by dispatching KEY_ESCAPE_COMMAND from this
       // component (see onCompositionStart below); that arrives here with
       // reason='esc' but it isn't a real reject — recode as neutral so the
@@ -421,7 +484,7 @@ const InputEditor = memo<{
           console.warn('[InputCompletion] recordFeedback (rejected) failed', err);
         });
     },
-    [isComposingRef],
+    [isComposingRef, tracingIdBySuggestion],
   );
 
   const autoCompletePlugin = useMemo(
@@ -461,6 +524,7 @@ const InputEditor = memo<{
         type: String(option.metadata.actionType),
       };
       editor.dispatchCommand(INSERT_ACTION_TAG_COMMAND, payload);
+      if (option.metadata.marketSkill) prepareMentionedMarketSkill(payload.type);
     } else if (option.metadata?.type === 'localFile') {
       editor.dispatchCommand(INSERT_LOCAL_FILE_TAG_COMMAND, {
         isDirectory: !!option.metadata.isDirectory,
@@ -468,8 +532,18 @@ const InputEditor = memo<{
         path: String(option.metadata.path ?? ''),
       });
     } else {
+      // Ready a Market agent (its hidden copy and Market skills) as soon as it is
+      // picked; the send then only waits for what is still unfinished.
+      if (typeof option.metadata?.marketIdentifier === 'string') {
+        prepareMentionedMarketAgent(
+          option.metadata.marketIdentifier,
+          option.metadata.marketVisibility === 'private' ? 'private' : 'public',
+        );
+      }
+      // Agent options carry a ReactNode label; the chip needs the plain name
+      // kept in `metadata.label`. Other types (member) still use `label` itself.
       editor.dispatchCommand(INSERT_MENTION_COMMAND, {
-        label: String(option.label),
+        label: String(option.metadata?.label ?? option.label),
         metadata: option.metadata,
       });
     }
@@ -493,17 +567,11 @@ const InputEditor = memo<{
     [isSlashEnabled, slashItems],
   );
 
-  const richRenderProps = useMemo(() => {
-    const basePlugins = !enableRichRender
-      ? CHAT_INPUT_EMBED_PLUGINS
-      : createChatInputRichPlugins({ linkPlugin: false });
+  const plugins = useMemo(() => {
+    const basePlugins = createChatInputRichPlugins({ linkPlugin: false });
 
-    const plugins = autoCompletePlugin ? [...basePlugins, autoCompletePlugin] : basePlugins;
-
-    return !enableRichRender
-      ? { enablePasteMarkdown: false, markdownOption: false, plugins }
-      : { plugins };
-  }, [enableRichRender, autoCompletePlugin]);
+    return autoCompletePlugin ? [...basePlugins, autoCompletePlugin] : basePlugins;
+  }, [autoCompletePlugin]);
 
   const handleEditorInit = useCallback(
     (editor: IEditor) => {
@@ -548,8 +616,9 @@ const InputEditor = memo<{
         editor={editor}
         getPopupContainer={() => (slashMenuRef as any)?.current ?? null}
         {...{ slashPlacement }}
-        {...richRenderProps}
+        enablePasteMarkdown={enablePasteAutoConvert}
         mentionOption={mentionOption}
+        plugins={plugins}
         slashOption={slashOption}
         type={'text'}
         variant={'chat'}
@@ -563,7 +632,7 @@ const InputEditor = memo<{
               />
             ))
           ) : (
-            <span className={ghostClassName}>{getHistoryPreviewText(ghostMarkdown)}</span>
+            <span {...stylex.props(ghostStyles.root)}>{getHistoryPreviewText(ghostMarkdown)}</span>
           )
         }
         style={{
@@ -573,7 +642,6 @@ const InputEditor = memo<{
         onCompositionEnd={({ event }) => compositionProps.onCompositionEnd(event)}
         onInit={handleEditorInit}
         onBlur={() => {
-          disableScope(HotkeyEnum.AddUserMessage);
           saveDraftDebounced.flush();
         }}
         onChange={() => {
@@ -604,9 +672,6 @@ const InputEditor = memo<{
             });
           }
         }}
-        onFocus={() => {
-          enableScope(HotkeyEnum.AddUserMessage);
-        }}
         onKeyDown={({ event }) => {
           if (inputHistory.handleKeyDown(event)) return true;
         }}
@@ -619,8 +684,6 @@ const InputEditor = memo<{
             return true;
           }
           if (e.shiftKey || isComposingRef.current) return;
-          // when user like alt + enter to add ai message
-          if (e.altKey && hotkey === combineKeys([KeyEnum.Alt, KeyEnum.Enter])) return true;
           // In fullscreen mode, Enter inserts newline; only Cmd/Ctrl+Enter sends
           if (expand) {
             if (isCommandPressed(e)) {

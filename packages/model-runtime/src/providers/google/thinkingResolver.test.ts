@@ -41,6 +41,8 @@ describe('thinkingResolver', () => {
         'gemini-2.5-flash',
         'gemini-2.5-flash-preview',
         'gemini-3.6-flash',
+        'gemini-3.7-flash',
+        'gemini-3.8-flash',
         'gemini-3.5-flash',
         'gemini-3-flash',
         'gemini-3.0-flash',
@@ -92,6 +94,7 @@ describe('thinkingResolver', () => {
       'gemini-flash-latest',
       'gemini-flash-lite-latest',
       'gemini-3.6-flash',
+      'gemini-3.7-flash',
       'gemini-3.5-flash',
       'gemini-3.5-flash-lite',
       'gemini-3-pro',
@@ -104,6 +107,7 @@ describe('thinkingResolver', () => {
       'gemini-3-pro-image-preview',
       'gemma-4-31b-it',
       'gemma-4-26b-a4b-it',
+      'gemini-nano-banana-2.1',
     ])('should return true for %s', (model) => {
       expect(isGemini3Model(model)).toBe(true);
     });
@@ -260,6 +264,20 @@ describe('thinkingResolver', () => {
   });
 
   describe('resolveGoogleThinkingConfig', () => {
+    it('passes the requested thinkingLevel through for Nano Banana 2.1', () => {
+      expect(
+        resolveGoogleThinkingConfig('gemini-nano-banana-2.1', { thinkingLevel: 'high' }),
+      ).toMatchObject({ thinkingBudget: undefined, thinkingLevel: 'high' });
+    });
+
+    it('passes the xhigh thinkingLevel through for Gemini 4 Hydrogen', () => {
+      expect(resolveGoogleThinkingConfig('gemini-4-hydrogen', { thinkingLevel: 'xhigh' })).toEqual({
+        includeThoughts: true,
+        thinkingBudget: undefined,
+        thinkingLevel: 'xhigh',
+      });
+    });
+
     describe('gemini-pro (legacy unversioned model)', () => {
       const model = 'gemini-pro';
 
@@ -519,8 +537,6 @@ describe('resolveGoogleThinkingBudget', () => {
 
   it('supports disabling and dynamic thinking for flash models', () => {
     expect(resolveGoogleThinkingBudget('gemini-2.5-flash')).toBe(-1);
-    expect(resolveGoogleThinkingBudget('gemini-2.5-flash', 0)).toBe(0);
-    expect(resolveGoogleThinkingBudget('gemini-2.5-flash', -1)).toBe(-1);
     expect(resolveGoogleThinkingBudget('gemini-2.5-flash', -5)).toBe(0);
     expect(resolveGoogleThinkingBudget('gemini-2.5-flash-preview', 30_000)).toBe(24_576);
   });

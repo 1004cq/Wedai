@@ -1,44 +1,69 @@
 /**
  * Tools Engineering - Unified tools processing using ToolsEngine
  */
-import { BrowserManifest } from '@lobechat/builtin-tool-browser';
-import { CloudSandboxManifest } from '@lobechat/builtin-tool-cloud-sandbox';
-import { ImageGenerationManifest } from '@lobechat/builtin-tool-image-generation';
-import { KnowledgeBaseManifest } from '@lobechat/builtin-tool-knowledge-base';
-import { LocalSystemManifest } from '@lobechat/builtin-tool-local-system';
-import { MemoryManifest } from '@lobechat/builtin-tool-memory';
-import { WebBrowsingManifest } from '@lobechat/builtin-tool-web-browsing';
-import { alwaysOnToolIds, chatModeAllowedToolIds, defaultToolIds } from '@lobechat/builtin-tools';
-import { createEnableChecker, type PluginEnableChecker } from '@lobechat/context-engine';
-import { ToolsEngine } from '@lobechat/context-engine';
+import { AuvManifest } from '@lobechat/builtin-tool-auv';
 import {
-  type BuiltinToolManifest,
+  getUnavailableBuiltinToolIds,
+  getUserDisabledToolIds,
+  isOnDemandBuiltinTool,
+} from '@lobechat/builtin-tools';
+import { getFeatureDisabledToolIds } from '@lobechat/builtin-tools/featureGates';
+import { serverOnlyToolIds } from '@lobechat/builtin-tools/serverOnly';
+import {
+  createEnableChecker,
+  type LobeToolManifest,
+  type PluginEnableChecker,
+  ToolsEngine,
+} from '@lobechat/context-engine';
+import { assembleManifestPool, resolveToolRules } from '@lobechat/mecha';
+import {
+  type AgentPluginEntry,
   type BuiltinToolResolveContext,
   type ChatCompletionTool,
+  getActivePluginIds,
+  getBuiltinOverrides,
+  getOptedInPluginIds,
+  type LobeAgentChatConfig,
+  resolveToolMode,
   type ToolManifest,
   type WorkingModel,
 } from '@lobechat/types';
 
-import type { ConnectorToolPermission } from '@/database/schemas';
 import { applyToolNameMaxLength } from '@/helpers/applyToolNameMaxLength';
 import { isToolAvailableInCurrentEnv } from '@/helpers/toolAvailability';
-import { patchManifestWithPermissions } from '@/libs/mcp/patchManifestPermissions';
+import { getRunConnectors } from '@/services/runConnectors';
 import { getAgentStoreState } from '@/store/agent';
-import { agentChatConfigSelectors, agentSelectors } from '@/store/agent/selectors';
+import {
+  agentChatConfigSelectors,
+  agentSelectors,
+  chatConfigByIdSelectors,
+} from '@/store/agent/selectors';
 import { aiModelSelectors, getAiInfraStoreState } from '@/store/aiInfra';
+import { getServerConfigStoreState } from '@/store/serverConfig';
 import { getToolStoreState } from '@/store/tool';
 import {
   composioStoreSelectors,
   lobehubSkillStoreSelectors,
   pluginSelectors,
 } from '@/store/tool/selectors';
-import { connectorSelectors } from '@/store/tool/slices/connector';
+import { runtimeUninstalledBuiltinTools } from '@/store/tool/slices/builtin/projection';
+import {
+  composioIdsOutsideRun,
+  connectorSelectors,
+  pickRunConnectors,
+  pickRunToolSets,
+} from '@/store/tool/slices/connector';
 import { useUserStore } from '@/store/user';
-import { labPreferSelectors, settingsSelectors } from '@/store/user/selectors';
+import { settingsSelectors } from '@/store/user/selectors';
 
 import { getSearchConfig } from '../getSearchConfig';
 import { isCanUseFC } from '../isCanUseFC';
 import { buildClientConnectorManifests } from './buildClientConnectorManifests';
+import {
+  type AgentConnectorActivation,
+  applyAgentConnectorActivation,
+  resolveAgentConnectorActivation,
+} from './connectorActivation';
 
 /**
  * Tools engine configuration options
@@ -46,6 +71,12 @@ import { buildClientConnectorManifests } from './buildClientConnectorManifests';
 export interface ToolsEngineConfig {
   /** Additional manifests to include beyond the standard ones */
   additionalManifests?: ToolManifest[];
+  /**
+   * The agent the run belongs to: a connector mounted on it outranks a free one
+   * of the same identifier, and one mounted on another agent is left out, as
+   * the server resolves them.
+   */
+  agentId?: string;
   /** Default tool IDs that will always be added to the end of the tools list */
   defaultToolIds?: string[];
   /**
@@ -59,50 +90,24 @@ export interface ToolsEngineConfig {
   /** Custom enable checker for plugins */
   enableChecker?: PluginEnableChecker;
   /**
+   * Offer the caller's private (私人) workspace connectors. Only a private
+   * agent's own conversation may load them — the server applies the same rule
+   * when it resolves the call — so every other caller leaves them out.
+   */
+  includePrivateConnectors?: boolean;
+  /**
    * Runtime context for context-aware builtin manifests. When provided, each
    * builtin tool with a `resolveManifest` produces its manifest for this context
    * (trimming APIs or opting out via `null`). Omit for context-free callers
    * (e.g. UI token estimation) — they get the full static manifests.
    */
   manifestContext?: BuiltinToolResolveContext;
+  /**
+   * The conversation's topic: with `agentId`, the connector rows the server
+   * listed for it (`connector.listForRun`) are the run's tool sets.
+   */
+  topicId?: string;
 }
-
-/**
- * A manifest is usable by ToolsEngine only if it has a non-empty `api` array.
- * ToolsEngine.convertManifestsToTools calls `manifest.api.map(...)` unconditionally,
- * so any entry with `api` missing / non-array will crash the whole tools build.
- * Sources that populate manifests (installed plugins, Composio, LobeHub skills, MCP)
- * have no shared schema validation, so we guard defensively at the merge point.
- */
-const isValidToolManifest = (m: ToolManifest | undefined): m is ToolManifest =>
-  !!m && typeof m === 'object' && Array.isArray((m as ToolManifest).api);
-
-const dropInvalidManifests = (manifests: (ToolManifest | undefined)[], source: string) => {
-  const valid: ToolManifest[] = [];
-  const dropped: Array<{ identifier?: string; reason: string }> = [];
-
-  for (const m of manifests) {
-    if (isValidToolManifest(m)) {
-      valid.push(m);
-    } else if (m) {
-      dropped.push({
-        identifier: (m as { identifier?: string }).identifier,
-        reason: Array.isArray((m as { api?: unknown }).api)
-          ? 'unknown'
-          : 'missing `api` field (expected array)',
-      });
-    }
-  }
-
-  if (dropped.length > 0) {
-    console.warn(
-      `[toolEngineering] Dropped ${dropped.length} invalid manifest(s) from ${source}:`,
-      dropped,
-    );
-  }
-
-  return valid;
-};
 
 /**
  * Initialize ToolsEngine with current manifest schemas and configurable options
@@ -111,8 +116,11 @@ export const createToolsEngine = (config: ToolsEngineConfig = {}): ToolsEngine =
   const {
     enableChecker,
     additionalManifests = [],
+    agentId,
+    topicId,
     defaultToolIds,
     disabledPluginIds = [],
+    includePrivateConnectors = false,
     manifestContext,
   } = config;
 
@@ -123,90 +131,99 @@ export const createToolsEngine = (config: ToolsEngineConfig = {}): ToolsEngine =
 
   const toolStoreState = getToolStoreState();
 
-  // Get custom connector manifests (user-added MCP servers). Connectors take
-  // priority over plugins: any plugin sharing a connector identifier is dropped
-  // so the connector (server-side execution with its stored token) wins.
-  const connectorManifests = buildClientConnectorManifests(
-    connectorSelectors.customConnectors(toolStoreState),
+  // The row each identifier runs on for tools another path executes (plugins,
+  // Composio, LobeHub skills), whose permissions are keyed by identifier.
+  const runConnectors = pickRunConnectors(connectorSelectors.connectorList(toolStoreState), {
+    agentId,
+    includePrivate: includePrivateConnectors,
+  });
+
+  // The connector tool sets: one per row the run may use, each under its own
+  // tool prefix. The conversation's server listing decides which rows those
+  // are — only it can tell whether this conversation may run the caller's own
+  // connections, and only it holds their personal ones; without a listing the
+  // local list stands in, split per row the way the server splits it.
+  // An agent-owned connection stands alone for its identifier, as the server's
+  // `pickConnectorToolSets` keeps a row bound to the agent.
+  const agentOwned = agentId
+    ? (toolStoreState.agentConnectors?.[agentId] ?? []).filter((c) => c.agentId === agentId)
+    : [];
+  const ownedIds = new Set(agentOwned.map((c) => c.identifier));
+  const listed = agentId ? getRunConnectors({ agentId, topicId }) : undefined;
+  const connectorToolSets = connectorSelectors
+    .executableMcpConnectors({
+      connectors:
+        listed ??
+        pickRunToolSets(
+          [
+            ...agentOwned,
+            ...(toolStoreState.connectors ?? []).filter((c) => !ownedIds.has(c.identifier)),
+          ],
+          { agentId, includePrivate: includePrivateConnectors },
+        ),
+      installedPlugins: toolStoreState.installedPlugins,
+    })
+    .filter((c) => c.isEnabled && c.status === 'connected');
+
+  // A Composio app whose only connections this run may not use offers no tools
+  const composioOutsideRun = composioIdsOutsideRun(
+    connectorSelectors.connectorList(toolStoreState),
+    { agentId, includePrivate: includePrivateConnectors, listed },
   );
-  const connectorIdentifiers = new Set(connectorManifests.map((m) => m.identifier));
 
-  // Per-connector tool permissions, keyed by connector identifier. Used to patch
-  // community-MCP plugin manifests below so the user's needs_approval / disabled
-  // settings surface as humanIntervention (custom connectors are handled by their
-  // own manifests above; disabled is also hard-blocked at the mcp router).
-  const connectorPermsByIdentifier = new Map(
-    connectorSelectors
-      .connectorList(toolStoreState)
-      .map((c) => [c.identifier, new Map(c.tools.map((t) => [t.toolName, t.permission]))] as const),
+  // Per-connector tool permissions, keyed by connector identifier: community-
+  // MCP plugins execute outside the connector path, so the user's
+  // needs_approval / disabled settings are patched onto their manifests.
+  const connectorPermissions = new Map(
+    runConnectors.map(
+      (c) => [c.identifier, new Map(c.tools.map((t) => [t.toolName, t.permission]))] as const,
+    ),
   );
 
-  // Get all available plugin manifests (excluding ones now covered by a connector),
-  // patched with their connector tool permissions when a connector row exists.
-  const pluginManifests = pluginSelectors
-    .installedPluginManifestList(toolStoreState)
-    .filter((m) => !connectorIdentifiers.has(m.identifier))
-    .map((m) => {
-      const perms = connectorPermsByIdentifier.get(m.identifier);
-      return perms && perms.size > 0
-        ? (patchManifestWithPermissions(
-            m as any,
-            perms as Map<string, ConnectorToolPermission>,
-          ) as ToolManifest)
-        : m;
-    });
+  // The pool rules (connector precedence, permission patching, context-aware
+  // builtins, invalid manifest guard, disabled-id exclusion) are shared with
+  // the server; the browser only reads its stores.
+  const { manifests } = assembleManifestPool(
+    {
+      additional: additionalManifests as LobeToolManifest[],
+      builtinTools: toolStoreState.builtinTools,
+      composio: composioStoreSelectors
+        .composioAsLobeTools(toolStoreState)
+        .filter((tool) => !composioOutsideRun.has(tool.identifier))
+        .map((tool) => tool.manifest as LobeToolManifest),
+      connectors: buildClientConnectorManifests(connectorToolSets) as LobeToolManifest[],
+      installedPlugins: pluginSelectors.installedPluginManifestList(
+        toolStoreState,
+      ) as LobeToolManifest[],
+      lobehubSkills: lobehubSkillStoreSelectors
+        .lobehubSkillAsLobeTools(toolStoreState)
+        .map((tool) => tool.manifest as LobeToolManifest),
+    },
+    {
+      connectorPermissions,
+      // Disabled identifiers leave the pool outright: explicit activation
+      // bypasses the enable rules, so a rule-only gate would not hold.
+      excludedIdentifiers: disabledPluginIds,
+      manifestContext,
+    },
+  );
 
-  // Get all builtin tool manifests. When a manifest context is supplied (agent
-  // runtime path), context-aware tools resolve their manifest for it — trimming
-  // APIs (e.g. lobe-agent hides callSubAgent in groups) or opting out via `null`.
-  // Context-free callers fall back to the full static manifest.
-  const builtinManifests = toolStoreState.builtinTools
-    .map((tool) =>
-      manifestContext && tool.resolveManifest
-        ? tool.resolveManifest(manifestContext)
-        : tool.manifest,
-    )
-    .filter((m): m is BuiltinToolManifest => !!m) as ToolManifest[];
-
-  // Get Composio tool manifests
-  const composioTools = composioStoreSelectors.composioAsLobeTools(toolStoreState);
-  const composioManifests = composioTools
-    .map((tool) => tool.manifest as ToolManifest)
-    .filter(Boolean);
-
-  // Get LobeHub Skill tool manifests
-  const lobehubSkillTools = lobehubSkillStoreSelectors.lobehubSkillAsLobeTools(toolStoreState);
-  const lobehubSkillManifests = lobehubSkillTools
-    .map((tool) => tool.manifest as ToolManifest)
-    .filter(Boolean);
-
-  // Combine all manifests, dropping entries that would crash ToolsEngine.
-  // Each source is filtered separately so the warning pinpoints the origin.
-  const combinedManifests = [
-    ...dropInvalidManifests(pluginManifests, 'installedPlugins'),
-    ...dropInvalidManifests(builtinManifests, 'builtinTools'),
-    ...dropInvalidManifests(composioManifests, 'composio'),
-    ...dropInvalidManifests(lobehubSkillManifests, 'lobehubSkills'),
-    ...dropInvalidManifests(connectorManifests, 'connectors'),
-    ...dropInvalidManifests(additionalManifests, 'additionalManifests'),
-  ];
-
-  // Disabled identifiers are dropped from the pool outright (not left for the
-  // enableChecker rules) — a plugin, skill, connector, or user-toggleable
-  // builtin tool the agent has explicitly disabled must not be discoverable/
-  // activatable at all, matching the server-side (aiAgent gateway) treatment.
-  const allManifests =
-    disabledPluginIds.length === 0
-      ? combinedManifests
-      : combinedManifests.filter((m) => !disabledPluginIds.includes(m.identifier));
+  // A plain Web client must not acquire the Electron IPC executor: Computer
+  // Use only exists where the platform can run it.
+  const allManifests = manifests.filter(
+    (m) => m.identifier !== AuvManifest.identifier || isToolAvailableInCurrentEnv(m.identifier),
+  );
 
   return new ToolsEngine({
     defaultToolIds,
     enableChecker,
     functionCallChecker: isCanUseFC,
-    manifestSchemas: allManifests,
+    manifestSchemas: allManifests as ToolManifest[],
   });
 };
+
+/** Conversation scopes whose transcript other members can read. */
+const PRIVATE_CONNECTOR_EXCLUDED_SCOPES = new Set(['group', 'group_agent', 'sub_agent']);
 
 export const createAgentToolsEngine = (
   workingModel: WorkingModel,
@@ -214,71 +231,117 @@ export const createAgentToolsEngine = (
   pluginIds?: string[],
   /** Conversation context for context-aware builtin manifests (scope, isSubAgent). */
   manifestContext?: BuiltinToolResolveContext,
+  options: {
+    /**
+     * Whether the conversation has an attachment that can be sent as a preview. Enables
+     * `readAttachment` so the preview can be paged, as the server's tool discovery does.
+     */
+    hasOversizedFiles?: boolean;
+    /** The conversation's topic: its server-listed connector rows are the run's tool sets. */
+    topicId?: string;
+    uninstalledBuiltinTools?: string[];
+    /** Resolved for the executing agent, which can differ from the agent open in the UI. */
+    runAgent?: {
+      id?: string;
+      chatConfig?: LobeAgentChatConfig;
+      connectors?: AgentConnectorActivation;
+      enabledPluginIds?: string[];
+      plugins?: AgentPluginEntry[];
+    };
+  } = {},
 ) => {
-  const searchConfig = getSearchConfig(workingModel.model, workingModel.provider);
+  const searchConfig = getSearchConfig(
+    workingModel.model,
+    workingModel.provider,
+    options.runAgent?.id,
+  );
   const agentState = getAgentStoreState();
-  // `currentAgentPlugins` already resolves to pinned-only identifiers — disabled
-  // entries never reach the tools-engine whitelist.
-  const userPlugins = agentSelectors.currentAgentPlugins(agentState);
-  const disabledPluginIds = agentSelectors.currentAgentDisabledPlugins(agentState);
-  const isChatMode =
-    agentChatConfigSelectors.currentChatConfig(agentState).enableAgentMode === false ||
-    !isCanUseFC(workingModel.model, workingModel.provider);
-
-  // Each entry below still respects its own runtime gate; in chat mode this
-  // is the entire whitelist. `allowExplicitActivation` and user plugins /
-  // `alwaysOnToolIds` are deliberately omitted in chat mode so the activator
-  // can't smuggle additional tools in.
-  const kbEnabled = agentSelectors.hasEnabledKnowledgeBases(agentState);
-  const memoryEnabled =
-    agentChatConfigSelectors.currentChatConfig(agentState).memory?.enabled ??
-    settingsSelectors.memoryEnabled(useUserStore.getState());
-  const webBrowsingEnabled = searchConfig.useApplicationBuiltinSearchTool;
-  const imageGenerationEnabled =
-    isCanUseFC(workingModel.model, workingModel.provider) &&
-    !aiModelSelectors.isModelSupportImageOutput(
-      workingModel.model,
-      workingModel.provider,
-    )(getAiInfraStoreState());
-
-  const chatModeRules = {
-    // Example: Claude can call tools but lacks native imageOutput, so expose the
-    // image-generation fallback; image-output models should use their native path.
-    [ImageGenerationManifest.identifier]: imageGenerationEnabled,
-    [KnowledgeBaseManifest.identifier]: kbEnabled,
-    [MemoryManifest.identifier]: memoryEnabled,
-    [WebBrowsingManifest.identifier]: webBrowsingEnabled,
+  const targetAgentId = options.runAgent?.id ?? agentState.activeAgentId ?? '';
+  const agent = options.runAgent ?? {
+    id: targetAgentId,
+    chatConfig: agentChatConfigSelectors.currentChatConfig(agentState),
+    plugins: agentSelectors.currentAgentConfig(agentState)?.plugins,
   };
+  const chatConfig = agent.chatConfig ?? {};
+  const connectors =
+    options.runAgent?.connectors ?? resolveAgentConnectorActivation(agent, pluginIds);
 
-  const agentModeRules = {
-    // Runtime-resolved plugins (from agentConfigResolver for the effective agent,
-    // may include sub-agent/group/page scope plugins not on the active agent)
-    ...(pluginIds && Object.fromEntries(pluginIds.map((id) => [id, true]))),
-    // User-selected plugins (from the active agent)
-    ...Object.fromEntries(userPlugins.map((id) => [id, true])),
-    // Always-on builtin tools
-    ...Object.fromEntries(alwaysOnToolIds.map((id) => [id, true])),
-    // System-level rules (may override user selection for specific tools)
-    // Browser rides the same local-runtime gate as local-system (the control
-    // IPC only exists in the desktop main process), plus the in-app browser
-    // Labs toggle that also governs the sidebar tab — with the lab off the
-    // tool would drive a pane the user can't see.
-    [BrowserManifest.identifier]:
-      agentChatConfigSelectors.isLocalSystemEnabled(agentState) &&
-      labPreferSelectors.enableInAppBrowser(useUserStore.getState()),
-    [CloudSandboxManifest.identifier]: agentChatConfigSelectors.isCloudSandboxEnabled(agentState),
-    [KnowledgeBaseManifest.identifier]: kbEnabled,
-    [LocalSystemManifest.identifier]: agentChatConfigSelectors.isLocalSystemEnabled(agentState),
-    [MemoryManifest.identifier]: memoryEnabled,
-    [WebBrowsingManifest.identifier]: webBrowsingEnabled,
-  };
+  // The rules — mode, per-tool enablement and defaults — are shared with the
+  // server runtime through `@lobechat/mecha`; the browser only assembles its
+  // facts. It has no device gateway, so no device walls apply here and the
+  // remaining platform gate stays in `platformFilter` below.
+  const resolved = resolveToolRules({
+    agent: {
+      chatConfig,
+      plugins: applyAgentConnectorActivation(
+        options.runAgent?.enabledPluginIds ??
+          (resolveToolMode(chatConfig) === 'agent'
+            ? getActivePluginIds(agent.plugins).filter((id) => !isOnDemandBuiltinTool(id))
+            : getOptedInPluginIds(agent.plugins)),
+        connectors,
+      ),
+    },
+    // Feature-flagged tools (e.g. builtin-dashboard) leave the pool while their
+    // flag is off for this user.
+    disabledPluginIds: [
+      ...getUserDisabledToolIds(agent.plugins, chatConfig),
+      ...connectors.offIds,
+      ...getUnavailableBuiltinToolIds(
+        [
+          ...getOptedInPluginIds(agent.plugins),
+          ...(options.runAgent?.enabledPluginIds ?? []),
+          ...(pluginIds ?? []),
+        ],
+        chatConfig,
+        options.uninstalledBuiltinTools ?? runtimeUninstalledBuiltinTools(getToolStoreState()),
+        getBuiltinOverrides(agent.plugins),
+      ),
+      ...getFeatureDisabledToolIds(getServerConfigStoreState()?.featureFlags),
+      // This engine serves runs the browser executes; server-only tools have nothing to run here.
+      ...serverOnlyToolIds,
+      // This engine serves runs the browser executes; server-only tools have nothing to run here.
+    ],
+    executionTarget: chatConfigByIdSelectors.getExecutionTargetById(targetAgentId)(agentState),
+    hasEnabledKnowledgeBases: options.runAgent?.id
+      ? agentSelectors
+          .getAgentConfigById(targetAgentId)(agentState)
+          ?.knowledgeBases?.some((kb) => kb.enabled)
+      : agentSelectors.hasEnabledKnowledgeBases(agentState),
+    hasOversizedFiles: options.hasOversizedFiles,
+    // A `local` target only resolves on the desktop, where the host itself is
+    // the machine: local tools are always reachable there.
+    localExecutionReady: true,
+    memoryEnabled:
+      chatConfig.memory?.enabled ?? settingsSelectors.memoryEnabled(useUserStore.getState()),
+    model: {
+      canUseFC: isCanUseFC(workingModel.model, workingModel.provider),
+      hasImageOutput: aiModelSelectors.isModelSupportImageOutput(
+        workingModel.model,
+        workingModel.provider,
+      )(getAiInfraStoreState()),
+    },
+    runtimePluginIds: pluginIds,
+    useApplicationBuiltinSearchTool: searchConfig.useApplicationBuiltinSearchTool,
+  });
 
   return createToolsEngine({
-    defaultToolIds: isChatMode ? chatModeAllowedToolIds : defaultToolIds,
-    disabledPluginIds,
+    agentId: targetAgentId || undefined,
+    topicId: options.topicId,
+    defaultToolIds: resolved.defaultToolIds,
+    disabledPluginIds: [...resolved.excludedIdentifiers],
+    // A private agent's own conversation only: a group or sub-agent run writes
+    // into a conversation other members can read.
+    includePrivateConnectors:
+      agentSelectors.currentAgentVisibility(agentState) === 'private' &&
+      !manifestContext?.isSubAgent &&
+      !PRIVATE_CONNECTOR_EXCLUDED_SCOPES.has(manifestContext?.scope ?? ''),
     manifestContext,
     enableChecker: createEnableChecker({
-      allowExplicitActivation: !isChatMode,
+      allowExplicitActivation: resolved.allowExplicitActivation,
+      explicitActivationIds:
+        resolved.toolMode === 'custom'
+          ? new Set(connectors.connectorIds.filter(connectors.activation.isAllowed))
+          : undefined,
       platformFilter: ({ pluginId }) => {
         const toolStoreState = getToolStoreState();
         const installedPlugin = pluginSelectors.getInstalledPluginById(pluginId)(toolStoreState);
@@ -293,7 +356,7 @@ export const createAgentToolsEngine = (
 
         return undefined; // fall through to rules
       },
-      rules: isChatMode ? chatModeRules : agentModeRules,
+      rules: resolved.rules,
     }),
   });
 };

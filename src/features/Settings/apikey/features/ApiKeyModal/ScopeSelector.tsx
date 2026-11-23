@@ -1,0 +1,334 @@
+'use client';
+
+import { Checkbox, Flexbox, Switch, Text } from '@lobehub/ui';
+import { cssVar } from '@lobehub/ui/stylex/cssVar.stylex';
+import * as stylex from '@stylexjs/stylex';
+import { Check } from 'lucide-react';
+import type { FC } from 'react';
+import { useTranslation } from 'react-i18next';
+
+import type { ApiKeyScope } from '@/const/apiKeyScope';
+import { isValidApiKeyScope } from '@/const/apiKeyScope';
+import { densityTokens } from '@/styles/density.stylex';
+
+const styles = stylex.create({
+  disabled: { pointerEvents: 'none', opacity: 0.45 },
+  fullAccessRow: {
+    display: 'flex',
+    gap: densityTokens['--lobe-density-section-gap'],
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: densityTokens['--lobe-density-content-gap'],
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: cssVar.colorBorderSecondary,
+    borderRadius: cssVar.borderRadius,
+  },
+  grid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+    rowGap: densityTokens['--lobe-density-content-gap'],
+    columnGap: densityTokens['--lobe-density-section-gap'],
+    // same card treatment as the full-access row so the whole Scope block
+    // reads as one system
+    padding: densityTokens['--lobe-density-content-gap'],
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: cssVar.colorBorderSecondary,
+    borderRadius: cssVar.borderRadius,
+  },
+  grantCheck: { flex: 'none', color: cssVar.colorSuccess },
+  /* Granted-only list: one row per domain the key actually reaches. Hairline
+     separators, no card-in-card — the surrounding card is the container. */
+  grantList: {
+    paddingBlock: '4px',
+    paddingInline: densityTokens['--lobe-density-content-gap'],
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: cssVar.colorBorderSecondary,
+    borderRadius: cssVar.borderRadius,
+  },
+  grantRow: {
+    paddingBlock: densityTokens['--lobe-density-content-gap'],
+    borderBlockEndWidth: '1px',
+    borderBlockEndStyle: { 'default': 'solid', ':last-child': 'none' },
+    borderBlockEndColor: cssVar.colorBorderSecondary,
+  },
+  groupTitle: { fontSize: '12px', color: cssVar.colorTextSecondary },
+  scopeRow: { flexWrap: 'wrap' },
+});
+
+/**
+ * Scope groups shown to the user. Most domains carry read and write scopes;
+ * usage is intentionally read-only, while two domains carry an additional
+ * high-risk tier that is separate from plain write:
+ *
+ * - `model:invoke` burns money;
+ * - `agent:credential:write` installs a secret into one of an agent's
+ *   accounts — managing the agent's accounts must not imply that.
+ */
+type ScopeGroupKey =
+  | 'agent'
+  | 'chat'
+  | 'file'
+  | 'generation'
+  | 'knowledge'
+  | 'mcp'
+  | 'model'
+  | 'usage'
+  | 'user'
+  | 'workspace';
+
+/**
+ * Labels an extra scope can carry. Kept as literals (not `string`) so the
+ * `t()` calls stay inside the generated key union.
+ */
+type ScopeExtraLabel =
+  'apikey.scopes.agentCredential' | 'apikey.scopes.invoke' | 'apikey.scopes.modelInvoke';
+
+interface ScopeGroup {
+  /**
+   * A higher-risk scope in the same domain. It gets its own checkbox in the
+   * creation grid and its own entry in the granted-scopes overview; the two
+   * labels differ because the grid spells the act out while the overview lists
+   * grants next to "Read" / "Write".
+   */
+  readonly extra?: {
+    readonly createLabel: ScopeExtraLabel;
+    readonly overviewLabel: ScopeExtraLabel;
+    readonly scope: ApiKeyScope;
+  };
+  readonly key: ScopeGroupKey;
+  readonly label: `apikey.scopes.groups.${ScopeGroupKey}`;
+  readonly read: ApiKeyScope;
+  readonly write?: ApiKeyScope;
+}
+
+const SCOPE_GROUPS: readonly ScopeGroup[] = [
+  {
+    key: 'agent',
+    label: 'apikey.scopes.groups.agent',
+    read: 'agent:read',
+    write: 'agent:write',
+    extra: {
+      createLabel: 'apikey.scopes.agentCredential',
+      overviewLabel: 'apikey.scopes.agentCredential',
+      scope: 'agent:credential:write',
+    },
+  },
+  { key: 'chat', label: 'apikey.scopes.groups.chat', read: 'chat:read', write: 'chat:write' },
+  {
+    key: 'model',
+    label: 'apikey.scopes.groups.model',
+    read: 'model:read',
+    write: 'model:write',
+    extra: {
+      createLabel: 'apikey.scopes.modelInvoke',
+      overviewLabel: 'apikey.scopes.invoke',
+      scope: 'model:invoke',
+    },
+  },
+  { key: 'file', label: 'apikey.scopes.groups.file', read: 'file:read', write: 'file:write' },
+  {
+    key: 'generation',
+    label: 'apikey.scopes.groups.generation',
+    read: 'generation:read',
+    write: 'generation:write',
+  },
+  {
+    key: 'knowledge',
+    label: 'apikey.scopes.groups.knowledge',
+    read: 'knowledge:read',
+    write: 'knowledge:write',
+  },
+  { key: 'mcp', label: 'apikey.scopes.groups.mcp', read: 'mcp:read', write: 'mcp:write' },
+  { key: 'usage', label: 'apikey.scopes.groups.usage', read: 'usage:read' },
+  {
+    key: 'workspace',
+    label: 'apikey.scopes.groups.workspace',
+    read: 'workspace:read',
+    write: 'workspace:write',
+  },
+  { key: 'user', label: 'apikey.scopes.groups.user', read: 'user:read', write: 'user:write' },
+];
+
+export interface ScopeOverviewProps {
+  scopes: string[];
+}
+
+/**
+ * What the key can actually do, one row per granted domain.
+ *
+ * Deliberately NOT the creation grid frozen read-only: creation must offer
+ * every option because you are choosing, but inspection answers "what does
+ * this key reach", and a 15-cell grid with 4 ticks buries that answer in the
+ * 11 it doesn't have. Granted scopes are rendered verbatim from storage (no
+ * write→read derivation), so the list stays an honest mirror of the database.
+ */
+export const ScopeOverview: FC<ScopeOverviewProps> = ({ scopes }) => {
+  const { t } = useTranslation('auth');
+  const scopeSet = new Set(scopes);
+  const separator = t('apikey.scopes.separator');
+
+  const grants = SCOPE_GROUPS.flatMap((group) => {
+    const actions = [
+      scopeSet.has(group.read) && t('apikey.scopes.read'),
+      group.write && scopeSet.has(group.write) && t('apikey.scopes.write'),
+      group.extra && scopeSet.has(group.extra.scope) && t(group.extra.overviewLabel),
+    ].filter(Boolean) as string[];
+
+    return actions.length > 0 ? [{ actions, key: group.key, label: t(group.label) }] : [];
+  });
+
+  // A restricted key always carries at least one scope, but never render an
+  // empty bordered box if that invariant ever breaks.
+  if (grants.length === 0) return <Text type={'secondary'}>{t('apikey.scopes.none')}</Text>;
+
+  return (
+    <Flexbox className={stylex.props(styles.grantList).className}>
+      {grants.map((grant) => (
+        <Flexbox
+          horizontal
+          align={'center'}
+          className={stylex.props(styles.grantRow).className}
+          gap={10}
+          key={grant.key}
+        >
+          <Check className={stylex.props(styles.grantCheck).className} size={16} />
+          <span style={{ fontSize: 13 }}>
+            <strong>{grant.label}</strong>
+            {t('apikey.scopes.grantJoin')}
+            {grant.actions.join(separator)}
+          </span>
+        </Flexbox>
+      ))}
+    </Flexbox>
+  );
+};
+
+/**
+ * Scopes a scope cannot work without. The server enforces these pairs — a
+ * credential write is still an agent write — so a key holding the dependent
+ * scope alone would be refused on every call it advertises.
+ */
+const SCOPE_PREREQUISITES: Partial<Record<ApiKeyScope, readonly ApiKeyScope[]>> = {
+  'agent:credential:write': ['agent:write'],
+};
+
+/** Each scope's prerequisites, with every `:write` needing its `:read` twin when one exists. */
+const prerequisitesOf = (scope: ApiKeyScope): ApiKeyScope[] => {
+  const required = [...(SCOPE_PREREQUISITES[scope] ?? [])];
+  if (scope.endsWith(':write')) {
+    const twin = scope.replace(/:write$/, ':read') as ApiKeyScope;
+    if (isValidApiKeyScope(twin)) required.push(twin);
+  }
+  return required;
+};
+
+/**
+ * The selection after toggling one scope. Checking adds everything it needs;
+ * unchecking drops everything that needed it, so the grid never shows a scope
+ * the key could not actually use.
+ */
+export const toggleScopeSelection = (
+  selected: readonly ApiKeyScope[],
+  scope: ApiKeyScope,
+  checked: boolean,
+): ApiKeyScope[] => {
+  const next = new Set(selected);
+
+  if (checked) {
+    const pending = [scope];
+    while (pending.length > 0) {
+      const current = pending.pop()!;
+      if (next.has(current) && current !== scope) continue;
+      next.add(current);
+      pending.push(...prerequisitesOf(current));
+    }
+  } else {
+    const pending = [scope];
+    while (pending.length > 0) {
+      const current = pending.pop()!;
+      next.delete(current);
+      for (const candidate of next) {
+        if (prerequisitesOf(candidate).includes(current)) pending.push(candidate);
+      }
+    }
+  }
+
+  return [...next];
+};
+
+export interface ScopeSelectorProps {
+  fullAccess: boolean;
+  onFullAccessChange: (fullAccess: boolean) => void;
+  onSelectedChange: (selected: ApiKeyScope[]) => void;
+  selected: ApiKeyScope[];
+}
+
+const ScopeSelector: FC<ScopeSelectorProps> = ({
+  fullAccess,
+  onFullAccessChange,
+  onSelectedChange,
+  selected,
+}) => {
+  const { t } = useTranslation('auth');
+  const selectedSet = new Set(selected);
+  const toggle = (scope: ApiKeyScope, checked: boolean) =>
+    onSelectedChange(toggleScopeSelection(selected, scope, checked));
+
+  return (
+    <Flexbox gap={12}>
+      <div {...stylex.props(styles.fullAccessRow)}>
+        <Flexbox gap={2}>
+          <Text style={{ fontSize: 14 }}>{t('apikey.form.fields.scopes.fullAccess')}</Text>
+          <Text style={{ fontSize: 12 }} type={'secondary'}>
+            {t('apikey.form.fields.scopes.fullAccessDescription')}
+          </Text>
+        </Flexbox>
+        <Switch checked={fullAccess} onChange={onFullAccessChange} />
+      </div>
+
+      <div {...stylex.props(fullAccess ? styles.disabled : undefined)}>
+        <Flexbox gap={10}>
+          <div {...stylex.props(styles.grid)}>
+            {SCOPE_GROUPS.map((group) => (
+              <Flexbox gap={4} key={group.key}>
+                <span {...stylex.props(styles.groupTitle)}>{t(group.label)}</span>
+                <Flexbox horizontal className={stylex.props(styles.scopeRow).className} gap={12}>
+                  <Checkbox
+                    checked={selectedSet.has(group.read)}
+                    disabled={fullAccess}
+                    onChange={(checked) => toggle(group.read, checked)}
+                  >
+                    {t('apikey.scopes.read')}
+                  </Checkbox>
+                  {group.write && (
+                    <Checkbox
+                      checked={selectedSet.has(group.write)}
+                      disabled={fullAccess}
+                      onChange={(checked) => group.write && toggle(group.write, checked)}
+                    >
+                      {t('apikey.scopes.write')}
+                    </Checkbox>
+                  )}
+                  {group.extra && (
+                    <Checkbox
+                      checked={selectedSet.has(group.extra.scope)}
+                      disabled={fullAccess}
+                      onChange={(checked) => group.extra && toggle(group.extra.scope, checked)}
+                    >
+                      {t(group.extra.createLabel)}
+                    </Checkbox>
+                  )}
+                </Flexbox>
+              </Flexbox>
+            ))}
+          </div>
+        </Flexbox>
+      </div>
+    </Flexbox>
+  );
+};
+
+export default ScopeSelector;

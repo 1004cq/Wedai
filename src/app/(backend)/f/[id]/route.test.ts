@@ -11,11 +11,15 @@ import { GET } from './route';
 
 const fileServiceMocks = vi.hoisted(() => {
   const instance = {
-    getFileByteArray: vi.fn(),
+    createCachedPreSignedUrlForPreview: vi.fn(),
+    createDownloadUrl: vi.fn(),
+    getFullFileUrl: vi.fn(),
   };
 
   return {
-    FileService: vi.fn(() => instance),
+    FileService: vi.fn(function () {
+      return instance;
+    }),
     instance,
   };
 });
@@ -36,59 +40,51 @@ vi.mock('@/server/services/file', () => ({
 
 describe('file proxy route', () => {
   const db = {} as LobeChatDatabase;
-  const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
 
   beforeEach(() => {
     vi.clearAllMocks();
 
     vi.mocked(getServerDB).mockResolvedValue(db);
     vi.mocked(FileModel.getFileById).mockResolvedValue({
-      fileType: 'image/png',
       id: 'file-id',
+      name: 'image.png',
       url: 'files/user-id/image.png',
       userId: 'owner-user-id',
     } as FileItem);
-    fileServiceMocks.instance.getFileByteArray.mockResolvedValue(pngBytes);
+    fileServiceMocks.instance.createCachedPreSignedUrlForPreview.mockResolvedValue(
+      'https://s3.example.com/presigned-preview-url',
+    );
+    fileServiceMocks.instance.createDownloadUrl.mockResolvedValue(
+      'https://s3.example.com/presigned-download-url',
+    );
   });
 
-  it('should stream object bytes so internal S3 endpoints never reach the browser', async () => {
+  it('should redirect to a cached presigned preview URL instead of a public full file URL', async () => {
     const response = await GET(new Request('https://lobehub.com/f/file-id'), {
       params: Promise.resolve({ id: 'file-id' }),
     });
 
-    expect(response.status).toBe(200);
-    expect(response.headers.get('content-type')).toBe('image/png');
-    expect(response.headers.get('content-length')).toBe(String(pngBytes.byteLength));
-    expect(response.headers.get('cache-control')).toContain('immutable');
-    expect(response.headers.get('location')).toBeNull();
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe('https://s3.example.com/presigned-preview-url');
     expect(FileModel.getFileById).toHaveBeenCalledWith(db, 'file-id');
     expect(FileService).toHaveBeenCalledWith(db, 'owner-user-id');
-    expect(fileServiceMocks.instance.getFileByteArray).toHaveBeenCalledWith(
+    expect(fileServiceMocks.instance.createCachedPreSignedUrlForPreview).toHaveBeenCalledWith(
       'files/user-id/image.png',
     );
-
-    const body = new Uint8Array(await response.arrayBuffer());
-    expect(body).toEqual(pngBytes);
+    expect(fileServiceMocks.instance.getFullFileUrl).not.toHaveBeenCalled();
   });
 
-  it('should return 404 when file record is missing', async () => {
-    vi.mocked(FileModel.getFileById).mockResolvedValue(undefined as never);
-
-    const response = await GET(new Request('https://lobehub.com/f/missing'), {
-      params: Promise.resolve({ id: 'missing' }),
-    });
-
-    expect(response.status).toBe(404);
-    expect(fileServiceMocks.instance.getFileByteArray).not.toHaveBeenCalled();
-  });
-
-  it('should return 500 when storage read fails', async () => {
-    fileServiceMocks.instance.getFileByteArray.mockRejectedValue(new Error('NoSuchKey'));
-
-    const response = await GET(new Request('https://lobehub.com/f/file-id'), {
+  it('should redirect download requests to a content-disposition attachment URL', async () => {
+    const response = await GET(new Request('https://lobehub.com/f/file-id?download=1'), {
       params: Promise.resolve({ id: 'file-id' }),
     });
 
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe('https://s3.example.com/presigned-download-url');
+    expect(fileServiceMocks.instance.createDownloadUrl).toHaveBeenCalledWith(
+      'files/user-id/image.png',
+      'image.png',
+    );
+    expect(fileServiceMocks.instance.createCachedPreSignedUrlForPreview).not.toHaveBeenCalled();
   });
 });

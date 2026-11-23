@@ -1,26 +1,41 @@
 import { randomUUID } from 'node:crypto';
 
-import { CUSTOM_DOCUMENT_FILE_TYPE, CUSTOM_FOLDER_FILE_TYPE } from '@lobechat/const';
+import {
+  CUSTOM_DOCUMENT_FILE_TYPE,
+  CUSTOM_FOLDER_FILE_TYPE,
+  HTML_DOCUMENT_FILE_TYPE,
+} from '@lobechat/const';
 import { type LobeChatDatabase } from '@lobechat/database';
 import { type DocumentItem } from '@lobechat/database/schemas';
 import { documents, files } from '@lobechat/database/schemas';
-import { loadFile, UnsupportedFileTypeError } from '@lobechat/file-loaders';
+import type { DocumentAccessScope, DocumentWriteSource, FileAccessScope } from '@lobechat/types';
+import {
+  ordinaryDocumentAccessScope,
+  ordinaryFileAccessScope,
+  stripAgentShareDocumentProvenance,
+} from '@lobechat/types';
 import { TRPCError } from '@trpc/server';
 import debug from 'debug';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import isEqual from 'fast-deep-equal';
 
-import { DocumentModel } from '@/database/models/document';
+import { MAX_FILE_PARSE_SIZE } from '@/const/file';
+import { DocumentModel, type QueryDocumentParams } from '@/database/models/document';
 import { FileModel } from '@/database/models/file';
 import { KnowledgeBaseModel } from '@/database/models/knowledgeBase';
 import { buildWorkspaceWhere } from '@/database/utils/workspace';
 import { isValidEditorData } from '@/libs/editor/isValidEditorData';
 import { normalizeEditorDataDiffNodes } from '@/libs/editor/normalizeDiffNodes';
+import { diffAddedMentionUserIds } from '@/server/utils/documentMentions';
 import { type LobeDocument } from '@/types/document';
 
 import { EditLockService } from '../editLock';
 import { FileService } from '../file';
+import { parseFileInWorker } from '../fileParse';
+import { normalizeParseFileError } from '../fileParse/normalizeError';
+import { dropPageRooms } from '../pageCollab/notify';
 import { publishResourceEvent } from '../resourceEvents';
+import { countEditorDataText } from './editorData';
 import { DocumentHistoryService } from './history';
 import type {
   CompareDocumentHistoryItemsParams,
@@ -35,20 +50,9 @@ import type {
   UpdateDocumentParams,
   UpdateDocumentResult,
 } from './types';
+import { assertDocumentWriteWithinLimit } from './writeLimit';
 
 const log = debug('lobe-chat:service:document');
-
-const normalizeParseFileError = (error: unknown) => {
-  if (error instanceof UnsupportedFileTypeError) {
-    return new TRPCError({
-      cause: error,
-      code: 'BAD_REQUEST',
-      message: error.message,
-    });
-  }
-
-  return error;
-};
 
 export class DocumentService {
   userId: string;
@@ -60,6 +64,7 @@ export class DocumentService {
   private editLockService: EditLockService;
   private db: LobeChatDatabase;
   private callerAgentVisibility?: 'private' | 'public' | null;
+  private documentAccessScope: DocumentAccessScope;
 
   private workspaceId?: string;
 
@@ -68,14 +73,22 @@ export class DocumentService {
     userId: string,
     workspaceId?: string,
     callerAgentVisibility?: 'private' | 'public' | null,
+    documentAccessScope: DocumentAccessScope = ordinaryDocumentAccessScope,
   ) {
     this.userId = userId;
     this.db = db;
     this.workspaceId = workspaceId;
     this.callerAgentVisibility = callerAgentVisibility;
+    this.documentAccessScope = documentAccessScope;
     this.fileModel = new FileModel(db, userId, workspaceId);
     this.knowledgeBaseModel = new KnowledgeBaseModel(db, userId, workspaceId);
-    this.documentModel = new DocumentModel(db, userId, workspaceId, callerAgentVisibility);
+    this.documentModel = new DocumentModel(
+      db,
+      userId,
+      workspaceId,
+      callerAgentVisibility,
+      documentAccessScope,
+    );
     this.editLockService = new EditLockService(userId);
   }
 
@@ -110,6 +123,17 @@ export class DocumentService {
     return Boolean(this.workspaceId && doc?.workspaceId && doc.visibility !== 'private');
   }
 
+  async assertCanWriteBody(id: string, lockOwnerId?: string) {
+    const document = await this.documentModel.findById(id);
+    if (!this.isCollaborativeDocument(document)) return;
+    if (await this.editLockService.canWrite('document', id, lockOwnerId)) return;
+    throw new TRPCError({
+      cause: { data: { code: 'DocumentLocked' } },
+      code: 'CONFLICT',
+      message: 'Document is being edited by another user',
+    });
+  }
+
   private async deleteFileRecordAndStorage(fileId: string) {
     const file = await this.fileModel.delete(fileId);
     if (!file?.url || file.url.startsWith('internal://')) return;
@@ -122,7 +146,7 @@ export class DocumentService {
    */
   async createDocument(params: {
     content?: string;
-    editorData: Record<string, any>;
+    editorData?: Record<string, any>;
     fileType?: string;
     knowledgeBaseId?: string;
     metadata?: Record<string, any>;
@@ -131,6 +155,8 @@ export class DocumentService {
     slug?: string;
     title: string;
     visibility?: 'private' | 'public';
+    /** Who asked for the write; `system` skips the per-document character limit. Defaults to `user`. */
+    writeSource?: DocumentWriteSource;
   }): Promise<DocumentItem> {
     const {
       content,
@@ -138,11 +164,23 @@ export class DocumentService {
       title,
       fileType = CUSTOM_DOCUMENT_FILE_TYPE,
       metadata,
-      knowledgeBaseId,
-      parentId,
       slug,
       visibility,
     } = params;
+    // Refuse before any row (including the KB mirror file) is written.
+    await assertDocumentWriteWithinLimit({
+      charCount: Math.max(content?.length ?? 0, countEditorDataText(editorData)),
+      source: params.writeSource,
+      userId: this.userId,
+      workspaceId: this.workspaceId,
+    });
+
+    // Agent tool calls often fill optional ids with "" — that means "unset".
+    // Passed through, it reaches the `parent_id` / `knowledge_base_id` FKs and
+    // fails the insert with an opaque `Failed query` error.
+    const knowledgeBaseId = params.knowledgeBaseId?.trim() || undefined;
+    const parentId = params.parentId?.trim() || undefined;
+    const sanitizedMetadata = stripAgentShareDocumentProvenance(metadata);
 
     // Calculate character and line counts
     const totalCharCount = content?.length || 0;
@@ -151,20 +189,25 @@ export class DocumentService {
     // Resolve visibility upfront so the KB mirror file uses the same policy
     // as the document. A library-root document inherits the KB visibility;
     // parent documents remain navigation-only and do not pass visibility or
-    // ACL to children. Personal mode leaves it undefined — the ownership
-    // filter ignores the column there.
+    // ACL to children. Without a library or an explicit value it stays
+    // undefined, so the row takes the schema default (`'public'` — workspace
+    // documents are shared unless asked otherwise). Personal mode ignores the
+    // column but still checks the library exists, so a wrong id fails as
+    // NOT_FOUND instead of a foreign-key violation.
     let resolvedVisibility: 'private' | 'public' | undefined = visibility;
-    if (this.workspaceId && knowledgeBaseId) {
+    if (knowledgeBaseId) {
       const knowledgeBase = await this.knowledgeBaseModel.findById(
         knowledgeBaseId,
         this.callerAgentVisibility,
       );
       if (!knowledgeBase) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Knowledge base not found' });
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: `Knowledge base not found: ${knowledgeBaseId}`,
+        });
       }
-      resolvedVisibility = knowledgeBase.visibility;
+      if (this.workspaceId) resolvedVisibility = knowledgeBase.visibility;
     }
-    if (!resolvedVisibility && this.workspaceId) resolvedVisibility = 'private';
 
     let fileId: string | null = null;
 
@@ -175,7 +218,7 @@ export class DocumentService {
         {
           fileType,
           knowledgeBaseId,
-          metadata,
+          metadata: sanitizedMetadata,
           name: title,
           parentId,
           size: totalCharCount,
@@ -190,8 +233,8 @@ export class DocumentService {
     // Store knowledgeBaseId in metadata for folders (which don't have fileId)
     const finalMetadata =
       knowledgeBaseId && fileType === CUSTOM_FOLDER_FILE_TYPE
-        ? { ...metadata, knowledgeBaseId }
-        : metadata;
+        ? { ...sanitizedMetadata, knowledgeBaseId }
+        : sanitizedMetadata;
 
     const document = await this.documentModel.create({
       content,
@@ -255,7 +298,7 @@ export class DocumentService {
   async createDocuments(
     documents: Array<{
       content?: string;
-      editorData: Record<string, any>;
+      editorData?: Record<string, any>;
       fileType?: string;
       knowledgeBaseId?: string;
       metadata?: Record<string, any>;
@@ -263,6 +306,7 @@ export class DocumentService {
       slug?: string;
       title: string;
       visibility?: 'private' | 'public';
+      writeSource?: DocumentWriteSource;
     }>,
   ): Promise<DocumentItem[]> {
     // Create all documents in parallel for better performance
@@ -274,12 +318,7 @@ export class DocumentService {
   /**
    * Query documents with pagination
    */
-  async queryDocuments(params?: {
-    current?: number;
-    fileTypes?: string[];
-    pageSize?: number;
-    sourceTypes?: string[];
-  }) {
+  async queryDocuments(params?: QueryDocumentParams) {
     return this.documentModel.query(params);
   }
 
@@ -530,10 +569,11 @@ export class DocumentService {
   async trySaveCurrentDocumentHistory(
     documentId: string,
     saveSource: DocumentHistorySaveSource,
+    editorDataOverride?: Record<string, any>,
   ): Promise<SaveDocumentHistoryResult | undefined> {
     try {
       const currentDocument = await this.documentModel.findById(documentId);
-      const editorData = currentDocument?.editorData;
+      const editorData = editorDataOverride ?? currentDocument?.editorData;
       if (!isValidEditorData(editorData)) return undefined;
 
       const normalizedEditorData = normalizeEditorDataDiffNodes(editorData);
@@ -597,7 +637,9 @@ export class DocumentService {
     }
 
     // Finally delete the document itself
-    return this.documentModel.delete(id);
+    const deleted = await this.documentModel.delete(id);
+    if (document.workspaceId) dropPageRooms([id]);
+    return deleted;
   }
 
   /**
@@ -629,6 +671,7 @@ export class DocumentService {
         this.userId,
         this.workspaceId,
         this.callerAgentVisibility,
+        this.documentAccessScope,
       );
       const fileModel = new FileModel(transactionDb, this.userId, this.workspaceId);
       const documentHistoryService = new DocumentHistoryService(
@@ -642,6 +685,34 @@ export class DocumentService {
         throw new Error(`Document not found: ${id}`);
       }
 
+      // Optimistic-concurrency predicate for the client's CONFLICT recovery:
+      // the retry asserts the exact version it verified. Re-read the row with
+      // FOR UPDATE so the check-and-write is atomic inside this transaction —
+      // an interleaved save from another session either commits first (and
+      // fails this predicate) or blocks until we commit.
+      if (params.expectedUpdatedAt !== undefined) {
+        const [row] = await transactionDb
+          .select({ updatedAt: documents.updatedAt })
+          .from(documents)
+          .where(eq(documents.id, id))
+          .for('update');
+        if (!row?.updatedAt || row.updatedAt.getTime() !== params.expectedUpdatedAt.getTime()) {
+          throw new TRPCError({
+            cause: { data: { code: 'DocumentVersionMismatch' } },
+            code: 'CONFLICT',
+            message: 'Document has been updated by another session',
+          });
+        }
+      }
+
+      // An HTML document's body is its content alone: rich-text editorData sent
+      // with it (or with the write that makes it HTML) is never persisted, and
+      // any the page carried before is cleared. Left behind, that pre-HTML JSON
+      // is what the editor would load and save if the page turned rich-text again.
+      const isHtmlDocument =
+        (params.fileType ?? currentDocument.fileType) === HTML_DOCUMENT_FILE_TYPE;
+      const editorDataParam = isHtmlDocument ? undefined : params.editorData;
+
       // Accepted-view projections used only for historyAppended comparison and
       // for the "before" snapshot written into history. The persisted editorData
       // keeps any pending diff nodes — they're only normalized when the user
@@ -650,12 +721,15 @@ export class DocumentService {
         (currentDocument.editorData ?? {}) as Record<string, any>,
       );
       const nextEditorDataAccepted =
-        params.editorData === undefined
-          ? undefined
-          : normalizeEditorDataDiffNodes(params.editorData);
+        editorDataParam === undefined ? undefined : normalizeEditorDataDiffNodes(editorDataParam);
       const historyAppended =
         nextEditorDataAccepted !== undefined &&
         !isEqual(nextEditorDataAccepted, currentEditorDataAccepted);
+      // Mentions are diffed on the accepted view so a chip inside a pending
+      // AI diff block only pings once the suggestion is accepted.
+      const addedMentionUserIds = historyAppended
+        ? diffAddedMentionUserIds(currentEditorDataAccepted, nextEditorDataAccepted)
+        : [];
 
       // Collaborative edit lock guard: reject writes to a workspace document that
       // another member is actively editing, so concurrent edits can't clobber
@@ -663,10 +737,19 @@ export class DocumentService {
       // (title/emoji) pass through, since the autosave always re-sends the
       // unchanged body. The lease auto-expires in Redis; when Redis is down this
       // returns null (fail-open) so the lock can't block saving.
+      // Switching a page into or out of HTML replaces the body other members see
+      // (and clears its editorData), so it is a body change even with no content.
+      const htmlTypeChanged =
+        isHtmlDocument !== (currentDocument.fileType === HTML_DOCUMENT_FILE_TYPE);
       const contentChanged =
         historyAppended ||
+        htmlTypeChanged ||
         (params.content !== undefined && params.content !== currentDocument.content);
-      if (contentChanged && this.isCollaborativeDocument(currentDocument)) {
+      if (
+        contentChanged &&
+        params.origin !== 'room-projection' &&
+        this.isCollaborativeDocument(currentDocument)
+      ) {
         const canWrite = await this.editLockService.canWrite('document', id, params.lockOwnerId);
         if (!canWrite) {
           throw new TRPCError({
@@ -679,14 +762,36 @@ export class DocumentService {
 
       const updates: Record<string, unknown> = {};
 
+      // Checked before anything is persisted. Room projections are checked too:
+      // the room accepts browser edits without measuring them, so the
+      // projection is the only place a collaborative page's length is enforced.
+      // `restoreFromHistoryId` is not an exemption: the client
+      // sends it with a body the server does not match against the version, so
+      // only server-side restores opt out via `writeSource`. Editor data is
+      // measured too because it can arrive without `content`.
+      if (params.content !== undefined || editorDataParam !== undefined) {
+        await assertDocumentWriteWithinLimit({
+          charCount: Math.max(params.content?.length ?? 0, countEditorDataText(editorDataParam)),
+          previousCharCount: Math.max(
+            currentDocument.content?.length ?? 0,
+            countEditorDataText(currentDocument.editorData),
+          ),
+          source: params.writeSource,
+          userId: this.userId,
+          workspaceId: this.workspaceId,
+        });
+      }
+
       if (params.content !== undefined) {
         updates.content = params.content;
         updates.totalCharCount = params.content.length;
         updates.totalLineCount = params.content.split('\n').length;
       }
 
-      if (params.editorData !== undefined) {
-        updates.editorData = params.editorData;
+      if (editorDataParam !== undefined) {
+        updates.editorData = editorDataParam;
+      } else if (isHtmlDocument && currentDocument.editorData != null) {
+        updates.editorData = null;
       }
 
       if (params.fileType !== undefined) {
@@ -709,21 +814,24 @@ export class DocumentService {
       // The lock lease is refreshed by the client heartbeat (acquireDocumentLock),
       // so a save does not need to touch it.
 
-      let savedAt: Date | undefined;
+      const rowUpdated = Object.keys(updates).length > 0 || historyAppended;
+      let updatedAt = currentDocument.updatedAt;
+      if (rowUpdated) {
+        const committedVersion = await documentModel.update(id, updates as Partial<DocumentItem>);
+        if (!committedVersion) throw new Error(`Document not found: ${id}`);
+        updatedAt = committedVersion;
+      }
 
+      const savedAt = historyAppended ? updatedAt : undefined;
       if (historyAppended) {
-        savedAt = new Date();
         await documentHistoryService.createHistory({
+          ...params.history,
           breakAutosaveWindow: params.breakAutosaveWindow,
           documentId: id,
           editorData: currentEditorDataAccepted,
           saveSource: params.saveSource ?? 'autosave',
-          savedAt,
+          savedAt: updatedAt,
         });
-      }
-
-      if (Object.keys(updates).length > 0) {
-        await documentModel.update(id, updates as Partial<DocumentItem>);
       }
 
       if ((params.title !== undefined || params.parentId !== undefined) && currentDocument.fileId) {
@@ -733,12 +841,14 @@ export class DocumentService {
         await fileModel.update(currentDocument.fileId, fileUpdates);
       }
 
-      changed = Object.keys(updates).length > 0 || historyAppended;
+      changed = rowUpdated;
 
       return {
+        ...(addedMentionUserIds.length > 0 ? { addedMentionUserIds } : {}),
         historyAppended,
         id,
         savedAt,
+        updatedAt,
       };
     });
 
@@ -758,14 +868,18 @@ export class DocumentService {
    * Parse file and create a document for page editor (without page tags)
    */
   async parseDocument(fileId: string): Promise<LobeDocument> {
-    const { filePath, file, cleanup } = await this.fileService.downloadFileToLocal(fileId);
+    const { filePath, file, cleanup } = await this.fileService.downloadFileToLocal(
+      fileId,
+      undefined,
+      { maxBytes: MAX_FILE_PARSE_SIZE },
+    );
 
     const logPrefix = `[${file.name}]`;
     log(`${logPrefix} Starting to parse file as document, path: ${filePath}`);
 
     try {
-      // Use loadFile to load file content
-      const fileDocument = await loadFile(filePath);
+      // Strips the <page> wrappers and applies the stored-content cap inside the worker thread.
+      const fileDocument = await parseFileInWorker(filePath, { fileId, mode: 'document' });
 
       log(`${logPrefix} File parsed successfully %O`, {
         fileType: fileDocument.fileType,
@@ -778,11 +892,7 @@ export class DocumentService {
         file.name.replace(/\.(pdf|docx?|md|markdown)$/i, '') ||
         'Untitled';
 
-      // Clean up content - remove <page> tags if present
-      let cleanContent = fileDocument.content;
-      if (cleanContent.includes('<page')) {
-        cleanContent = cleanContent.replaceAll(/<page[^>]*>([\S\s]*?)<\/page>/g, '$1').trim();
-      }
+      const cleanContent = fileDocument.content;
 
       const document = await this.documentModel.create({
         content: cleanContent,
@@ -804,27 +914,40 @@ export class DocumentService {
       console.error(`${logPrefix} File parsing failed:`, parseError);
       throw parseError;
     } finally {
-      cleanup();
+      await cleanup();
     }
   }
 
   /**
-   * Parse file content
+   * Parse file content.
    *
+   * Idempotent: returns the document already stored for the file, and serializes
+   * the cache write per file so two concurrent calls cannot both insert one.
+   *
+   * The database handle must not be an open transaction — the advisory lock is
+   * transaction scoped, so a nested call would hold it until the outer
+   * transaction commits instead of releasing it after the insert.
    */
-  async parseFile(fileId: string): Promise<LobeDocument> {
+  async parseFile(
+    fileId: string,
+    accessScope: FileAccessScope = ordinaryFileAccessScope,
+  ): Promise<LobeDocument> {
     // Idempotent: return existing document if already parsed
-    const existingDoc = await this.documentModel.findByFileId(fileId);
+    const existingDoc = await this.documentModel.findByFileId(fileId, accessScope);
     if (existingDoc) return existingDoc as LobeDocument;
 
-    const { filePath, file, cleanup } = await this.fileService.downloadFileToLocal(fileId);
+    const { filePath, file, cleanup } = await this.fileService.downloadFileToLocal(
+      fileId,
+      accessScope,
+      { maxBytes: MAX_FILE_PARSE_SIZE },
+    );
 
     const logPrefix = `[${file.name}]`;
     log(`${logPrefix} Starting to parse file, path: ${filePath}`);
 
     try {
-      // Use loadFile to load file content
-      const fileDocument = await loadFile(filePath);
+      // Parsed and capped on a worker thread: a heavy file must not hold this one.
+      const fileDocument = await parseFileInWorker(filePath, { fileId, mode: 'file' });
 
       log(`${logPrefix} File parsed successfully %O`, {
         fileType: fileDocument.fileType,
@@ -837,19 +960,49 @@ export class DocumentService {
         file.name.replace(/\.(pdf|docx?|md|markdown)$/i, '') ||
         'Untitled';
 
-      const document = await this.documentModel.create({
-        content: fileDocument.content,
-        fileId,
-        fileType: CUSTOM_DOCUMENT_FILE_TYPE, // Use custom/document for all parsed files
-        filename: title,
-        metadata: fileDocument.metadata,
-        pages: fileDocument.pages,
-        parentId: file.parentId,
-        source: file.url,
-        sourceType: 'file',
-        title,
-        totalCharCount: fileDocument.totalCharCount,
-        totalLineCount: fileDocument.totalLineCount,
+      const document = await this.db.transaction(async (tx) => {
+        // The existence check above ran before the download and the parse, so
+        // another request can have published its own row for this file in the
+        // meantime. Serialize the write per file so two concurrent `parseFile`
+        // calls cannot both insert one. `hashtext` returns int4 while
+        // `pg_advisory_xact_lock` takes bigint, so cast. Under the default READ
+        // COMMITTED isolation the re-check below takes a fresh snapshot once the
+        // lock is granted, so it sees whatever the holder committed. The parse
+        // itself stays outside the transaction: it downloads and reads the whole
+        // file, and holding a connection that long would turn every large upload
+        // into pool pressure.
+        await tx.execute(
+          sql`SELECT pg_advisory_xact_lock(hashtext(${`parseFile:${fileId}`})::bigint)`,
+        );
+
+        const transactionDb = tx as unknown as LobeChatDatabase;
+        const transactionDocumentModel = new DocumentModel(
+          transactionDb,
+          this.userId,
+          this.workspaceId,
+          this.callerAgentVisibility,
+          this.documentAccessScope,
+        );
+
+        // Whoever inserted first wins; discard this parse rather than adding a
+        // second document for the same file.
+        const raced = await transactionDocumentModel.findByFileId(fileId, accessScope);
+        if (raced) return raced;
+
+        return transactionDocumentModel.create({
+          content: fileDocument.content,
+          fileId,
+          fileType: CUSTOM_DOCUMENT_FILE_TYPE, // Use custom/document for all parsed files
+          filename: title,
+          metadata: fileDocument.metadata,
+          pages: fileDocument.pages,
+          parentId: file.parentId,
+          source: file.url,
+          sourceType: 'file',
+          title,
+          totalCharCount: fileDocument.totalCharCount,
+          totalLineCount: fileDocument.totalLineCount,
+        });
       });
 
       return document as LobeDocument;
@@ -858,7 +1011,7 @@ export class DocumentService {
       console.error(`${logPrefix} File parsing failed:`, parseError);
       throw parseError;
     } finally {
-      cleanup();
+      await cleanup();
     }
   }
 }

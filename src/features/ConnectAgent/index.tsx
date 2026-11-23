@@ -8,10 +8,26 @@ import type {
 } from '@lobechat/heterogeneous-agents';
 import { isRemoteHeterogeneousType } from '@lobechat/heterogeneous-agents';
 import type { DeviceListItem } from '@lobechat/types';
-import { Alert, CopyButton, Flexbox, Icon, Input, Text, TextArea, Tooltip } from '@lobehub/ui';
-import { Button, createModal, type ModalInstance, useModalContext } from '@lobehub/ui/base-ui';
-import { Checkbox, Typography } from 'antd';
-import { createStaticStyles, cssVar } from 'antd-style';
+import { agentDisplayName } from '@lobechat/types';
+import {
+  Alert,
+  Button,
+  Checkbox,
+  createModal,
+  createStaticStyles,
+  cssVar,
+  Flexbox,
+  Icon,
+  Input,
+  type ModalInstance,
+  ScrollArea,
+  Select,
+  Text,
+  TextArea,
+  Tooltip,
+  useModalContext,
+} from '@lobehub/ui';
+import { Surface } from '@lobehub/ui/dashboard';
 import { t as i18nT } from 'i18next';
 import {
   ArrowLeft,
@@ -26,29 +42,57 @@ import { memo, type ReactNode, useCallback, useEffect, useMemo, useState } from 
 import { useTranslation } from 'react-i18next';
 
 import { useActiveWorkspaceId } from '@/business/client/hooks/useActiveWorkspaceId';
+import AsyncError from '@/components/AsyncError';
+import CommandLine from '@/components/CommandLine';
 import { DOWNLOAD_URL } from '@/const/url';
+import CreateVisibilityField, {
+  type CreateVisibility,
+  useCreateVisibility,
+} from '@/features/CreateVisibilityField';
 import { getDeviceIcon } from '@/features/DeviceManager/getDeviceIcon';
-import { useDeviceList } from '@/features/DeviceManager/useDeviceList';
 import { useWorkspaceAwareNavigate } from '@/features/Workspace/useWorkspaceAwareNavigate';
 import { deviceService } from '@/services/device';
 import { useAgentStore } from '@/store/agent';
+import { heteroAgentDefaultName } from '@/store/agent/utils/heteroAgentDefaultName';
+import { isDevicePresenceUnknown, useDeviceList } from '@/store/device';
+import { useElectronStore } from '@/store/electron';
 import { useHomeStore } from '@/store/home';
+import { densityVars } from '@/styles/densityVars';
 
-import { CONNECTABLE_PROVIDERS, type ConnectableProvider } from './providers';
-import { type ScanTarget, useAgentScan } from './useAgentScan';
+import { getDeviceListState, isListableDevice } from './deviceListState';
+import type { ConnectableProvider, ConnectAgentProfile } from './providers';
+import { buildConnectAgentConfig, CONNECTABLE_PROVIDERS } from './providers';
+import type { ScanTarget } from './useAgentScan';
+import { useAgentScan } from './useAgentScan';
 
 const styles = createStaticStyles(({ css }) => ({
-  cmd: css`
-    user-select: all;
+  agentListScrollbar: css`
+    width: 2px;
+    margin-block: 12px;
+    margin-inline-end: 4px;
+  `,
+  agentListThumb: css`
+    background: ${cssVar.colorFill};
+  `,
+  agentListViewport: css`
+    overscroll-behavior: contain;
+    max-height: min(50dvh, 400px);
+  `,
+  commandHint: css`
+    display: flex;
+    gap: ${densityVars.contentGap};
+    align-items: center;
+    justify-content: space-between;
 
-    padding-block: 8px;
-    padding-inline: 12px;
-    border-radius: ${cssVar.borderRadiusSM};
+    min-width: 0;
+    padding-inline: 4px;
 
-    font-family: ${cssVar.fontFamilyCode};
-    font-size: 12px;
-
-    background: ${cssVar.colorFillTertiary};
+    > span {
+      overflow: hidden;
+      min-width: 0;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
   `,
   dot: css`
     flex: none;
@@ -67,12 +111,6 @@ const styles = createStaticStyles(({ css }) => ({
     border-radius: 50%;
 
     background: ${cssVar.colorTextQuaternary};
-  `,
-  emptyCard: css`
-    overflow: hidden;
-    border: 1px solid ${cssVar.colorBorderSecondary};
-    border-radius: ${cssVar.borderRadiusLG};
-    background: ${cssVar.colorBgContainer};
   `,
   emptyHero: css`
     padding-block: 24px;
@@ -100,23 +138,10 @@ const styles = createStaticStyles(({ css }) => ({
     min-height: 28px;
     margin-block-start: auto;
 
-    > a {
+    > a,
+    > div {
       width: 100%;
     }
-  `,
-  emptyOptionCode: css`
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    justify-content: space-between;
-
-    box-sizing: border-box;
-    width: 100%;
-    height: 32px;
-    padding-inline: 10px 4px;
-    border-radius: ${cssVar.borderRadius};
-
-    background: ${cssVar.colorFillTertiary};
   `,
   emptyOptions: css`
     display: grid;
@@ -154,12 +179,6 @@ const styles = createStaticStyles(({ css }) => ({
 
     background: ${cssVar.colorFillSecondary};
   `,
-  groupList: css`
-    overflow: hidden;
-    border: 1px solid ${cssVar.colorBorderSecondary};
-    border-radius: ${cssVar.borderRadiusLG};
-    background: ${cssVar.colorBgContainer};
-  `,
   iconBox: css`
     display: flex;
     flex: none;
@@ -181,11 +200,11 @@ const styles = createStaticStyles(({ css }) => ({
     cursor: pointer;
 
     display: flex;
-    gap: 12px;
+    gap: ${densityVars.contentGap};
     align-items: center;
 
-    padding-block: 12px;
-    padding-inline: 16px;
+    padding-block: ${densityVars.contentGap};
+    padding-inline: ${densityVars.cardPadding};
 
     transition: background 0.15s;
 
@@ -235,13 +254,12 @@ const styles = createStaticStyles(({ css }) => ({
 
     animation: lobe-connect-agent-pulse 1.4s ease-in-out infinite;
   `,
+  skeletonSquare: css`
+    width: 36px;
+    height: 36px;
+    border-radius: ${cssVar.borderRadius};
+  `,
 }));
-
-interface AgentProfile {
-  avatar?: string;
-  description?: string;
-  title?: string;
-}
 
 interface CreatedAgent {
   agentId: string;
@@ -251,15 +269,22 @@ interface CreatedAgent {
   version?: string;
 }
 
+/** The device switch's value for this computer; device ids are never empty. */
+const LOCAL_TARGET_VALUE = '';
+
 const SectionLabel = memo<{ children: ReactNode }>(({ children }) => (
   <Text fontSize={12} style={{ paddingInline: 4 }} type={'secondary'}>
     {children}
   </Text>
 ));
 
-const SkeletonRow = memo<{ width: number }>(({ width }) => (
+const SkeletonRow = memo<{ squareIcon?: boolean; width: number }>(({ squareIcon, width }) => (
   <div className={`${styles.row} ${styles.rowStatic}`}>
-    <div className={styles.skeletonCircle} />
+    <div
+      className={
+        squareIcon ? `${styles.skeletonCircle} ${styles.skeletonSquare}` : styles.skeletonCircle
+      }
+    />
     {/* Column height matches a real row's two-line text block so the
         scanning → done swap doesn't shift the modal */}
     <Flexbox flex={1} gap={10} justify={'center'} style={{ height: 42 }}>
@@ -268,6 +293,22 @@ const SkeletonRow = memo<{ width: number }>(({ width }) => (
     </Flexbox>
   </div>
 ));
+
+const ScrollableAgentList = memo<{ children: ReactNode }>(({ children }) => (
+  <Surface padded={false}>
+    <ScrollArea
+      disableContentFit
+      scrollFade
+      scrollbarProps={{ className: styles.agentListScrollbar }}
+      thumbProps={{ className: styles.agentListThumb }}
+      viewportProps={{ className: styles.agentListViewport }}
+    >
+      {children}
+    </ScrollArea>
+  </Surface>
+));
+
+ScrollableAgentList.displayName = 'ScrollableAgentList';
 
 const DeviceRow = memo<{
   icon: ReactNode;
@@ -343,16 +384,29 @@ const AgentScanRow = memo<{
 
 interface ConnectAgentContentProps {
   groupId?: string;
+  initialDevice?: DeviceListItem;
   onTitleChange: (title: string) => void;
+  showOpenChat?: boolean;
   visibility?: 'private' | 'public';
 }
 
 const ConnectAgentContent = memo<ConnectAgentContentProps>(
-  ({ groupId, onTitleChange, visibility }) => {
+  ({
+    groupId,
+    initialDevice,
+    onTitleChange,
+    showOpenChat = true,
+    visibility: initialVisibility,
+  }) => {
     const { t } = useTranslation('chat');
+    // Same "Private / Workspace" field as the create-agent form; the caller's
+    // value is only where it starts.
+    const visibilityState = useCreateVisibility({ groupId, visibility: initialVisibility });
+    const visibility = visibilityState.value;
     const { close, setCanDismissByClickOutside } = useModalContext();
     const navigate = useWorkspaceAwareNavigate();
     const storeCreateAgent = useAgentStore((s) => s.createAgent);
+    const currentDeviceId = useElectronStore((s) => s.gatewayDeviceInfo?.deviceId);
     const refreshAgentList = useHomeStore((s) => s.refreshAgentList);
 
     // Workspace agents must bind workspace devices: a workspace agent on a
@@ -360,11 +414,25 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
     const activeWorkspaceId = useActiveWorkspaceId();
     const restrictToWorkspaceDevices = Boolean(activeWorkspaceId);
 
-    const [step, setStep] = useState(0);
-    const [target, setTarget] = useState<ScanTarget | null>(null);
+    // A preselected device the picker would not list starts at the picker instead.
+    const preselected =
+      initialDevice && isListableDevice(initialDevice, restrictToWorkspaceDevices)
+        ? initialDevice
+        : undefined;
+    // On desktop the wizard opens straight on an agent list (this computer's,
+    // unless a device was preselected); other devices are a switch above it.
+    const deviceInline = isDesktop;
+    const [step, setStep] = useState(preselected || deviceInline ? 1 : 0);
+    const [target, setTarget] = useState<ScanTarget | null>(() =>
+      preselected
+        ? { device: preselected, kind: 'device' }
+        : deviceInline
+          ? { kind: 'local' }
+          : null,
+    );
     const [selectedTypes, setSelectedTypes] = useState<HeterogeneousAgentType[]>([]);
     const [profiles, setProfiles] = useState<
-      Partial<Record<RemoteHeterogeneousAgentType, AgentProfile>>
+      Partial<Record<RemoteHeterogeneousAgentType, ConnectAgentProfile>>
     >({});
     const [name, setName] = useState('');
     const [description, setDescription] = useState('');
@@ -372,7 +440,7 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
     const [createError, setCreateError] = useState<string | undefined>();
     const [done, setDone] = useState<CreatedAgent[] | null>(null);
 
-    const { scan, state: scanState } = useAgentScan();
+    const { rescan: rescanTarget, state: scanState } = useAgentScan(target);
 
     useEffect(() => {
       setCanDismissByClickOutside(!creating);
@@ -380,16 +448,27 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
 
     const {
       data: devices,
+      error: deviceListError,
+      isConfirmed: isDeviceListConfirmed,
       isLoading: loadingDevices,
       isValidating: fetchingDevices,
       mutate: refetchDevices,
     } = useDeviceList();
 
+    // This computer is offered as "This computer" already, so its gateway row is left out.
     const listedDevices = useMemo(
-      () => (devices ?? []).filter((d) => !restrictToWorkspaceDevices || d.scope === 'workspace'),
-      [devices, restrictToWorkspaceDevices],
+      () =>
+        (devices ?? []).filter(
+          (d) =>
+            isListableDevice(d, restrictToWorkspaceDevices) &&
+            !(isDesktop && d.deviceId === currentDeviceId),
+        ),
+      [currentDeviceId, devices, restrictToWorkspaceDevices],
     );
     const onlineDevices = listedDevices.filter((d) => d.online);
+    // Rows painted from the persisted list until the server confirms presence:
+    // none of them is offline yet, so "no devices" would be a guess.
+    const presencePending = !isDeviceListConfirmed || listedDevices.some(isDevicePresenceUnknown);
 
     const deviceLabel = useCallback(
       (device: DeviceListItem) => device.friendlyName || device.hostname || device.deviceId,
@@ -399,24 +478,13 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
     const targetLabel =
       target?.kind === 'device' ? deviceLabel(target.device) : t('connectAgent.create.localDevice');
 
-    // Providers listed for the current target: local targets only run CLI
-    // subprocess agents. Device targets expose every remotely scannable agent.
-    const visibleProviders = useMemo(
-      () =>
-        CONNECTABLE_PROVIDERS.filter((provider) => {
-          if (target?.kind === 'local' && provider.kind === 'platform') return false;
-          return true;
-        }),
-      [target?.kind],
-    );
-
     const inventory = useMemo(() => {
       if (scanState.status !== 'success' || !scanState.agents) return [];
       const rank = (available?: boolean) => (available ? 0 : 1);
-      return [...visibleProviders]
+      return [...CONNECTABLE_PROVIDERS]
         .map((provider) => ({ provider, status: scanState.agents?.[provider.type] }))
         .sort((a, b) => rank(a.status?.available) - rank(b.status?.available));
-    }, [scanState, visibleProviders]);
+    }, [scanState]);
 
     const detectedCount = inventory.filter((entry) => entry.status?.available).length;
 
@@ -428,22 +496,17 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
     const single = selectedProviders.length === 1 ? selectedProviders[0] : null;
     const singleVersion = single ? scanState.agents?.[single.type]?.version : undefined;
 
-    const pickTarget = useCallback(
-      (next: ScanTarget) => {
-        setTarget(next);
-        setSelectedTypes([]);
-        setProfiles({});
-        setStep(1);
-        void scan(next);
-      },
-      [scan],
-    );
+    const pickTarget = useCallback((next: ScanTarget) => {
+      setTarget(next);
+      setSelectedTypes([]);
+      setProfiles({});
+      setStep(1);
+    }, []);
 
     const rescan = useCallback(() => {
-      if (!target) return;
       setSelectedTypes([]);
-      void scan(target);
-    }, [scan, target]);
+      rescanTarget();
+    }, [rescanTarget]);
 
     const toggleType = useCallback(
       (provider: ConnectableProvider) => {
@@ -456,81 +519,75 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
         // title / description / avatar without an extra wait.
         if (
           provider.kind === 'platform' &&
-          target?.kind === 'device' &&
           isRemoteHeterogeneousType(provider.type) &&
           !profiles[provider.type]
         ) {
+          const deviceId = target?.kind === 'device' ? target.device.deviceId : currentDeviceId;
+          if (!deviceId) return;
           const platform = provider.type;
           void deviceService
-            .getAgentProfile({ deviceId: target.device.deviceId, platform })
+            .getAgentProfile({ deviceId, platform })
             .then((profile) => setProfiles((prev) => ({ ...prev, [platform]: profile })))
             .catch(() => {});
         }
       },
-      [profiles, target],
+      [currentDeviceId, profiles, target],
+    );
+
+    const defaultSingleName = useCallback(
+      (nextVisibility?: CreateVisibility) => {
+        if (!single) return '';
+        const profile = isRemoteHeterogeneousType(single.type) ? profiles[single.type] : undefined;
+        const productTitle = profile?.title ?? single.title;
+        return (
+          heteroAgentDefaultName({
+            productTitle,
+            visibility: nextVisibility,
+            workspaceId: activeWorkspaceId,
+          }) ?? productTitle
+        );
+      },
+      [activeWorkspaceId, profiles, single],
     );
 
     const goConfirm = useCallback(() => {
       if (!single) return;
       const profile = isRemoteHeterogeneousType(single.type) ? profiles[single.type] : undefined;
-      setName(profile?.title ?? single.title);
+      setName(defaultSingleName(visibility));
       setDescription(profile?.description ?? '');
       setStep(2);
-    }, [profiles, single]);
+    }, [defaultSingleName, profiles, single, visibility]);
+
+    // The default name says whose agent a workspace agent is ("Ann's Codex"),
+    // so switching visibility on the confirm step re-derives a name the user
+    // has not edited.
+    const confirmVisibilityState = useMemo(
+      () => ({
+        ...visibilityState,
+        setValue: (next: CreateVisibility) => {
+          setName((current) =>
+            current === defaultSingleName(visibilityState.value)
+              ? defaultSingleName(next)
+              : current,
+          );
+          visibilityState.setValue(next);
+        },
+      }),
+      [defaultSingleName, visibilityState],
+    );
 
     const buildCreateParams = useCallback(
       (provider: ConnectableProvider, overrides?: { description?: string; name?: string }) => {
-        const title = overrides?.name?.trim() || provider.title;
-
-        if (target?.kind === 'device' && provider.kind === 'platform') {
-          const profile = isRemoteHeterogeneousType(provider.type)
-            ? profiles[provider.type]
-            : undefined;
-          return {
-            config: {
-              agencyConfig: {
-                boundDeviceId: target.device.deviceId,
-                heterogeneousProvider: { type: provider.type },
-              },
-              avatar: profile?.avatar || undefined,
-              description: (overrides?.description ?? profile?.description)?.trim() || undefined,
-              title: overrides?.name?.trim() || profile?.title || provider.title,
-            },
-            groupId,
-            visibility,
-          };
-        }
-
-        const base = {
-          avatar: provider.avatar,
-          description: overrides?.description?.trim() || undefined,
-          provider: provider.type,
-          systemRole: '',
-          title,
-        };
-
-        if (target?.kind === 'device') {
-          return {
-            config: {
-              ...base,
-              agencyConfig: {
-                boundDeviceId: target.device.deviceId,
-                executionTarget: 'device' as const,
-                heterogeneousProvider: { command: provider.command, type: provider.type },
-              },
-            },
-            groupId,
-            visibility,
-          };
-        }
-
         return {
-          config: {
-            ...base,
-            agencyConfig: {
-              heterogeneousProvider: { command: provider.command, type: provider.type },
-            },
-          },
+          config: buildConnectAgentConfig({
+            overrides,
+            profile: isRemoteHeterogeneousType(provider.type) ? profiles[provider.type] : undefined,
+            provider,
+            target:
+              target?.kind === 'device'
+                ? { deviceId: target.device.deviceId, kind: 'device' }
+                : { kind: 'local' },
+          }),
           groupId,
           visibility,
         };
@@ -555,7 +612,16 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
                 agentId: result.agentId,
                 locationLabel: targetLabel,
                 provider,
-                title: params.config.title ?? provider.title,
+                // Mirror the default-name seeding in createAgent so the done
+                // screen shows the same label the sidebar will.
+                title:
+                  params.config.name?.trim() ||
+                  heteroAgentDefaultName({
+                    productTitle: params.config.title,
+                    visibility,
+                    workspaceId: activeWorkspaceId,
+                  }) ||
+                  agentDisplayName(params.config, provider.title),
                 version: scanState.agents?.[provider.type]?.version,
               } satisfies CreatedAgent;
             }),
@@ -574,6 +640,7 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
         }
       },
       [
+        activeWorkspaceId,
         buildCreateParams,
         onTitleChange,
         refreshAgentList,
@@ -584,6 +651,7 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
         t,
         target,
         targetLabel,
+        visibility,
       ],
     );
 
@@ -599,14 +667,14 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
     if (done) {
       return (
         <Flexbox gap={8} paddingBlock={'16px 8px'}>
-          <SectionLabel>{t('connectAgent.create.doneHint')}</SectionLabel>
-          <div className={styles.groupList}>
+          {showOpenChat && <SectionLabel>{t('connectAgent.create.doneHint')}</SectionLabel>}
+          <Surface padded={false}>
             {done.map((agent) => (
               <div className={`${styles.row} ${styles.rowStatic}`} key={agent.agentId}>
                 <agent.provider.brand.Avatar size={32} />
                 <Flexbox flex={1} gap={1} style={{ minWidth: 0 }}>
                   <Text strong fontSize={13}>
-                    {agent.title}
+                    {agentDisplayName(agent)}
                   </Text>
                   <Text ellipsis fontSize={12} type={'secondary'}>
                     {agent.provider.title}
@@ -614,12 +682,14 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
                   </Text>
                 </Flexbox>
                 <div className={styles.dot} />
-                <Button size={'small'} onClick={() => openChat(agent.agentId)}>
-                  {t('connectAgent.create.openChat')}
-                </Button>
+                {showOpenChat && (
+                  <Button size={'small'} onClick={() => openChat(agent.agentId)}>
+                    {t('connectAgent.create.openChat')}
+                  </Button>
+                )}
               </div>
             ))}
-          </div>
+          </Surface>
           <Flexbox horizontal justify={'flex-end'} style={{ paddingBlockStart: 8 }}>
             <Button type={'primary'} onClick={close}>
               {t('connectAgent.create.done')}
@@ -632,13 +702,20 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
     // ── Step 1: choose the machine ──
     if (step === 0) {
       const isRefreshing = loadingDevices || fetchingDevices;
-      const showEmpty = !isDesktop && !isRefreshing && onlineDevices.length === 0;
+      const deviceListState = getDeviceListState({
+        error: deviceListError,
+        hasDevices: listedDevices.length > 0,
+        isConfirmed: isDeviceListConfirmed,
+        isFetching: isRefreshing,
+      });
+      const showEmpty =
+        !isDesktop && !isRefreshing && !presencePending && onlineDevices.length === 0;
 
       return (
         <Flexbox gap={16} paddingBlock={'16px 8px'}>
           <SectionLabel>{t('connectAgent.create.stepDevice')}</SectionLabel>
           {showEmpty ? (
-            <div className={styles.emptyCard}>
+            <Surface padded={false}>
               <Flexbox align={'center'} className={styles.emptyHero} gap={10}>
                 <span className={styles.heroIcon}>
                   <Icon icon={LaptopIcon} size={26} />
@@ -684,10 +761,7 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
                     </Text>
                   </Flexbox>
                   <div className={styles.emptyOptionAction}>
-                    <div className={styles.emptyOptionCode}>
-                      <code>{t('connectAgent.create.noDevicesCmd')}</code>
-                      <CopyButton content={t('connectAgent.create.noDevicesCmd')} size={'small'} />
-                    </div>
+                    <CommandLine command={t('connectAgent.create.noDevicesCmd')} />
                   </div>
                 </div>
               </div>
@@ -702,13 +776,13 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
                   {t('connectAgent.create.refresh')}
                 </Button>
               </Flexbox>
-            </div>
+            </Surface>
           ) : (
             <Flexbox gap={16}>
               {isDesktop && (
                 <Flexbox gap={6}>
                   <SectionLabel>{t('connectAgent.create.thisDevice')}</SectionLabel>
-                  <div className={styles.groupList}>
+                  <Surface padded={false}>
                     <DeviceRow
                       icon={<Icon icon={LaptopIcon} size={18} />}
                       statusText={t('connectAgent.create.online')}
@@ -716,10 +790,10 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
                       title={t('connectAgent.create.localDevice')}
                       onClick={() => pickTarget({ kind: 'local' })}
                     />
-                  </div>
+                  </Surface>
                 </Flexbox>
               )}
-              {listedDevices.length > 0 && (
+              {deviceListState !== 'empty' && (
                 <Flexbox gap={6}>
                   <Flexbox horizontal align={'center'} justify={'space-between'}>
                     <SectionLabel>{t('connectAgent.create.connectedDevices')}</SectionLabel>
@@ -733,32 +807,44 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
                       {t('connectAgent.create.refresh')}
                     </Button>
                   </Flexbox>
-                  <div className={styles.groupList}>
-                    {listedDevices.map((device) => (
-                      <DeviceRow
-                        icon={getDeviceIcon(device.platform, 18)}
-                        key={device.deviceId}
-                        offline={!device.online}
-                        subtitle={device.hostname || device.deviceId}
-                        title={deviceLabel(device)}
-                        statusText={
-                          device.online
-                            ? t('connectAgent.create.online')
-                            : t('connectAgent.create.offline')
-                        }
-                        onClick={() => pickTarget({ device, kind: 'device' })}
+                  <Surface padded={false}>
+                    {deviceListState === 'error' ? (
+                      <AsyncError
+                        error={deviceListError}
+                        variant={'inline'}
+                        onRetry={() => void refetchDevices()}
                       />
-                    ))}
-                  </div>
+                    ) : deviceListState === 'loading' ? (
+                      [96, 140, 112].map((width) => (
+                        <SkeletonRow squareIcon key={width} width={width} />
+                      ))
+                    ) : (
+                      listedDevices.map((device) => (
+                        <DeviceRow
+                          icon={getDeviceIcon(device.platform, 18)}
+                          key={device.deviceId}
+                          offline={!device.online}
+                          subtitle={device.hostname || device.deviceId}
+                          title={deviceLabel(device)}
+                          statusText={
+                            isDevicePresenceUnknown(device)
+                              ? t('heteroAgent.executionTarget.presenceChecking')
+                              : device.online
+                                ? t('connectAgent.create.online')
+                                : t('connectAgent.create.offline')
+                          }
+                          onClick={() => pickTarget({ device, kind: 'device' })}
+                        />
+                      ))
+                    )}
+                  </Surface>
                 </Flexbox>
               )}
-              {isDesktop && listedDevices.length === 0 && (
-                <Flexbox gap={4}>
-                  <span>{t('connectAgent.create.noDevicesCliHint')}</span>
-                  <Typography.Text code copyable>
-                    {t('connectAgent.create.noDevicesCmd')}
-                  </Typography.Text>
-                </Flexbox>
+              {isDesktop && deviceListState === 'empty' && (
+                <div className={styles.commandHint}>
+                  <Text type={'secondary'}>{t('connectAgent.create.noDevicesCliHint')}</Text>
+                  <CommandLine command={t('connectAgent.create.noDevicesCmd')} />
+                </div>
               )}
             </Flexbox>
           )}
@@ -776,7 +862,12 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
               its height — no jump when the scan settles */}
           <Flexbox horizontal align={'center'} justify={'space-between'} style={{ minHeight: 28 }}>
             <SectionLabel>
-              {t('connectAgent.create.stepAgents', { device: targetLabel })}
+              {t(
+                deviceInline
+                  ? 'connectAgent.create.stepAgentsInline'
+                  : 'connectAgent.create.stepAgents',
+                { device: targetLabel },
+              )}
             </SectionLabel>
             {!(scanState.status === 'success' && detectedCount === 0) &&
               scanState.status !== 'error' && (
@@ -792,14 +883,62 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
               )}
           </Flexbox>
 
+          {deviceInline && listedDevices.length > 0 && (
+            <Flexbox horizontal align={'center'} gap={8} style={{ paddingInline: 4 }}>
+              <Text fontSize={12} style={{ flex: 'none' }} type={'secondary'}>
+                {t('connectAgent.create.switchDevice')}
+              </Text>
+              <Select
+                aria-label={t('connectAgent.create.switchDevice')}
+                popupMatchSelectWidth={false}
+                size={'small'}
+                style={{ minWidth: 180 }}
+                value={target.kind === 'device' ? target.device.deviceId : LOCAL_TARGET_VALUE}
+                options={[
+                  {
+                    label: (
+                      <Flexbox horizontal align={'center'} gap={8}>
+                        <Icon icon={LaptopIcon} size={14} />
+                        {t('connectAgent.create.localDevice')}
+                      </Flexbox>
+                    ),
+                    value: LOCAL_TARGET_VALUE,
+                  },
+                  ...listedDevices.map((device) => ({
+                    disabled: !device.online,
+                    label: (
+                      <Flexbox horizontal align={'center'} gap={8}>
+                        {getDeviceIcon(device.platform, 14)}
+                        <span>{deviceLabel(device)}</span>
+                        {!device.online && (
+                          <Text fontSize={12} type={'secondary'}>
+                            {t('connectAgent.create.offline')}
+                          </Text>
+                        )}
+                      </Flexbox>
+                    ),
+                    value: device.deviceId,
+                  })),
+                ]}
+                onChange={(value: string) => {
+                  if (value === LOCAL_TARGET_VALUE) return pickTarget({ kind: 'local' });
+                  const device = listedDevices.find((d) => d.deviceId === value);
+                  if (device) pickTarget({ device, kind: 'device' });
+                }}
+              />
+            </Flexbox>
+          )}
+
           {scanning && (
             <Flexbox gap={6}>
               <SectionLabel>{t('connectAgent.create.scanning')}</SectionLabel>
-              <div className={styles.groupList}>
-                {[90, 70, 110, 80, 100, 75].slice(0, visibleProviders.length).map((width, i) => (
-                  <SkeletonRow key={i} width={width} />
-                ))}
-              </div>
+              <ScrollableAgentList>
+                {[90, 70, 110, 80, 100, 75, 95]
+                  .slice(0, CONNECTABLE_PROVIDERS.length)
+                  .map((width, i) => (
+                    <SkeletonRow key={i} width={width} />
+                  ))}
+              </ScrollableAgentList>
             </Flexbox>
           )}
 
@@ -824,13 +963,7 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
               <Text style={{ textAlign: 'center' }} type={'secondary'}>
                 {t('connectAgent.create.noneDetectedHint')}
               </Text>
-              <span className={styles.cmd}>npm install -g @anthropic-ai/claude-code</span>
-              <Button
-                icon={<Icon icon={RefreshCw} size={13} />}
-                size={'small'}
-                type={'primary'}
-                onClick={rescan}
-              >
+              <Button icon={<Icon icon={RefreshCw} size={13} />} type={'primary'} onClick={rescan}>
                 {t('connectAgent.create.rescanDevice')}
               </Button>
             </Flexbox>
@@ -841,7 +974,7 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
               <SectionLabel>
                 {t('connectAgent.create.detectedCount', { total: detectedCount })}
               </SectionLabel>
-              <div className={styles.groupList}>
+              <ScrollableAgentList>
                 {inventory.map(({ provider, status }) => (
                   <AgentScanRow
                     key={provider.type}
@@ -853,8 +986,12 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
                     onToggle={() => toggleType(provider)}
                   />
                 ))}
-              </div>
+              </ScrollableAgentList>
             </Flexbox>
+          )}
+
+          {scanState.status === 'success' && detectedCount > 0 && (
+            <CreateVisibilityField state={visibilityState} />
           )}
 
           {createError && (
@@ -867,13 +1004,18 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
           )}
 
           <Flexbox horizontal align={'center'} gap={8} justify={'space-between'}>
-            <Button
-              icon={<Icon icon={ArrowLeft} size={14} />}
-              type={'text'}
-              onClick={() => setStep(0)}
-            >
-              {t('connectAgent.create.back')}
-            </Button>
+            {/* The device step is the switch above when inline: nothing to go back to. */}
+            {deviceInline ? (
+              <span />
+            ) : (
+              <Button
+                icon={<Icon icon={ArrowLeft} size={14} />}
+                type={'text'}
+                onClick={() => setStep(0)}
+              >
+                {t('connectAgent.create.back')}
+              </Button>
+            )}
             <Flexbox horizontal align={'center'} gap={8}>
               {single && (
                 <Button type={'text'} onClick={goConfirm}>
@@ -906,7 +1048,13 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
     if (step === 2 && single) {
       return (
         <Flexbox gap={16} paddingBlock={'16px 8px'}>
-          <SectionLabel>{t('connectAgent.create.stepConfirm')}</SectionLabel>
+          <SectionLabel>
+            {t(
+              deviceInline
+                ? 'connectAgent.create.stepConfirmInline'
+                : 'connectAgent.create.stepConfirm',
+            )}
+          </SectionLabel>
           <Flexbox horizontal align={'center'} gap={12}>
             <single.brand.Avatar size={44} />
             <Flexbox flex={1}>
@@ -925,7 +1073,7 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
             value={description}
             onChange={(e) => setDescription(e.target.value)}
           />
-          <div className={styles.groupList}>
+          <Surface padded={false}>
             <div className={`${styles.row} ${styles.rowStatic}`}>
               <div className={styles.iconBox}>
                 {target?.kind === 'device' ? (
@@ -946,7 +1094,8 @@ const ConnectAgentContent = memo<ConnectAgentContentProps>(
               </Flexbox>
               <Icon color={cssVar.colorSuccess} icon={CheckCircle2} size={16} />
             </div>
-          </div>
+          </Surface>
+          <CreateVisibilityField state={confirmVisibilityState} />
           {createError && (
             <Alert
               showIcon
@@ -984,6 +1133,10 @@ ConnectAgentContent.displayName = 'ConnectAgentContent';
 
 export interface OpenConnectAgentModalOptions {
   groupId?: string;
+  /** Skip the machine picker and scan this device's agents right away. */
+  initialDevice?: DeviceListItem;
+  /** Offer "open chat" on the done view; off for hosts that must not navigate away. */
+  showOpenChat?: boolean;
   visibility?: 'private' | 'public';
 }
 
@@ -996,6 +1149,8 @@ export const openConnectAgentModal = (options?: OpenConnectAgentModalOptions): M
     content: (
       <ConnectAgentContent
         groupId={options?.groupId}
+        initialDevice={options?.initialDevice}
+        showOpenChat={options?.showOpenChat}
         visibility={options?.visibility}
         onTitleChange={(title) => holder.instance?.update({ title })}
       />

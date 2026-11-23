@@ -8,12 +8,28 @@ import type {
   GetAgentsRequest,
   UpdateAgentRequest,
 } from '../types/agent.type';
+import type { DeletedResource } from '../types/common.type';
 
 /**
  * Agent controller class
  * Handles Agent-related HTTP requests and responses
  */
 export class AgentController extends BaseController {
+  async duplicateAgent(c: Context) {
+    try {
+      const { id } = this.getParams<{ id: string }>(c);
+      const body = await this.getBody<{ title?: string }>(c);
+      const service = new AgentService(
+        await this.getDatabase(),
+        this.getUserId(c)!,
+        this.getWorkspaceId(c),
+      );
+      return this.success(c, await service.duplicateAgent(id, body.title), 'Agent duplicated', 201);
+    } catch (error) {
+      return this.handleError(c, error);
+    }
+  }
+
   /**
    * Retrieves a list of all Agents in the system
    * GET /api/v1/agents/list
@@ -28,7 +44,10 @@ export class AgentController extends BaseController {
       const agentService = new AgentService(db, this.getUserId(c), this.getWorkspaceId(c));
       const agentsList = await agentService.queryAgents(request);
 
-      return this.success(c, agentsList, 'Agent list retrieved successfully');
+      return this.list(c, 'agents', agentsList, {
+        message: 'Agent list retrieved successfully',
+        pagination: request,
+      });
     } catch (error) {
       return this.handleError(c, error);
     }
@@ -95,7 +114,11 @@ export class AgentController extends BaseController {
       const agentService = new AgentService(db, this.getUserId(c), this.getWorkspaceId(c));
       await agentService.deleteAgent(request);
 
-      return this.success(c, null, 'Agent deleted successfully');
+      return this.success(
+        c,
+        { deleted: true, id } satisfies DeletedResource,
+        'Agent deleted successfully',
+      );
     } catch (error) {
       return this.handleError(c, error);
     }

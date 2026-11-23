@@ -19,28 +19,36 @@ import { cleanupTestUser, createTestAgent, createTestContext, createTestUser } f
 // Mock getServerDB to return our test database instance
 let testDB: LobeChatDatabase;
 vi.mock('@/database/core/db-adaptor', () => ({
-  getServerDB: vi.fn(() => testDB),
+  getServerDB: vi.fn(function () {
+    return testDB;
+  }),
 }));
 
 // Mock FileService to avoid S3 dependency
 vi.mock('@/server/services/file', () => ({
-  FileService: vi.fn().mockImplementation(() => ({
-    createGlobalFile: vi.fn().mockResolvedValue({ id: 'mock-global-file-id' }),
-    createFileRecord: vi.fn().mockResolvedValue({ fileId: 'mock-file-id', url: '/f/mock-file-id' }),
-    downloadFileToLocal: vi.fn(),
-    getFileContent: vi.fn(),
-    uploadBuffer: vi.fn().mockResolvedValue({ key: 'mock-key' }),
-    uploadMedia: vi.fn().mockResolvedValue({ key: 'mock-key' }),
-  })),
+  FileService: vi.fn().mockImplementation(function () {
+    return {
+      createGlobalFile: vi.fn().mockResolvedValue({ id: 'mock-global-file-id' }),
+      createFileRecord: vi
+        .fn()
+        .mockResolvedValue({ fileId: 'mock-file-id', url: '/f/mock-file-id' }),
+      downloadFileToLocal: vi.fn(),
+      getFileContent: vi.fn(),
+      uploadBuffer: vi.fn().mockResolvedValue({ key: 'mock-key' }),
+      uploadMedia: vi.fn().mockResolvedValue({ key: 'mock-key' }),
+    };
+  }),
 }));
 
 // Mock SkillResourceService to avoid S3 dependency
 vi.mock('@/server/services/skill/resource', () => ({
-  SkillResourceService: vi.fn().mockImplementation(() => ({
-    storeResources: vi.fn().mockResolvedValue({}),
-    readResource: vi.fn().mockRejectedValue(new Error('Resource not found')),
-    listResources: vi.fn().mockResolvedValue([]),
-  })),
+  SkillResourceService: vi.fn().mockImplementation(function () {
+    return {
+      storeResources: vi.fn().mockResolvedValue({}),
+      readResource: vi.fn().mockRejectedValue(new Error('Resource not found')),
+      listResources: vi.fn().mockResolvedValue([]),
+    };
+  }),
 }));
 
 // Mock GitHub module
@@ -51,21 +59,26 @@ const normalizeIdentifierPart = (part: string) =>
     .replaceAll(/^-|-$/g, '');
 
 const mockGitHubInstance = {
-  downloadRepoZip: vi.fn(),
-  generateIdentifier: vi
-    .fn()
-    .mockImplementation((info: { owner: string; path?: string; repo: string }) => {
-      const parts = [normalizeIdentifierPart(info.owner), normalizeIdentifierPart(info.repo)];
-      if (info.path) {
-        const lastSegment = info.path.split('/').findLast(Boolean);
-        if (lastSegment) parts.push(normalizeIdentifierPart(lastSegment));
-      }
-      return parts.join('-').toLowerCase();
-    }),
+  downloadCommitZip: vi.fn(),
+  resolveCommit: vi.fn().mockResolvedValue('a'.repeat(40)),
+  generateIdentifier: vi.fn().mockImplementation(function (info: {
+    owner: string;
+    path?: string;
+    repo: string;
+  }) {
+    const parts = [normalizeIdentifierPart(info.owner), normalizeIdentifierPart(info.repo)];
+    if (info.path) {
+      const lastSegment = info.path.split('/').findLast(Boolean);
+      if (lastSegment) parts.push(normalizeIdentifierPart(lastSegment));
+    }
+    return parts.join('-').toLowerCase();
+  }),
   parseRepoUrl: vi.fn(),
 };
 vi.mock('@/server/modules/GitHub', () => ({
-  GitHub: vi.fn().mockImplementation(() => mockGitHubInstance),
+  GitHub: vi.fn().mockImplementation(function () {
+    return mockGitHubInstance;
+  }),
   GitHubNotFoundError: class extends Error {},
   GitHubParseError: class extends Error {},
 }));
@@ -76,14 +89,18 @@ const mockParserInstance = {
   parseZipPackage: vi.fn(),
 };
 vi.mock('@/server/services/skill/parser', () => ({
-  SkillParser: vi.fn().mockImplementation(() => mockParserInstance),
+  SkillParser: vi.fn().mockImplementation(function () {
+    return mockParserInstance;
+  }),
 }));
 
 const mockMarketServiceInstance = {
   getSkillDownloadUrl: vi.fn(),
 };
 vi.mock('@/server/services/market', () => ({
-  MarketService: vi.fn().mockImplementation(() => mockMarketServiceInstance),
+  MarketService: vi.fn().mockImplementation(function () {
+    return mockMarketServiceInstance;
+  }),
 }));
 
 // User-supplied URLs (importFromUrl / importFromMarket download) must be fetched through
@@ -93,10 +110,17 @@ vi.mock('@/server/services/market', () => ({
 const { mockSsrfSafeFetch } = vi.hoisted(() => ({ mockSsrfSafeFetch: vi.fn() }));
 vi.mock('@lobechat/ssrf-safe-fetch', () => ({ ssrfSafeFetch: mockSsrfSafeFetch }));
 
-const mockFetch = vi.fn(() => {
+const mockFetch = vi.fn(function () {
   throw new Error('raw global fetch must not be used for user-supplied URLs; use ssrfSafeFetch');
 });
 vi.stubGlobal('fetch', mockFetch);
+
+const researchSkillInput = (agentId: string) => ({
+  agentId,
+  content: '# Research Helper\n\nUse this skill for research.',
+  skillName: 'research-helper',
+  targetNamespace: 'agent' as const,
+});
 
 describe('Skill Router Integration Tests', () => {
   let serverDB: LobeChatDatabase;
@@ -488,12 +512,7 @@ describe('Skill Router Integration Tests', () => {
       const caller = agentDocumentRouter.createCaller(createTestContext(userId));
       const agentId = await createTestAgent(serverDB, userId);
 
-      const result = await caller.createSkillByPath({
-        agentId,
-        content: '# Research Helper\n\nUse this skill for research.',
-        skillName: 'research-helper',
-        targetNamespace: 'agent',
-      });
+      const result = await caller.createSkillByPath(researchSkillInput(agentId));
 
       if (!result) {
         throw new Error('Expected createSkill to return a skill file node');
@@ -546,12 +565,7 @@ describe('Skill Router Integration Tests', () => {
       const caller = agentDocumentRouter.createCaller(createTestContext(userId));
       const agentId = await createTestAgent(serverDB, userId);
 
-      await caller.createSkillByPath({
-        agentId,
-        content: '# Research Helper\n\nUse this skill for research.',
-        skillName: 'research-helper',
-        targetNamespace: 'agent',
-      });
+      await caller.createSkillByPath(researchSkillInput(agentId));
 
       await expect(
         caller.createSkillByPath({
@@ -607,12 +621,7 @@ describe('Skill Router Integration Tests', () => {
       const documentCaller = agentDocumentRouter.createCaller(createTestContext(userId));
       const agentId = await createTestAgent(serverDB, userId);
 
-      await skillCaller.createSkillByPath({
-        agentId,
-        content: '# Research Helper\n\nUse this skill for research.',
-        skillName: 'research-helper',
-        targetNamespace: 'agent',
-      });
+      await skillCaller.createSkillByPath(researchSkillInput(agentId));
 
       const id = await getManagedSkillBindingId({
         agentId,
@@ -633,12 +642,7 @@ describe('Skill Router Integration Tests', () => {
       const documentCaller = agentDocumentRouter.createCaller(createTestContext(userId));
       const agentId = await createTestAgent(serverDB, userId);
 
-      await skillCaller.createSkillByPath({
-        agentId,
-        content: '# Research Helper\n\nUse this skill for research.',
-        skillName: 'research-helper',
-        targetNamespace: 'agent',
-      });
+      await skillCaller.createSkillByPath(researchSkillInput(agentId));
 
       const id = await getManagedSkillBindingId({
         agentId,
@@ -656,6 +660,35 @@ describe('Skill Router Integration Tests', () => {
   });
 
   describe('convertDocumentToSkill', () => {
+    it('does not execute frontmatter when converting a document', async () => {
+      const executed = vi.fn();
+      vi.stubGlobal('__skillFrontmatterExecuted', executed);
+      try {
+        const caller = agentDocumentRouter.createCaller(createTestContext(userId));
+        const agentId = await createTestAgent(serverDB, userId);
+        const doc = await agentDocumentModel.create(
+          agentId,
+          'untrusted-document',
+          `---js
+(() => { globalThis.__skillFrontmatterExecuted(); throw new Error('Executed frontmatter'); })()
+---
+Body`,
+        );
+        await expect(
+          caller.convertDocumentToSkill({
+            agentId,
+            description: 'Description',
+            name: 'untrusted-skill',
+            sourceAgentDocumentId: doc!.id,
+            title: 'Skill',
+          }),
+        ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+        expect(executed).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
     it('should migrate an existing document into a managed skill in place', async () => {
       const caller = agentDocumentRouter.createCaller(createTestContext(userId));
       const agentId = await createTestAgent(serverDB, userId);
@@ -869,7 +902,7 @@ describe('Skill Router Integration Tests', () => {
         path: 'skills/skill-creator',
         repo: 'openclaw',
       });
-      mockGitHubInstance.downloadRepoZip.mockResolvedValue(Buffer.from('mock-zip-content'));
+      mockGitHubInstance.downloadCommitZip.mockResolvedValue(Buffer.from('mock-zip-content'));
       mockParserInstance.parseZipPackage.mockResolvedValue({
         content: '# Skill Creator\n\nCreate skills easily.',
         manifest: { name: 'skill-creator', description: 'Create skills' },
@@ -886,7 +919,7 @@ describe('Skill Router Integration Tests', () => {
 
       expect(result).toBeDefined();
       expect(result!.skill.name).toBe('skill-creator');
-      expect(result!.skill.identifier).toBe('openclaw-openclaw-skill-creator');
+      expect(result!.skill.identifier).toMatch(/^openclaw-openclaw-skill-creator-[a-f0-9]{20}$/);
       expect(result!.skill.source).toBe('market');
       expect(result!.skill.manifest).toMatchObject({
         repository: 'https://github.com/openclaw/openclaw',
@@ -896,12 +929,13 @@ describe('Skill Router Integration Tests', () => {
       // Verify parseRepoUrl was called with correct URL
       expect(mockGitHubInstance.parseRepoUrl).toHaveBeenCalledWith(
         'https://github.com/openclaw/openclaw/tree/main/skills/skill-creator',
-        undefined,
+        'HEAD',
       );
 
-      // Verify parseZipPackage was called with basePath and repackSkillZip
+      // Verify parseZipPackage was called with basePath, the directory name as fallback, and repackSkillZip
       expect(mockParserInstance.parseZipPackage).toHaveBeenCalledWith(expect.any(Buffer), {
         basePath: 'skills/skill-creator',
+        fallbackName: 'skill-creator',
         repackSkillZip: true,
       });
     });
@@ -913,10 +947,10 @@ describe('Skill Router Integration Tests', () => {
         path: 'skills/demo',
         repo: 'skills',
       });
-      mockGitHubInstance.downloadRepoZip.mockResolvedValue(Buffer.from('mock-zip'));
+      mockGitHubInstance.downloadCommitZip.mockResolvedValue(Buffer.from('mock-zip'));
 
       let callCount = 0;
-      mockParserInstance.parseZipPackage.mockImplementation(() => {
+      mockParserInstance.parseZipPackage.mockImplementation(function () {
         callCount++;
         return {
           content: callCount === 1 ? '# Original' : '# Updated Content',
@@ -995,7 +1029,7 @@ description: A skill from URL
       });
 
       let callCount = 0;
-      mockParserInstance.parseSkillMd.mockImplementation(() => {
+      mockParserInstance.parseSkillMd.mockImplementation(function () {
         callCount++;
         return {
           content: callCount === 1 ? '# Original' : '# Updated',
@@ -1050,7 +1084,7 @@ description: A skill from URL
       });
 
       let callCount = 0;
-      mockParserInstance.parseZipPackage.mockImplementation(() => {
+      mockParserInstance.parseZipPackage.mockImplementation(function () {
         callCount++;
         return {
           content: callCount === 1 ? '# Original' : '# Updated',

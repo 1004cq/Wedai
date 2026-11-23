@@ -16,6 +16,7 @@
  *  State    paid → cannot transition to failed/closed
  */
 import crypto from 'node:crypto';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { StripeWebhookService } from '../StripeWebhookService';
@@ -30,27 +31,34 @@ const mockCredit = vi.fn();
 
 // We mock the entire @lobechat/database module
 vi.mock('@lobechat/database', () => {
-  const webhookEventsMock = { id: 'whe_1', status: 'pending', orderId: null, payloadHash: null, attemptCount: 0 };
-
   return {
-    WebhookEventModel: vi.fn().mockImplementation(() => ({
-      upsert: mockUpsert,
-      markFailed: mockMarkFailed,
-      markIgnored: mockMarkIgnored,
-      markProcessed: mockMarkProcessed,
-    })),
-    BillingAccountModel: vi.fn().mockImplementation(() => ({})),
-    OrderModel: vi.fn().mockImplementation(() => ({})),
+    WebhookEventModel: vi.fn(function WebhookEventModel(this: {
+      upsert: typeof mockUpsert;
+      markFailed: typeof mockMarkFailed;
+      markIgnored: typeof mockMarkIgnored;
+      markProcessed: typeof mockMarkProcessed;
+    }) {
+      this.upsert = mockUpsert;
+      this.markFailed = mockMarkFailed;
+      this.markIgnored = mockMarkIgnored;
+      this.markProcessed = mockMarkProcessed;
+    }),
+    BillingAccountModel: vi.fn(function BillingAccountModel() {}),
+    OrderModel: vi.fn(function OrderModel() {}),
     billingAccounts: { id: 'billingAccounts.id' },
     orders: { id: 'orders.id', status: 'orders.status' },
-    webhookEvents: { id: 'webhookEvents.id', status: 'webhookEvents.status', attemptCount: 'attemptCount' },
+    webhookEvents: {
+      id: 'webhookEvents.id',
+      status: 'webhookEvents.status',
+      attemptCount: 'attemptCount',
+    },
   };
 });
 
 vi.mock('@lobechat/billing', () => ({
-  BillingCommandService: vi.fn().mockImplementation(() => ({
-    credit: mockCredit,
-  })),
+  BillingCommandService: vi.fn(function BillingCommandService(this: { credit: typeof mockCredit }) {
+    this.credit = mockCredit;
+  }),
 }));
 
 // ─── Stripe event builders ─────────────────────────────────────────────────────
@@ -74,10 +82,17 @@ function makeCheckoutEvent(overrides: Record<string, any> = {}) {
   } as any;
 }
 
-function makeOrder(overrides: Partial<{
-  id: string; status: string; amountMinor: bigint; currency: string;
-  billingAccountId: string; orderNo: string; priceSnapshot: any;
-}> = {}) {
+function makeOrder(
+  overrides: Partial<{
+    id: string;
+    status: string;
+    amountMinor: bigint;
+    currency: string;
+    billingAccountId: string;
+    orderNo: string;
+    priceSnapshot: any;
+  }> = {},
+) {
   return {
     id: 'ord_test_001',
     status: 'pending',
@@ -147,16 +162,22 @@ describe('PAY-004: single valid success event', () => {
   it('returns processed outcome and calls credit', async () => {
     const event = makeCheckoutEvent();
     const rawBody = JSON.stringify(event);
-    const webhookRow = { id: 'whe_1', status: 'pending', orderId: null, payloadHash: null, attemptCount: 0 };
+    const webhookRow = {
+      id: 'whe_1',
+      status: 'pending',
+      orderId: null,
+      payloadHash: null,
+      attemptCount: 0,
+    };
     const order = makeOrder();
     const billingAcc = { id: 'bac_test_001' };
 
     mockUpsert.mockResolvedValueOnce({ isNew: true, event: webhookRow });
 
     const db = makeMockDb([
-      [webhookRow],       // FOR UPDATE event row
-      [order],            // orders SELECT
-      [billingAcc],       // billingAccounts SELECT
+      [webhookRow], // FOR UPDATE event row
+      [order], // orders SELECT
+      [billingAcc], // billingAccounts SELECT
     ]);
 
     const svc = new StripeWebhookService(db as any);
@@ -173,7 +194,13 @@ describe('PAY-006: repeated event → idempotent', () => {
     const event = makeCheckoutEvent();
     const rawBody = JSON.stringify(event);
     const hash = crypto.createHash('sha256').update(rawBody, 'utf8').digest('hex');
-    const processedRow = { id: 'whe_1', status: 'processed', orderId: 'ord_test_001', payloadHash: hash, attemptCount: 1 };
+    const processedRow = {
+      id: 'whe_1',
+      status: 'processed',
+      orderId: 'ord_test_001',
+      payloadHash: hash,
+      attemptCount: 1,
+    };
 
     // Second delivery: upsert returns isNew=false
     mockUpsert.mockResolvedValueOnce({ isNew: false, event: processedRow });
@@ -192,7 +219,13 @@ describe('PAY-007: amount mismatch → failed + alert', () => {
   it('rejects when Stripe amount does not match local order', async () => {
     const event = makeCheckoutEvent({ amount_total: 99999 }); // wrong amount
     const rawBody = JSON.stringify(event);
-    const webhookRow = { id: 'whe_1', status: 'pending', orderId: null, payloadHash: null, attemptCount: 0 };
+    const webhookRow = {
+      id: 'whe_1',
+      status: 'pending',
+      orderId: null,
+      payloadHash: null,
+      attemptCount: 0,
+    };
     const order = makeOrder({ amountMinor: BigInt(9900) }); // correct amount is 9900
 
     mockUpsert.mockResolvedValueOnce({ isNew: true, event: webhookRow });
@@ -212,7 +245,13 @@ describe('PAY-007: currency mismatch → failed + alert', () => {
   it('rejects when Stripe currency does not match local order', async () => {
     const event = makeCheckoutEvent({ currency: 'usd' }); // wrong currency
     const rawBody = JSON.stringify(event);
-    const webhookRow = { id: 'whe_1', status: 'pending', orderId: null, payloadHash: null, attemptCount: 0 };
+    const webhookRow = {
+      id: 'whe_1',
+      status: 'pending',
+      orderId: null,
+      payloadHash: null,
+      attemptCount: 0,
+    };
     const order = makeOrder({ currency: 'CNY', amountMinor: BigInt(9900) });
 
     mockUpsert.mockResolvedValueOnce({ isNew: true, event: webhookRow });
@@ -237,7 +276,13 @@ describe('PAY-008: late failure after paid → order stays paid', () => {
       data: { object: { id: 'pi_xxx', status: 'failed', metadata: { orderId: 'ord_test_001' } } },
     } as any;
     const rawBody = JSON.stringify(failEvent);
-    const webhookRow = { id: 'whe_2', status: 'pending', orderId: null, payloadHash: null, attemptCount: 0 };
+    const webhookRow = {
+      id: 'whe_2',
+      status: 'pending',
+      orderId: null,
+      payloadHash: null,
+      attemptCount: 0,
+    };
     const paidOrder = makeOrder({ status: 'paid' });
 
     mockUpsert.mockResolvedValueOnce({ isNew: true, event: webhookRow });
@@ -255,8 +300,17 @@ describe('PAY-011: payload hash mismatch → failed + alert', () => {
   it('rejects same event_id with different body', async () => {
     const event = makeCheckoutEvent();
     const differentBody = JSON.stringify({ ...event, extra: 'tampered' });
-    const storedHash = crypto.createHash('sha256').update(JSON.stringify(event), 'utf8').digest('hex');
-    const existingRow = { id: 'whe_1', status: 'pending', orderId: null, payloadHash: storedHash, attemptCount: 1 };
+    const storedHash = crypto
+      .createHash('sha256')
+      .update(JSON.stringify(event), 'utf8')
+      .digest('hex');
+    const existingRow = {
+      id: 'whe_1',
+      status: 'pending',
+      orderId: null,
+      payloadHash: storedHash,
+      attemptCount: 1,
+    };
 
     mockUpsert.mockResolvedValueOnce({ isNew: false, event: existingRow });
     mockMarkFailed.mockResolvedValueOnce({});
@@ -283,7 +337,13 @@ describe('PAY-012: unknown event type → ignored, zero funds', () => {
       data: { object: {} },
     } as any;
     const rawBody = JSON.stringify(unknownEvent);
-    const webhookRow = { id: 'whe_3', status: 'pending', orderId: null, payloadHash: null, attemptCount: 0 };
+    const webhookRow = {
+      id: 'whe_3',
+      status: 'pending',
+      orderId: null,
+      payloadHash: null,
+      attemptCount: 0,
+    };
 
     mockUpsert.mockResolvedValueOnce({ isNew: true, event: webhookRow });
     mockMarkIgnored.mockResolvedValueOnce({});
@@ -308,7 +368,13 @@ describe('State: pending → closed on session.expired', () => {
       data: { object: { id: 'cs_xxx', metadata: { orderId: 'ord_test_001' } } },
     } as any;
     const rawBody = JSON.stringify(expiredEvent);
-    const webhookRow = { id: 'whe_4', status: 'pending', orderId: null, payloadHash: null, attemptCount: 0 };
+    const webhookRow = {
+      id: 'whe_4',
+      status: 'pending',
+      orderId: null,
+      payloadHash: null,
+      attemptCount: 0,
+    };
     const pendingOrder = makeOrder({ status: 'pending' });
 
     mockUpsert.mockResolvedValueOnce({ isNew: true, event: webhookRow });

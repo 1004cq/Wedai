@@ -15,6 +15,7 @@ import { WEB_ONBOARDING } from './agents/web-onboarding';
 import type { BuiltinAgentDefinition, BuiltinAgentSlug, RuntimeContext } from './types';
 import { BUILTIN_AGENT_SLUGS } from './types';
 
+export * from './collaborative';
 export * from './types';
 
 // Agent exports
@@ -26,6 +27,8 @@ export { NIGHTLY_REVIEW } from './agents/nightly-review';
 export { ONBOARDING_TASK_RECOMMENDER } from './agents/onboarding-task-recommender';
 export { ONBOARDING_UNDERSTANDING } from './agents/onboarding-understanding';
 export { PAGE_AGENT } from './agents/page-agent';
+export type { ProjectCoordinatorContext } from './agents/project-coordinator';
+export { createProjectCoordinatorAgentConfig } from './agents/project-coordinator';
 export { SELF_FEEDBACK_INTENT } from './agents/self-feedback-intent';
 export { SELF_REFLECTION } from './agents/self-reflection';
 export { SKILL_MANAGEMENT } from './agents/skill-management';
@@ -79,6 +82,10 @@ export const getAgentPersistConfig = (slug: string) => {
   return { ...agent.persist, slug: agent.slug };
 };
 
+/** A reply-language preference is injected only when the user chose a locale. */
+export const getReplyLanguageInstruction = (locale: string) =>
+  `Preferred reply language: ${locale}. Use this language unless the user explicitly asks to switch.`;
+
 /**
  * Get runtime config for a builtin agent
  * @param slug - The builtin agent slug
@@ -91,5 +98,14 @@ export const getAgentRuntimeConfig = (slug: string, ctx: RuntimeContext) => {
 
   // Handle both function and plain object forms
   const runtime = agent.runtime;
-  return typeof runtime === 'function' ? runtime(ctx) : runtime;
+  const config = typeof runtime === 'function' ? runtime(ctx) : runtime;
+  // Web onboarding also localizes its interactive choice labels in its own prompt.
+  if (!ctx.userLocale || slug === BUILTIN_AGENT_SLUGS.webOnboarding) return config;
+
+  return {
+    ...config,
+    systemRole: [config.systemRole, getReplyLanguageInstruction(ctx.userLocale)]
+      .filter(Boolean)
+      .join('\n\n'),
+  };
 };

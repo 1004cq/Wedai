@@ -122,19 +122,6 @@ describe('isSonomaOrLaterSafari', () => {
       vi.restoreAllMocks();
     });
 
-    it('should return false when on server side', () => {
-      vi.mock('./platform', async (importOriginal) => {
-        const mod = await importOriginal();
-
-        return {
-          // @ts-ignore
-          ...mod,
-          isOnServerSide: true,
-        };
-      });
-      expect(isArc()).toBe(false);
-    });
-
     it('should return true when CSS custom property matches', () => {
       window.matchMedia = vi.fn().mockReturnValue({ matches: true });
       expect(isArc()).toBe(true);

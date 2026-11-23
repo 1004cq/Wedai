@@ -1,8 +1,9 @@
-import type { EditedFileEntry } from '@lobechat/builtin-tools/fileEditScan';
+import {
+  deriveOperationEditedFiles,
+  type OperationEditedFile,
+} from '@lobechat/builtin-tools/operationArtifacts';
 import type { AssistantContentBlock } from '@lobechat/types';
 import { useMemo } from 'react';
-
-import { deriveOperationEditedFiles } from './deriveEditedFiles';
 
 /**
  * Derived, non-persisted list of files edited across one assistant round.
@@ -23,5 +24,5 @@ import { deriveOperationEditedFiles } from './deriveEditedFiles';
 export const useOperationEditedFiles = (
   blocks?: AssistantContentBlock[],
   hasWorkSurface?: boolean,
-): EditedFileEntry[] =>
+): OperationEditedFile[] =>
   useMemo(() => deriveOperationEditedFiles(blocks ?? [], hasWorkSurface), [blocks, hasWorkSurface]);

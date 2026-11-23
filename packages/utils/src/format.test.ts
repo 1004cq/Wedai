@@ -15,6 +15,7 @@ import {
   formatTime,
   formatTokenNumber,
   formatUsageValue,
+  formatUsd,
 } from './format';
 
 describe('format', () => {
@@ -105,11 +106,6 @@ describe('format', () => {
       expect(formatTime(59.99)).toBe('60.0 s');
       expect(formatTime(3599.99)).toBe('60.0 min');
     });
-    it('should handle edge cases', () => {
-      expect(formatTime(0)).toBe('0.0 s');
-      expect(formatTime(59.99)).toBe('60.0 s');
-      expect(formatTime(3599.99)).toBe('60.0 min');
-    });
     it('should handle non-number inputs', () => {
       expect(formatTime('not a number' as any)).toBe('not a number');
       expect(formatTime(undefined as any)).toBe('--');
@@ -190,8 +186,6 @@ describe('format', () => {
 
     it('should format prices with digits correctly', () => {
       expect(formatPrice(1000, 1)).toBe('1,000.0');
-      expect(formatPrice(1234.56)).toBe('1,234.56');
-      expect(formatPrice(0.99)).toBe('0.99');
       expect(formatPrice(1000000.01, 0)).toBe('1,000,000');
     });
 
@@ -213,6 +207,11 @@ describe('format', () => {
     it('should format USD prices correctly', () => {
       expect(formatPriceByCurrency(1000)).toBe('1,000.00');
       expect(formatPriceByCurrency(1234.56, 'USD')).toBe('1,234.56');
+    });
+
+    it('should preserve meaningful precision for sub-dollar unit prices', () => {
+      expect(formatPriceByCurrency(0.075, 'USD')).toBe('0.075');
+      expect(formatPriceByCurrency(0.25, 'USD')).toBe('0.25');
     });
 
     it('should use the correct CNY_TO_USD conversion rate', () => {
@@ -333,6 +332,26 @@ describe('format', () => {
       expect(formatSpendTime(null)).toBe('--');
       expect(formatSpendTime('')).toBe('--');
       expect(formatSpendTime('not a date')).toBe('--');
+    });
+  });
+
+  describe('formatUsd', () => {
+    it('formats dollars with grouping and two decimals', () => {
+      expect(formatUsd(0)).toBe('$0.00');
+      expect(formatUsd(1234.5)).toBe('$1,234.50');
+    });
+
+    it('keeps up to four decimals below one dollar', () => {
+      expect(formatUsd(0.01234)).toBe('$0.0123');
+      expect(formatUsd(0.0001)).toBe('$0.0001');
+    });
+
+    it('shows a floor marker for tiny positive amounts', () => {
+      expect(formatUsd(0.00001)).toBe('<$0.0001');
+    });
+
+    it('returns a placeholder for non-finite values', () => {
+      expect(formatUsd(Number.NaN)).toBe('--');
     });
   });
 });

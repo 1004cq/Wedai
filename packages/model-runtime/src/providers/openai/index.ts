@@ -1,21 +1,30 @@
 import { ModelProvider, openaiChatModels } from 'model-bank';
 
 import { pruneReasoningPayload } from '../../core/contextBuilders/openai';
-import type { OpenAICompatibleFactoryOptions } from '../../core/openaiCompatibleFactory';
-import { createOpenAICompatibleRuntime } from '../../core/openaiCompatibleFactory';
+import type { OpenAICompatibleFactoryOptions } from '../../core/openaiCompatible';
+import { createOpenAICompatibleRuntime } from '../../core/openaiCompatible';
+import { resolveOpenAIToolAnchoring } from '../../core/protocols/openaiResponses/toolAnchoring';
 import type { ChatStreamPayload } from '../../types';
 import { processMultiProviderModelList } from '../../utils/modelParse';
+import { appendDecisionModels } from '../../utils/postProcessModelList';
 import {
-  isGPT5ProResponsesModel,
+  isGPTProResponsesModel,
   isOpenAIComputerUseModel,
   isOpenAIReasoningPayloadModel,
   isResponsesAPIModel,
+  isToolAnchoringGPTModel,
   supportsOpenAIServiceTierFlex,
 } from './modelId';
 
 export interface OpenAIModelCard {
   id: string;
 }
+
+const hasAudioInput = (payload: ChatStreamPayload) =>
+  payload.messages.some(
+    (message) =>
+      Array.isArray(message.content) && message.content.some((part) => part.type === 'audio_url'),
+  );
 
 const oaiSearchContextSize = process.env.OPENAI_SEARCH_CONTEXT_SIZE; // low, medium, high
 const enableServiceTierFlex = process.env.OPENAI_SERVICE_TIER_FLEX === '1';
@@ -26,13 +35,18 @@ export const params = {
     contextPreFlight: { models: openaiChatModels },
     handlePayload: (payload) => {
       const { enabledSearch, model, ...rest } = payload;
+      const containsAudioInput = hasAudioInput(payload);
 
-      if (isResponsesAPIModel(model) || enabledSearch) {
+      if (!containsAudioInput && (isResponsesAPIModel(model) || enabledSearch)) {
         return { ...rest, apiMode: 'responses', enabledSearch, model } as ChatStreamPayload;
       }
 
       if (isOpenAIReasoningPayloadModel(model)) {
-        return pruneReasoningPayload(payload) as any;
+        return pruneReasoningPayload({
+          ...rest,
+          ...(containsAudioInput && { apiMode: 'chatCompletion' }),
+          model,
+        } as ChatStreamPayload) as any;
       }
 
       if (model.includes('-search-')) {
@@ -56,13 +70,17 @@ export const params = {
 
       return {
         ...rest,
+        ...(containsAudioInput && { apiMode: 'chatCompletion' }),
         model,
         ...(enableServiceTierFlex &&
           supportsOpenAIServiceTierFlex(model) && { service_tier: 'flex' }),
         stream: payload.stream ?? true,
       };
     },
+    supportsAudioInput: true,
   },
+  /** @see https://developers.openai.com/api/docs/guides/decisions */
+  decide: { path: '/decisions', protocol: 'openai' },
   debug: {
     chatCompletion: () => process.env.DEBUG_OPENAI_CHAT_COMPLETION === '1',
     responses: () => process.env.DEBUG_OPENAI_RESPONSES === '1',
@@ -72,7 +90,9 @@ export const params = {
     const modelList: OpenAIModelCard[] = modelsPage.data;
 
     // Automatically detect model provider and select corresponding configuration
-    return processMultiProviderModelList(modelList, 'openai');
+    const models = await processMultiProviderModelList(modelList, 'openai');
+    // `decide` serves these through `/decisions`, so list their `:decision` cards too.
+    return appendDecisionModels(models);
   },
   provider: ModelProvider.OpenAI,
   responses: {
@@ -95,7 +115,7 @@ export const params = {
         const reasoning = payload.reasoning
           ? { ...payload.reasoning, summary: 'auto' }
           : { summary: 'auto' };
-        if (isGPT5ProResponsesModel(model)) {
+        if (isGPTProResponsesModel(model)) {
           reasoning.effort = 'high';
         }
         return pruneReasoningPayload({
@@ -121,6 +141,13 @@ export const params = {
         tools: openaiTools,
       } as any;
     },
+    // Read the env per request so an operator's override applies without a rebuild.
+    toolAnchoring: ({ baseURL, model }) =>
+      resolveOpenAIToolAnchoring({
+        baseURL,
+        isSupportedModel: isToolAnchoringGPTModel(model),
+        override: process.env.OPENAI_RESPONSES_TOOL_ANCHORING,
+      }),
   },
 } satisfies OpenAICompatibleFactoryOptions;
 

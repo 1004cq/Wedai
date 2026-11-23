@@ -1,9 +1,19 @@
 import { GROUP_CHAT_TOPIC_URL } from '@lobechat/const';
 import type { ChatTopicStatus } from '@lobechat/types';
-import { Flexbox, Icon, Skeleton, Tag, Text, Tooltip } from '@lobehub/ui';
-import { createStaticStyles, cssVar, useTheme } from 'antd-style';
+import {
+  createStaticStyles,
+  cssVar,
+  Flexbox,
+  Icon,
+  Skeleton,
+  Tag,
+  Text,
+  Tooltip,
+  useTheme,
+} from '@lobehub/ui';
 import { HashIcon, MessageSquareDashed } from 'lucide-react';
-import { AnimatePresence, m } from 'motion/react';
+import { AnimatePresence } from 'motion/react';
+import * as m from 'motion/react-m';
 import { memo, Suspense, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -11,23 +21,21 @@ import { useActiveWorkspaceSlug } from '@/business/client/hooks/useActiveWorkspa
 import DotsLoading from '@/components/DotsLoading';
 import { TOPIC_STATUS_VISUALS } from '@/components/ExecutionStatus';
 import RingLoadingIcon from '@/components/RingLoading';
-import { isDesktop } from '@/const/version';
+import { TopicMigrationIndicator } from '@/features/AgentTransferMigration';
 import { useHasDraft } from '@/features/ChatInput/draftStorage';
 import NavItem from '@/features/NavPanel/components/NavItem';
 import TopicCreatorAvatar, { useTopicCreator } from '@/features/TopicCreatorAvatar';
-import { useFocusTopicPopup } from '@/features/TopicPopupGuard/useTopicPopupsRegistry';
 import { buildWorkspaceAwarePath } from '@/features/Workspace/workspaceAwarePath';
 import { useAgentGroupStore } from '@/store/agentGroup';
 import { useChatStore } from '@/store/chat';
 import { operationSelectors } from '@/store/chat/selectors';
 import { messageMapKey } from '@/store/chat/utils/messageMapKey';
-import { useElectronStore } from '@/store/electron';
-import { useGlobalStore } from '@/store/global';
 
 import ThreadList from '../../TopicListContent/ThreadList';
 import Actions from './Actions';
 import Editing from './Editing';
 import { useTopicItemDropdownMenu } from './useDropdownMenu';
+import { useTopicClick } from './useTopicClick';
 
 const styles = createStaticStyles(({ css }) => ({
   neonDotWrapper: css`
@@ -65,18 +73,6 @@ const styles = createStaticStyles(({ css }) => ({
   `,
 }));
 
-// Module-scoped so a click on any topic cancels a pending click on another.
-// Per-item refs can't do that, which lets rapid clicks across items all
-// fire — each racing to write activeTopicId (see ).
-let pendingSingleClickTimer: ReturnType<typeof setTimeout> | null = null;
-
-const cancelPendingSingleClick = () => {
-  if (pendingSingleClickTimer) {
-    clearTimeout(pendingSingleClickTimer);
-    pendingSingleClickTimer = null;
-  }
-};
-
 interface TopicItemProps {
   active?: boolean;
   fav?: boolean;
@@ -95,11 +91,8 @@ const TopicItem = memo<TopicItemProps>(({ id, title, fav, active, threadId, stat
   const loadingRingColor = isDarkMode
     ? cssVar.colorWarningBorder
     : `color-mix(in srgb, ${cssVar.colorWarning} 45%, transparent)`;
-  const toggleMobileTopic = useGlobalStore((s) => s.toggleMobileTopic);
-  const [activeGroupId, switchTopic] = useAgentGroupStore((s) => [s.activeGroupId, s.switchTopic]);
-  const addTab = useElectronStore((s) => s.addTab);
+  const activeGroupId = useAgentGroupStore((s) => s.activeGroupId);
   const activeWorkspaceSlug = useActiveWorkspaceSlug();
-  const focusTopicPopup = useFocusTopicPopup({ groupId: activeGroupId });
   // A workspace-private group is a purely personal conversation space even
   // inside a workspace — its topics all belong to the viewer, so the creator
   // avatar carries no information there. Only workspace-shared (`public`)
@@ -119,7 +112,7 @@ const TopicItem = memo<TopicItemProps>(({ id, title, fav, active, threadId, stat
 
   const [editing, isLoading] = useChatStore((s) => [
     id ? s.topicRenamingId === id : false,
-    id ? s.topicLoadingIds.includes(id) : false,
+    id ? operationSelectors.isTopicVisiblyRunning(id)(s) : false,
   ]);
 
   const isUnreadCompleted = useChatStore(
@@ -133,51 +126,12 @@ const TopicItem = memo<TopicItemProps>(({ id, title, fav, active, threadId, stat
     [id],
   );
 
-  const handleClick = useCallback(() => {
-    if (editing) return;
-    if (isDesktop) {
-      cancelPendingSingleClick();
-      pendingSingleClickTimer = setTimeout(() => {
-        pendingSingleClickTimer = null;
-        void (async () => {
-          await focusTopicPopup(id);
-          switchTopic(id);
-          toggleMobileTopic(false);
-        })();
-      }, 250);
-    } else {
-      void (async () => {
-        await focusTopicPopup(id);
-        switchTopic(id);
-        toggleMobileTopic(false);
-      })();
-    }
-  }, [editing, focusTopicPopup, id, switchTopic, toggleMobileTopic]);
-
-  const handleDoubleClick = useCallback(async () => {
-    if (!id || !activeGroupId || !isDesktop) return;
-    cancelPendingSingleClick();
-    if (await focusTopicPopup(id)) {
-      switchTopic(id);
-      toggleMobileTopic(false);
-      return;
-    }
-    addTab(buildWorkspaceAwarePath(GROUP_CHAT_TOPIC_URL(activeGroupId, id), activeWorkspaceSlug));
-    switchTopic(id);
-    toggleMobileTopic(false);
-  }, [
-    id,
-    activeGroupId,
-    activeWorkspaceSlug,
-    addTab,
-    focusTopicPopup,
-    switchTopic,
-    toggleMobileTopic,
-  ]);
+  const handleClick = useTopicClick({ editing, id });
 
   const dropdownMenu = useTopicItemDropdownMenu({
     id,
     status,
+    title,
     toggleEditing,
   });
 
@@ -277,7 +231,7 @@ const TopicItem = memo<TopicItemProps>(({ id, title, fav, active, threadId, stat
             </Tag>
           </Flexbox>
         }
-        onClick={handleClick}
+        onClick={() => void handleClick()}
       />
     );
   }
@@ -316,10 +270,15 @@ const TopicItem = memo<TopicItemProps>(({ id, title, fav, active, threadId, stat
   return (
     <Flexbox style={{ position: 'relative' }}>
       <NavItem
+        titleMarquee
         actions={<Actions dropdownMenu={dropdownMenu} />}
         active={active && !threadId}
         contextMenuItems={dropdownMenu}
         disabled={editing}
+        // A conversation whose history is still being migrated/copied stays
+        // listed (hiding it would read as data loss) and shows a spinner;
+        // opening it jumps it to the front of the backfill queue.
+        extra={<TopicMigrationIndicator groupId={activeGroupId} topicId={id} />}
         href={!editing ? href : undefined}
         title={title === '...' ? <DotsLoading gap={3} size={4} /> : title}
         titleColor={cssVar.colorText}
@@ -339,16 +298,15 @@ const TopicItem = memo<TopicItemProps>(({ id, title, fav, active, threadId, stat
           iconPostfix: unreadNode,
           titlePrefix: draftPrefix,
         }}
-        onClick={handleClick}
-        onDoubleClick={() => void handleDoubleClick()}
+        onClick={() => void handleClick()}
       />
       <Editing id={id} title={title} toggleEditing={toggleEditing} />
       {active && (
         <Suspense
           fallback={
             <Flexbox gap={8} paddingBlock={8} paddingInline={24} width={'100%'}>
-              <Skeleton.Button active size={'small'} style={{ height: 18, width: '100%' }} />
-              <Skeleton.Button active size={'small'} style={{ height: 18, width: '100%' }} />
+              <Skeleton height={18} width={'100%'} />
+              <Skeleton height={18} width={'100%'} />
             </Flexbox>
           }
         >

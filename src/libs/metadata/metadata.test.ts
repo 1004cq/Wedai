@@ -1,9 +1,14 @@
 // @vitest-environment node
-import { BRANDING_NAME } from '@lobechat/business-const';
+import type * as BusinessConst from '@lobechat/business-const';
+import { BRANDING_LOGO_URL, BRANDING_NAME } from '@lobechat/business-const';
 import { OG_URL } from '@lobechat/const';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { isCustomORG } from '@/const/version';
 
 import { Meta } from './metadata';
+
+const DEFAULT_OG_IMAGE = BRANDING_LOGO_URL ? '/brand/cq-og.png' : OG_URL;
 
 describe('Metadata', () => {
   const meta = new Meta();
@@ -21,12 +26,12 @@ describe('Metadata', () => {
         openGraph: expect.objectContaining({
           title: `Test Title · ${BRANDING_NAME}`,
           description: expect.any(String),
-          images: [{ url: OG_URL, alt: `Test Title · ${BRANDING_NAME}` }],
+          images: [{ url: DEFAULT_OG_IMAGE, alt: `Test Title · ${BRANDING_NAME}` }],
         }),
         twitter: expect.objectContaining({
           title: `Test Title · ${BRANDING_NAME}`,
           description: expect.any(String),
-          images: [OG_URL],
+          images: [DEFAULT_OG_IMAGE],
         }),
       });
     });
@@ -89,7 +94,7 @@ describe('Metadata', () => {
         title: 'Twitter Title',
         description: 'Twitter description',
         images: ['https://twitter-image.com'],
-        site: '@lobehub',
+        site: isCustomORG ? undefined : '@lobehub',
         url: 'https://example.com/twitter',
       });
     });
@@ -133,5 +138,48 @@ describe('Metadata', () => {
         ]),
       });
     });
+  });
+});
+
+describe('Metadata default description and branding', () => {
+  const loadMeta = async (branding?: Partial<typeof BusinessConst>) => {
+    vi.resetModules();
+    if (branding) {
+      vi.doMock('@lobechat/business-const', async (importOriginal) => ({
+        ...(await importOriginal<typeof BusinessConst>()),
+        ...branding,
+      }));
+      // Under vitest 5 a `doMock` only lands once the test file itself imports
+      // something, so pull the mocked module in before the one under test.
+      await import('@lobechat/business-const');
+    }
+    const { Meta: FreshMeta } = await import('./metadata');
+    return new FreshMeta();
+  };
+
+  afterEach(() => {
+    vi.doUnmock('@lobechat/business-const');
+    vi.resetModules();
+  });
+
+  it('keeps the existing wording under default branding', async () => {
+    // Wedai overlays branding; pin upstream defaults so this case stays branding-agnostic.
+    const result = (
+      await loadMeta({ BRANDING_NAME: 'LobeHub', BRANDING_LOGO_URL: '', ORG_NAME: 'LobeHub' })
+    ).generate({ title: 'Home', url: 'https://example.com' });
+
+    expect(result.description).toContain(
+      'LobeChat offers you the best ChatGPT, OLLaMA, Gemini, Claude WebUI user experience',
+    );
+  });
+
+  it("names the deployment's own app under custom branding", async () => {
+    const result = (await loadMeta({ BRANDING_NAME: 'Acme', ORG_NAME: 'Acme Inc' })).generate({
+      title: 'Home',
+      url: 'https://example.com',
+    });
+
+    expect(result.description).toContain('Acme offers you the best');
+    expect(result.description).not.toMatch(/LobeChat|LobeHub/);
   });
 });

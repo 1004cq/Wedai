@@ -1,23 +1,34 @@
-import type { GenericItemType } from '@lobehub/ui';
+import type { DropdownItem } from '@lobehub/ui';
+
+import { isTabClosable } from './tabClose';
 
 type TabContextMenuLabelKey =
   | 'tab.closeCurrentTab'
   | 'tab.closeLeftTabs'
   | 'tab.closeOtherTabs'
   | 'tab.closeRightTabs'
+  | 'tab.closeSplitView'
+  | 'tab.openInSplitView'
   | 'tab.pin'
+  | 'tab.reopenClosedTab'
   | 'tab.unpin';
 
 interface TabContextMenuParams {
+  canReopenClosed: boolean;
   id: string;
   index: number;
+  inSplitView: boolean;
   onClose: (id: string) => void;
   onCloseLeft: (id: string) => void;
   onCloseOthers: (id: string) => void;
   onCloseRight: (id: string) => void;
+  onCloseSplitView: () => void;
+  onOpenInSplitView: (id: string) => void;
+  onReopenClosed: () => void;
   onTogglePin: (id: string) => void;
   pinned: boolean;
   pinnedCount: number;
+  splitViewEnabled: boolean;
   t: (key: TabContextMenuLabelKey) => string;
   totalCount: number;
 }
@@ -26,31 +37,62 @@ interface TabContextMenuParams {
 // reach something. Pinned tabs occupy indices 0..pinnedCount-1, which is what lets the
 // reachable counts fall out of the target's index alone.
 export const buildTabContextMenuItems = ({
+  canReopenClosed,
   id,
   index,
+  inSplitView,
   onClose,
   onCloseLeft,
   onCloseOthers,
   onCloseRight,
+  onCloseSplitView,
+  onOpenInSplitView,
+  onReopenClosed,
   onTogglePin,
   pinned,
   pinnedCount,
+  splitViewEnabled,
   t,
   totalCount,
-}: TabContextMenuParams): GenericItemType[] => {
+}: TabContextMenuParams): DropdownItem[] => {
   const closableLeft = Math.max(0, index - pinnedCount);
   const closableRight = Math.max(0, totalCount - Math.max(index + 1, pinnedCount));
   const closableOthers = totalCount - pinnedCount - (pinned ? 0 : 1);
 
-  return [
+  const tabEntries: DropdownItem[] = [
     {
       key: 'togglePin',
       label: pinned ? t('tab.unpin') : t('tab.pin'),
       onClick: () => onTogglePin(id),
     },
+    splitViewEnabled || inSplitView
+      ? {
+          key: inSplitView ? 'closeSplitView' : 'openInSplitView',
+          label: t(inSplitView ? 'tab.closeSplitView' : 'tab.openInSplitView'),
+          onClick: () => (inSplitView ? onCloseSplitView() : onOpenInSplitView(id)),
+        }
+      : null,
+  ];
+
+  // Undoing a close is about the strip, not this tab, so it stays offered even for a lone tab.
+  const reopenEntries: DropdownItem[] = [
     { type: 'divider' },
     {
-      disabled: totalCount === 1,
+      disabled: !canReopenClosed,
+      key: 'reopenClosedTab',
+      label: t('tab.reopenClosedTab'),
+      onClick: onReopenClosed,
+    },
+  ];
+
+  // A lone tab has nothing to close (see tabClose), so the whole close group is left out
+  // rather than shown disabled.
+  if (!isTabClosable(totalCount)) return [...tabEntries, ...reopenEntries];
+
+  return [
+    ...tabEntries,
+    { type: 'divider' },
+    {
       key: 'closeCurrentTab',
       label: t('tab.closeCurrentTab'),
       onClick: () => onClose(id),
@@ -74,5 +116,6 @@ export const buildTabContextMenuItems = ({
       label: t('tab.closeRightTabs'),
       onClick: () => onCloseRight(id),
     },
+    ...reopenEntries,
   ];
 };

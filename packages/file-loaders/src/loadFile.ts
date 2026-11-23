@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import debug from 'debug';
 
+import { isFileParseBudgetError } from './fileParseBudget';
 import { getFileLoader } from './loaders';
 import type { DocumentPage, FileDocument, FileMetadata, SupportedFileType } from './types';
 import { isTextReadableFile } from './utils/isTextReadableFile';
@@ -42,6 +43,10 @@ const getFileType = (filePath: string): SupportedFileType | undefined => {
   // Handle specific non-text or complex types
   log(`Checking specific types for extension: '${extension}'`);
   switch (extension) {
+    case 'ipynb': {
+      log('File type identified as ipynb');
+      return 'ipynb';
+    }
     case 'pdf': {
       log('File type identified as pdf');
       return 'pdf';
@@ -137,6 +142,7 @@ export const loadFile = async (
   let pages: DocumentPage[];
   let aggregatedContent = '';
   let loaderError: string | undefined;
+  let pageError: string | undefined;
   let aggregationError: string | undefined;
   let metadataError: string | undefined;
   let loaderSpecificMetadata: any | undefined;
@@ -153,6 +159,14 @@ export const loadFile = async (
       log('Loading pages with loader:', LoaderClass.name, 'for file:', filePath);
       pages = await loaderInstance.loadPages(filePath);
       log('Pages loaded successfully, count:', pages.length);
+
+      // Loaders report a whole-file failure as error pages instead of throwing.
+      // Surface it at the document level, where callers look, so a failed load
+      // is not mistaken for an empty file. A mix of good and failed pages (a
+      // PDF with one broken page) still counts as a successful load.
+      if (pages.length > 0 && pages.every((page) => page.metadata?.error)) {
+        pageError = [...new Set(pages.map((page) => page.metadata.error))].join('; ');
+      }
 
       try {
         // 2. Aggregate content using the instance
@@ -185,6 +199,8 @@ export const loadFile = async (
         log('Loader does not support attachDocumentMetadata.');
       }
     } catch (loadErr) {
+      // A budget refusal must reach the caller instead of becoming a cached error page
+      if (isFileParseBudgetError(loadErr)) throw loadErr;
       const error = loadErr as Error;
       console.error(
         `Error loading pages for ${filePath} using ${LoaderClass.name}: ${error.message}`,
@@ -227,7 +243,8 @@ export const loadFile = async (
 
   // Combine all potential errors
   const combinedError =
-    [fsError, loaderError, aggregationError, metadataError].filter(Boolean).join('; ') || undefined;
+    [fsError, loaderError, pageError, aggregationError, metadataError].filter(Boolean).join('; ') ||
+    undefined;
   if (combinedError) log('Combined errors:', combinedError);
 
   // Construct the final FileDocument

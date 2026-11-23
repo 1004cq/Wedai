@@ -14,17 +14,25 @@ const prefixes = {
   subscriptions: 'sub',
   orders: 'ord',
   paymentAttempts: 'pat',
-  wallets: 'wal',
+  // Distinct from workspaceAuditLogs (`wal`) to avoid id collisions.
+  wallets: 'wlt',
   ledgerEntries: 'led',
   usageRecords: 'usg',
   webhookEvents: 'whe',
+  connectorLinks: 'lnk',
   agentCronJobs: 'cron',
   agentSkills: 'skl',
+  agentHistoryJobs: 'ahj',
   briefs: 'brf',
   taskComments: 'cmt',
   tasks: 'task',
   agents: 'agt',
+  artboardGroups: 'abg',
+  artboardPages: 'abp',
+  artboards: 'art',
   budget: 'bgt',
+  channelThreads: 'cht',
+  channels: 'chn',
   chatGroups: 'cg',
   documents: 'docs',
   evalBenchmarks: 'evb',
@@ -32,15 +40,22 @@ const prefixes = {
   evalExperiments: 'exp',
   evalRuns: 'run',
   evalTestCases: 'case',
+  expertiseDomains: 'epd',
   files: 'file',
+  collections: 'col',
   generationBatches: 'gb',
   generationTopics: 'gt',
   generations: 'gen',
+  goals: 'goal',
   knowledgeBases: 'kb',
   memory: 'mem',
   messageGroups: 'mg',
   messages: 'msg',
+  metrics: 'mtr',
   plugins: 'plg',
+  projects: 'prj',
+  projectSites: 'psite',
+  scmChangeRequests: 'scr',
   sessionGroups: 'sg',
   sessions: 'ssn',
   threads: 'thd',
@@ -61,6 +76,17 @@ export const idGenerator = (namespace: keyof typeof prefixes, size = 12) => {
 
   return `${prefix}_${hash()}`;
 };
+/**
+ * Share-link ids act as bearer tokens in public URLs, so unlike internal ids
+ * they must come from the platform CSPRNG and carry enough entropy to resist
+ * enumeration. 16 random bytes encode to 22 base64url chars (128 bits).
+ *
+ * Stored ids are looked up verbatim, so links issued before this change with
+ * shorter non-secure ids keep working — this only hardens newly issued shares.
+ */
+export const generateShareToken = () =>
+  Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString('base64url');
+
 export const randomSlug = (count = 2) => (generate(count) as string[]).join('-');
 
 export const inboxSessionId = (userId: string) => `ssn_inbox_${userId}`;

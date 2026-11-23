@@ -1,16 +1,23 @@
 'use client';
 
-import { Flexbox, Text } from '@lobehub/ui';
-import { Button, confirmModal } from '@lobehub/ui/base-ui';
-import { Progress } from 'antd';
-import { createStaticStyles, cssVar } from 'antd-style';
+import {
+  Button,
+  confirmModal,
+  createStaticStyles,
+  cssVar,
+  Flexbox,
+  Progress,
+  Text,
+} from '@lobehub/ui';
 import { Play, RotateCcw } from 'lucide-react';
 import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useParams } from 'react-router';
 
 import AsyncBoundary from '@/components/AsyncBoundary';
+import { RouteLoading } from '@/components/Skeleton/RouteSegment';
 import { runSelectors, useEvalStore } from '@/store/eval';
+import { densityVars } from '@/styles/densityVars';
 
 import { createBatchResumeModal } from './features/BatchResumeModal';
 import CaseResultsTable from './features/CaseResultsTable';
@@ -39,11 +46,11 @@ const styles = createStaticStyles(({ css }) => ({
   `,
   panelHeader: css`
     display: flex;
-    gap: 12px;
+    gap: ${densityVars.contentGap};
     align-items: center;
     justify-content: space-between;
 
-    padding-block: 12px;
+    padding-block: ${densityVars.contentGap};
     padding-inline: 20px;
     border-block-end: 1px solid ${cssVar.colorBorderSecondary};
   `,
@@ -78,7 +85,7 @@ const RunDetail = memo(() => {
 
   const pollingConfig = { refreshInterval: isActive ? POLLING_INTERVAL : 0 };
 
-  const { error, isLoading, mutate } = useFetchRunDetail(runId!, pollingConfig);
+  const { error, isHydrated, isValidating, revalidate } = useFetchRunDetail(runId!, pollingConfig);
   useFetchRunResults(runId!, pollingConfig);
 
   const hasResults = !!runResults?.results?.length;
@@ -109,8 +116,9 @@ const RunDetail = memo(() => {
       error={error}
       errorVariant={'page'}
       isEmpty={!runDetail}
-      isLoading={isLoading}
-      onRetry={() => mutate()}
+      isLoading={!isHydrated || isValidating}
+      loading={<RouteLoading />}
+      onRetry={() => void revalidate()}
     >
       {runDetail && (
         <Flexbox gap={24} padding={24} style={{ margin: '0 auto', maxWidth: 1440, width: '100%' }}>
@@ -127,7 +135,7 @@ const RunDetail = memo(() => {
                 <span className={styles.panelLabel}>{t('run.detail.report')}</span>
               </header>
               <div className={styles.panelBody}>
-                <StatsCards metrics={runDetail.metrics ?? undefined} />
+                <StatsCards k={k} metrics={runDetail.metrics ?? undefined} />
                 {hasResults && (
                   <BenchmarkCharts
                     benchmarkId={benchmarkId!}

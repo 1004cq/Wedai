@@ -8,13 +8,14 @@ import { CollapsedMessage } from '../../AssistantGroup/components/CollapsedMessa
 import DisplayContent from '../../components/DisplayContent';
 import FileChunks from '../../components/FileChunks';
 import ImageFileListViewer from '../../components/ImageFileListViewer';
-import Reasoning from '../../components/Reasoning';
+import { NoReplyNotice, resolveNoReplyReason } from '../../components/NoReplyNotice';
+import Reasoning, { hasRenderableReasoning } from '../../components/Reasoning';
 import SearchGrounding from '../../components/SearchGrounding';
 import { useMarkdown } from '../useMarkdown';
 
 const MessageContent = memo<UIChatMessage>(
   ({ id, tools, content, chunksList, search, imageList, metadata, ...props }) => {
-    const { drawer, markdownProps } = useMarkdown(id, !!tools?.length);
+    const { drawer, markdownProps } = useMarkdown(id, !!tools?.length, content);
     // Use ConversationStore instead of ChatStore
     const generating = useConversationStore(messageStateSelectors.isMessageGenerating(id));
     const isCreating = useConversationStore(messageStateSelectors.isMessageCreating(id));
@@ -30,10 +31,15 @@ const MessageContent = memo<UIChatMessage>(
     // remove \n to avoid empty content
     // refs: https://github.com/lobehub/lobe-chat/pull/6153
     const showReasoning =
-      (!!props.reasoning && props.reasoning.content?.trim() !== '') ||
-      (!props.reasoning && isReasoning);
+      hasRenderableReasoning(props.reasoning) || (!props.reasoning && isReasoning);
 
     const showFileChunks = !!chunksList && chunksList.length > 0;
+
+    const noReplyReason = resolveNoReplyReason({
+      content,
+      hasOtherOutput: !!tools?.length || showImageItems || !!metadata?.isMultimodal,
+      isGenerating: isLoading,
+    });
 
     if (isCollapsed) return <CollapsedMessage content={content} id={id} />;
 
@@ -50,16 +56,20 @@ const MessageContent = memo<UIChatMessage>(
         )}
         {showFileChunks && <FileChunks data={chunksList} />}
         {showReasoning && <Reasoning {...props.reasoning} id={id} />}
-        <DisplayContent
-          content={content}
-          generating={isLoading}
-          hasImages={showImageItems}
-          id={id}
-          isMultimodal={metadata?.isMultimodal}
-          isToolCallGenerating={isToolCallGenerating}
-          markdownProps={markdownProps}
-          tempDisplayContent={metadata?.tempDisplayContent}
-        />
+        {noReplyReason ? (
+          <NoReplyNotice reason={noReplyReason} />
+        ) : (
+          <DisplayContent
+            content={content}
+            generating={isLoading}
+            hasImages={showImageItems}
+            id={id}
+            isMultimodal={metadata?.isMultimodal}
+            isToolCallGenerating={isToolCallGenerating}
+            markdownProps={markdownProps}
+            tempDisplayContent={metadata?.tempDisplayContent}
+          />
+        )}
         {showImageItems && <ImageFileListViewer items={imageList} />}
       </Flexbox>
     );

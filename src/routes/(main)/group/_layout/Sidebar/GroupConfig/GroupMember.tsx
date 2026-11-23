@@ -1,12 +1,12 @@
 'use client';
 
-import { ActionIcon, Flexbox } from '@lobehub/ui';
-import { createStaticStyles } from 'antd-style';
+import { agentDisplayName } from '@lobechat/types';
+import { ActionIcon, createStaticStyles, Flexbox } from '@lobehub/ui';
 import { UserMinus } from 'lucide-react';
 import { memo, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { DEFAULT_AVATAR } from '@/const/meta';
+import AddGroupMemberModal from '@/features/AddAgentMemberModal';
 import AgentProfilePopup from '@/features/AgentProfileCard/AgentProfilePopup';
 import NavItem from '@/features/NavPanel/components/NavItem';
 import { useResourceAccess } from '@/features/ResourcePermission/useResourceAccess';
@@ -19,7 +19,6 @@ import { agentGroupSelectors } from '@/store/agentGroup/selectors';
 import { useUserStore } from '@/store/user';
 import { userProfileSelectors } from '@/store/user/slices/auth/selectors';
 
-import AddGroupMemberModal from '../AddGroupMemberModal';
 import GroupMemberItem from './GroupMemberItem';
 
 const styles = createStaticStyles(({ css, cssVar }) => ({
@@ -119,10 +118,11 @@ const GroupMember = memo<GroupMemberProps>(({ addModalOpen, onAddModalOpenChange
                 onDoubleClick={() => handleMemberDoubleClick(item.id)}
               >
                 <GroupMemberItem
-                  avatar={item.avatar || DEFAULT_AVATAR}
+                  agentId={item.id}
+                  avatar={item.avatar || undefined}
                   background={item.backgroundColor ?? undefined}
                   isExternal={!item.virtual}
-                  title={item.title || t('defaultSession', { ns: 'common' })}
+                  title={agentDisplayName(item, t('defaultSession', { ns: 'common' }))}
                   actions={
                     <ActionIcon
                       danger

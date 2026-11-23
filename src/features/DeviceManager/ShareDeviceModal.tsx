@@ -1,31 +1,37 @@
 'use client';
 
 import type { DeviceListItem, DeviceVisibility } from '@lobechat/types';
-import { Flexbox, Icon, Tag, Text } from '@lobehub/ui';
 import {
   Button,
   confirmModal,
   createModal,
+  createStaticStyles,
+  cssVar,
+  Flexbox,
+  Icon,
   Select,
-  toast,
+  Tag,
+  Text,
   useModalContext,
-} from '@lobehub/ui/base-ui';
-import { createStaticStyles, cssVar } from 'antd-style';
+} from '@lobehub/ui';
 import { t } from 'i18next';
 import { CircleCheck, Lock, Users } from 'lucide-react';
 import { memo, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router';
 
 import { useWorkspaceOptionLabel } from '@/business/client/hooks/useWorkspaceOptionLabel';
 import { useWorkspaces } from '@/business/client/hooks/useWorkspaces';
+import InlineErrorText from '@/components/InlineErrorText';
+import { useWorkspaceAwareNavigate } from '@/features/Workspace/useWorkspaceAwareNavigate';
 import { createWorkspaceLambdaClient } from '@/libs/trpc/client';
+import { densityVars } from '@/styles/densityVars';
 
 import { refreshDeviceList } from './const';
+import { type DeviceShareErrorView, getDeviceShareErrorView } from './deviceActionError';
 
 const styles = createStaticStyles(({ css }) => ({
   footer: css`
-    padding-block: 16px;
+    padding-block: ${densityVars.cardPadding};
     padding-inline: 24px;
   `,
   optionHint: css`
@@ -70,13 +76,15 @@ interface CompletionState {
 const ShareDeviceContent = memo<ShareDeviceContentProps>(({ device }) => {
   const { t: tSetting } = useTranslation(['setting', 'common']);
   const { close, setCanDismissByClickOutside } = useModalContext();
-  const navigate = useNavigate();
+  const navigate = useWorkspaceAwareNavigate();
   const workspaces = useWorkspaces();
   const renderWorkspaceLabel = useWorkspaceOptionLabel();
 
   const [targetId, setTargetId] = useState<string>();
   const [visibility, setVisibility] = useState<DeviceVisibility>('private');
   const [sharing, setSharing] = useState(false);
+  /** Share failure, shown above the footer buttons: the modal stays open with the chosen workspace and scope. */
+  const [shareError, setShareError] = useState<DeviceShareErrorView>();
   const [step, setStep] = useState<'done' | 'select-target'>('select-target');
   const [completion, setCompletion] = useState<CompletionState>();
 
@@ -159,6 +167,7 @@ const ShareDeviceContent = memo<ShareDeviceContentProps>(({ device }) => {
     const target = workspaces.find((w) => w.id === effectiveTargetId);
     if (!target) return;
 
+    setShareError(undefined);
     setSharing(true);
     // Lock dismissal so the mutation can't be interrupted mid-flight.
     setCanDismissByClickOutside?.(false);
@@ -191,9 +200,8 @@ const ShareDeviceContent = memo<ShareDeviceContentProps>(({ device }) => {
       setCompletion({ name: target.name, slug: target.slug });
       setStep('done');
     } catch (error) {
-      // Server messages (e.g. PRECONDITION_FAILED when the device dropped
-      // offline mid-flow) are user-facing — surface them verbatim.
-      toast.error(`${target.name}: ${(error as Error).message}`);
+      console.error('[ShareDeviceModal] share failed:', error);
+      setShareError(getDeviceShareErrorView(error, target.name));
     } finally {
       setSharing(false);
       setCanDismissByClickOutside?.(true);
@@ -203,7 +211,9 @@ const ShareDeviceContent = memo<ShareDeviceContentProps>(({ device }) => {
   const goToTarget = () => {
     if (!completion) return;
 
-    navigate(`/${completion.slug}/settings/devices`);
+    // The global modal host sits outside Electron's tab routers. Route through
+    // the active tab and preserve the explicitly selected workspace destination.
+    navigate(`/${completion.slug}/settings/devices`, { escape: true });
     close();
   };
 
@@ -250,7 +260,10 @@ const ShareDeviceContent = memo<ShareDeviceContentProps>(({ device }) => {
                 placeholder={tSetting('devices.share.selectPlaceholder')}
                 style={{ width: '100%' }}
                 value={effectiveTargetId}
-                onChange={(value) => setTargetId(value as string)}
+                onChange={(value) => {
+                  setTargetId(value as string);
+                  setShareError(undefined);
+                }}
               />
             </Flexbox>
 
@@ -269,6 +282,12 @@ const ShareDeviceContent = memo<ShareDeviceContentProps>(({ device }) => {
           </>
         )}
       </Flexbox>
+
+      {shareError && (
+        <Flexbox paddingBlock={'0 12px'} paddingInline={24}>
+          <InlineErrorText detail={shareError.detail}>{shareError.summary}</InlineErrorText>
+        </Flexbox>
+      )}
 
       <Flexbox horizontal className={styles.footer} gap={8} justify={'space-between'}>
         <Button disabled={sharing} onClick={close}>

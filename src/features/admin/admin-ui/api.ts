@@ -86,7 +86,8 @@ async function updateUserProfile(input: UpdateUserProfileInput): Promise<AdminUs
     email: input.email,
     fullName: input.fullName,
     phoneNumber: input.phone,
-    role: input.role === 'super_admin' ? 'admin' : input.role,
+    // Legacy callers may still send super_admin; coerce to admin.
+    role: (input.role as string | undefined) === 'super_admin' ? 'admin' : input.role,
     userId: input.userId,
     username: input.username,
   });

@@ -1,5 +1,10 @@
 import { verifyRunStatuses } from '@lobechat/const/verify';
-import type { VerifyCheckItem } from '@lobechat/types';
+import type {
+  AgentOperationCompletionReason,
+  AgentOperationStatus,
+  VerifyCheckItem,
+} from '@lobechat/types';
+import { sql } from 'drizzle-orm';
 import { boolean, index, integer, jsonb, pgTable, text } from 'drizzle-orm/pg-core';
 
 import { amountNumeric, timestamps, timestamptz } from './_helpers';
@@ -8,26 +13,6 @@ import { chatGroups } from './chatGroup';
 import { tasks } from './task';
 import { threads, topics } from './topic';
 import { workspaces } from './workspace';
-
-const operationStatuses = [
-  'idle',
-  'running',
-  'waiting_for_human',
-  'waiting_for_async_tool',
-  'done',
-  'error',
-  'interrupted',
-] as const;
-
-const completionReasons = [
-  'done',
-  'error',
-  'interrupted',
-  'max_steps',
-  'cost_limit',
-  'waiting_for_human',
-  'waiting_for_async_tool',
-] as const;
 
 export interface AgentOperationInterruption {
   canResume: boolean;
@@ -45,6 +30,10 @@ export interface AgentOperationError {
 export interface AgentOperationAppContext {
   defaultTaskAssigneeAgentId?: string;
   documentId?: string | null;
+  /** The agent a builder run edits (scope `agent_builder`); the run itself is owned by the builder. */
+  editingAgentId?: string;
+  /** The group a Group Agent Builder run edits; recovered by intervention continuations. */
+  editingGroupId?: string;
   groupId?: string | null;
   scope?: string | null;
   sessionId?: string;
@@ -74,8 +63,8 @@ export const agentOperations = pgTable(
     parentOperationId: text('parent_operation_id'),
 
     // ---- Lifecycle ----
-    status: text('status', { enum: operationStatuses }).notNull(),
-    completionReason: text('completion_reason', { enum: completionReasons }),
+    status: text('status').$type<AgentOperationStatus>().notNull(),
+    completionReason: text('completion_reason').$type<AgentOperationCompletionReason>(),
 
     // ---- Verify (delivery checker) — DEPRECATED, moved to verify_runs ----
     // The plan snapshot + rollup status now live on `verify_runs` (the session
@@ -157,7 +146,16 @@ export const agentOperations = pgTable(
     index('agent_operations_chat_group_id_idx').on(t.chatGroupId),
     index('agent_operations_parent_operation_id_idx').on(t.parentOperationId),
     index('agent_operations_status_idx').on(t.status),
+    /**
+     * Live-run scans of `StaleOperationReaper`. Keyed on `created_at` rather
+     * than `updated_at` on purpose: every write bumps `updated_at`, so an
+     * index on it would cost the table its HOT updates.
+     */
+    index('agent_operations_running_created_at_idx')
+      .on(t.createdAt)
+      .where(sql`${t.status} = 'running'`),
     index('agent_operations_user_id_created_at_idx').on(t.userId, t.createdAt),
+    index('agent_operations_workspace_id_created_at_idx').on(t.workspaceId, t.createdAt),
     index('agent_operations_metadata_idx').using('gin', t.metadata),
   ],
 );

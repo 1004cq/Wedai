@@ -61,7 +61,19 @@ export interface BuiltinSkill {
    * the raw `agent-skills:lobe-annotation-cleanup`.
    */
   title?: string;
+  /**
+   * Declared in the skill's own `SKILL.md` frontmatter and parsed from it, so a
+   * copy materialized onto a builder's disk carries the version it was installed
+   * at. Lets an installer compare an existing copy against the latest bundle
+   * instead of blindly overwriting or blindly skipping.
+   */
+  version?: string;
 }
+
+export type BuiltinSkillManifest = Pick<
+  BuiltinSkill,
+  'avatar' | 'description' | 'identifier' | 'name' | 'source' | 'title'
+>;
 
 // ===== Skill Source =====
 
@@ -120,6 +132,23 @@ export interface SkillResourceContent {
 
 // ===== Skill Item (full structure, for detail queries) =====
 
+export interface GitHubSkillUpstream {
+  /** Absent when a legacy import did not record its installed revision. */
+  installedCommit?: string;
+  /** Fingerprint of editable fields when this package was installed. */
+  installedFingerprint?: string;
+  owner: string;
+  path: string;
+  /** HEAD follows the default branch. A full commit SHA is pinned. */
+  ref: string;
+  repo: string;
+}
+
+export type GitHubSkillCheck =
+  | { status: 'current' | 'missing' | 'unavailable' | 'limited' | 'pinned' }
+  | { revision: string; status: 'chooseRef' }
+  | { commit: string; localChanges: boolean; revision: string; status: 'update' };
+
 export interface SkillItem {
   content?: string | null;
   createdAt: Date;
@@ -132,6 +161,7 @@ export interface SkillItem {
   resources?: Record<string, SkillResourceMeta> | null;
   source: SkillSource;
   updatedAt: Date;
+  upstream?: GitHubSkillUpstream | null;
   /** Creator attribution — drives the workspace row-level manage gate. */
   userId?: string | null;
   zipFileHash?: string | null;
@@ -148,6 +178,7 @@ export interface SkillListItem {
   name: string;
   source: SkillSource;
   updatedAt: Date;
+  upstream?: GitHubSkillUpstream | null;
   /** Creator attribution — drives the workspace row-level manage gate. */
   userId?: string | null;
   zipFileHash?: string | null;
@@ -190,4 +221,36 @@ export type SkillImportStatus = 'created' | 'updated' | 'unchanged';
 export interface SkillImportResult {
   skill: SkillItem;
   status: SkillImportStatus;
+}
+
+export interface GitHubSkillSelection {
+  path: string;
+  /** Installed row and revision observed during discovery, or null for a new skill. */
+  revision: string | null;
+}
+
+export interface GitHubSkillCandidate extends GitHubSkillSelection {
+  description: string;
+  name: string;
+  status: 'new' | 'update' | 'unchanged' | 'conflict' | 'forbidden' | 'invalid';
+}
+
+export interface GitHubSkillDiscovery {
+  candidates: GitHubSkillCandidate[];
+  /** Commit the scan was read at; the import pins the same one. */
+  commit: string;
+  /** Library the scan ran against; an import into another library is refused. */
+  scope: string;
+}
+
+export interface GitHubSkillBatchInput {
+  commit: string;
+  gitUrl: string;
+  scope: string;
+  selections: GitHubSkillSelection[];
+}
+
+export interface GitHubSkillOutcome {
+  path: string;
+  status: SkillImportStatus | 'failed' | 'conflict' | 'forbidden';
 }

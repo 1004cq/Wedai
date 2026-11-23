@@ -1,4 +1,7 @@
-import { getWorkspaceRolePermissionCodes } from '@lobechat/const/rbac';
+import {
+  getWorkspaceRolePermissionCodes,
+  PERSONAL_DEFAULT_PERMISSIONS,
+} from '@lobechat/const/rbac';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 
 import type { LobeChatDatabase } from '@/database/type';
@@ -52,21 +55,19 @@ export class RbacModel {
     this.db = db;
   }
 
-  /** Resolve several users' effective workspace grants in two batched queries. */
-  static getWorkspaceUsersPermissions = async ({
+  /**
+   * Load several users' workspace memberships and global grants in two batched
+   * queries, then resolve any one of those users' effective workspace grants.
+   */
+  private static loadWorkspacePermissions = async ({
     db,
-    requireMembership = false,
     userIds,
     workspaceId,
   }: {
     db: LobeChatDatabase;
-    requireMembership?: boolean;
     userIds: string[];
     workspaceId: string;
-  }): Promise<Map<string, string[]>> => {
-    const uniqueUserIds = [...new Set(userIds)];
-    if (uniqueUserIds.length === 0) return new Map();
-
+  }) => {
     const [memberships, globalPermissions] = await Promise.all([
       db
         .select({
@@ -79,7 +80,7 @@ export class RbacModel {
         .where(
           and(
             eq(workspaceMembers.workspaceId, workspaceId),
-            inArray(workspaceMembers.userId, uniqueUserIds),
+            inArray(workspaceMembers.userId, userIds),
             isNull(workspaceMembers.deletedAt),
           ),
         ),
@@ -91,7 +92,7 @@ export class RbacModel {
         .innerJoin(permissions, eq(rolePermissions.permissionId, permissions.id))
         .where(
           and(
-            inArray(userRoles.userId, uniqueUserIds),
+            inArray(userRoles.userId, userIds),
             isNull(userRoles.workspaceId),
             eq(roles.isActive, true),
             eq(permissions.isActive, true),
@@ -110,21 +111,48 @@ export class RbacModel {
       globalPermissionsByUserId.set(userId, codes);
     }
 
-    const permissionsByUserId = new Map<string, string[]>();
-    for (const userId of uniqueUserIds) {
+    return (userId: string) => {
       const membership = membershipByUserId.get(userId);
-      if (requireMembership && !membership) continue;
-
       const role =
         membership?.role === 'owner' && membership.primaryOwnerId !== userId
           ? 'admin'
           : membership?.role;
-      permissionsByUserId.set(userId, [
+      const codes = [
         ...new Set([
           ...(role ? getWorkspaceRolePermissionCodes(role) : []),
           ...(globalPermissionsByUserId.get(userId) ?? []),
         ]),
-      ]);
+      ];
+      return { codes, isMember: !!membership };
+    };
+  };
+
+  /** Resolve several users' effective workspace grants in two batched queries. */
+  static getWorkspaceUsersPermissions = async ({
+    db,
+    requireMembership = false,
+    userIds,
+    workspaceId,
+  }: {
+    db: LobeChatDatabase;
+    requireMembership?: boolean;
+    userIds: string[];
+    workspaceId: string;
+  }): Promise<Map<string, string[]>> => {
+    const uniqueUserIds = [...new Set(userIds)];
+    if (uniqueUserIds.length === 0) return new Map();
+
+    const resolve = await RbacModel.loadWorkspacePermissions({
+      db,
+      userIds: uniqueUserIds,
+      workspaceId,
+    });
+
+    const permissionsByUserId = new Map<string, string[]>();
+    for (const userId of uniqueUserIds) {
+      const { codes, isMember } = resolve(userId);
+      if (requireMembership && !isMember) continue;
+      permissionsByUserId.set(userId, codes);
     }
 
     return permissionsByUserId;
@@ -166,7 +194,7 @@ export class RbacModel {
    */
   private getGlobalPermissionCodes = async (
     userId: string,
-    permissionCodes?: string[],
+    permissionCodes: string[],
   ): Promise<string[]> => {
     const result = await this.db
       .select({ permissionCode: permissions.code })
@@ -178,7 +206,7 @@ export class RbacModel {
         and(
           eq(userRoles.userId, userId),
           isNull(userRoles.workspaceId),
-          permissionCodes ? inArray(permissions.code, permissionCodes) : undefined,
+          inArray(permissions.code, permissionCodes),
           eq(roles.isActive, true),
           eq(permissions.isActive, true),
           // Check if role assignment is not expired
@@ -203,12 +231,12 @@ export class RbacModel {
     const targetUserId = opts.userId || this.userId;
 
     if (opts.workspaceId) {
-      const permissionsByUserId = await RbacModel.getWorkspaceUsersPermissions({
+      const resolve = await RbacModel.loadWorkspacePermissions({
         db: this.db,
         userIds: [targetUserId],
         workspaceId: opts.workspaceId,
       });
-      return permissionsByUserId.get(targetUserId) ?? [];
+      return resolve(targetUserId).codes;
     }
 
     const result = await this.db
@@ -229,9 +257,15 @@ export class RbacModel {
         ),
       );
 
+    // Personal mode: every authenticated user implicitly holds the `:owner`
+    // baseline over their own data — ordinary accounts have no
+    // `rbac_user_roles` rows, and resource queries are `user_id`-isolated
+    // anyway. DB grants (super_admin etc.) union on top.
     // De-dupe — the same code can come from multiple roles (e.g. owner +
     // member if a user somehow ends up with both).
-    return [...new Set(result.map((row) => row.permissionCode))];
+    return [
+      ...new Set([...PERSONAL_DEFAULT_PERMISSIONS, ...result.map((row) => row.permissionCode)]),
+    ];
   };
 
   /**
@@ -303,6 +337,13 @@ export class RbacModel {
       // Matrix miss — a globally-granted role (super_admin) may still allow it.
       const globalMatches = await this.getGlobalPermissionCodes(targetUserId, permissionCodes);
       return globalMatches.length > 0;
+    }
+
+    // Personal mode: the implicit `:owner` baseline settles most checks with
+    // zero DB queries. Workspace mode above is untouched — the
+    // membership-role matrix stays the single source of truth there.
+    if (permissionCodes.some((code) => PERSONAL_DEFAULT_PERMISSIONS.includes(code))) {
+      return true;
     }
 
     const result = await this.db

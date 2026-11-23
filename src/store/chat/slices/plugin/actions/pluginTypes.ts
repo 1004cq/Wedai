@@ -5,6 +5,8 @@ import {
 } from '@lobechat/types';
 import debug from 'debug';
 
+import { resolveEffectiveWorkingDirectory } from '@/helpers/effectiveWorkingDirectory';
+import { resolveClientLocalSandbox } from '@/helpers/localSandbox';
 import { type MCPToolCallResult } from '@/libs/mcp';
 import { mcpService } from '@/services/mcp';
 import { messageService } from '@/services/message';
@@ -200,6 +202,10 @@ export class PluginTypesActionImpl {
           groupId,
           groupOrchestration,
           isSubAgent,
+          // Only the in-process desktop path reaches here; gateway-routed runs
+          // get the same decision from the server device-proxy. Both funnel
+          // through `isLocalSandboxEnabled`, so they cannot disagree.
+          ...resolveClientLocalSandbox(agentId),
           messageId: id,
           operationId,
           registerAfterCompletion,
@@ -212,11 +218,17 @@ export class PluginTypesActionImpl {
             rootRuntimeOperationContext?.messageId,
           stepContext,
           subAgent,
+          subAgentId: operation?.context?.subAgentId ?? rootRuntimeOperationContext?.subAgentId,
           taskId,
           threadId,
           toolCallId: payload.id,
           toolMessageId: id,
           topicId,
+          workingDirectory: resolveEffectiveWorkingDirectory(
+            this.#get(),
+            topicId ?? rootRuntimeOperationContext?.topicId,
+            agentId ?? rootRuntimeOperationContext?.agentId,
+          ),
         });
 
       log('[BuiltinToolCall] invoke:end', {
@@ -326,6 +338,8 @@ export class PluginTypesActionImpl {
 
     try {
       const result = await mcpService.invokeMcpToolCall(payload, {
+        // Resolve connectors as this agent's runs do: a linked one serves only its agent
+        agentId: message?.agentId ?? undefined,
         signal: abortController?.signal,
         topicId: message?.topicId,
       });
@@ -408,11 +422,12 @@ export class PluginTypesActionImpl {
     );
 
     try {
-      // Pass topicId from message context, not global active state
+      // Pass agentId/topicId from message context, not global active state
       // This ensures tool calls use the correct topic even if user switches topics
       data = await executor(payload, {
+        agentId: message?.agentId ?? undefined,
         sourceToolCallId: payload.id,
-        topicId: message?.topicId,
+        topicId: message?.topicId ?? undefined,
       });
     } catch (error) {
       console.error(`[${logPrefix}] Error:`, error);

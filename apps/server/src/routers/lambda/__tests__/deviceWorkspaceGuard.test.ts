@@ -3,9 +3,19 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { DeviceModel } from '@/database/models/device';
 
-import { assertWorkspaceDeviceVisible, assertWorkspaceRootApproved } from '../deviceWorkspaceGuard';
+import {
+  assertWorkspaceDeviceEditable,
+  assertWorkspaceDeviceVisible,
+  assertWorkspaceRootApproved,
+  registerDeviceSkillRoots,
+} from '../deviceWorkspaceGuard';
 
-const mockModel = (row: { defaultCwd?: string | null; workingDirs?: { path: string }[] } | null) =>
+const mockModel = (
+  row: {
+    defaultCwd?: string | null;
+    workingDirs?: Array<{ path: string; git?: { activeWorktree?: string } }>;
+  } | null,
+) =>
   ({
     findByDeviceId: vi.fn().mockResolvedValue(row),
   }) as unknown as DeviceModel;
@@ -46,6 +56,15 @@ describe('assertWorkspaceRootApproved', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
+  it('allows a root that matches a worktree activeWorktree', async () => {
+    const model = mockModel({
+      workingDirs: [{ path: '/Users/me/proj', git: { activeWorktree: '/Users/me/proj-feat-x' } }],
+    });
+    await expect(
+      assertWorkspaceRootApproved(model, 'dev-1', '/Users/me/proj-feat-x'),
+    ).resolves.toBeUndefined();
+  });
+
   it('rejects when the device has no approved roots at all', async () => {
     const model = mockModel({ workingDirs: [] });
     await expect(
@@ -60,6 +79,34 @@ describe('assertWorkspaceRootApproved', () => {
     ).rejects.toBeInstanceOf(TRPCError);
   });
 
+  it('keeps parent-level skill roots of earlier projects while their project stays approved', async () => {
+    registerDeviceSkillRoots('dev-skills', [
+      { projectRoot: '/repo-a/pkg', root: '/repo-a/.agents/skills' },
+    ]);
+    registerDeviceSkillRoots('dev-skills', [
+      { projectRoot: '/repo-b/pkg', root: '/repo-b/.agents/skills' },
+    ]);
+    const model = mockModel({ workingDirs: [{ path: '/repo-a/pkg' }, { path: '/repo-b/pkg' }] });
+
+    await expect(
+      assertWorkspaceRootApproved(model, 'dev-skills', '/repo-a/.agents/skills'),
+    ).resolves.toBeUndefined();
+    await expect(
+      assertWorkspaceRootApproved(model, 'dev-skills', '/repo-b/.agents/skills'),
+    ).resolves.toBeUndefined();
+  });
+
+  it('revokes a parent-level skill root once its project is no longer approved', async () => {
+    registerDeviceSkillRoots('dev-revoke', [
+      { projectRoot: '/repo-a/pkg', root: '/repo-a/.agents/skills' },
+    ]);
+    const model = mockModel({ workingDirs: [{ path: '/elsewhere' }] });
+
+    await expect(
+      assertWorkspaceRootApproved(model, 'dev-revoke', '/repo-a/.agents/skills'),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
   it('rejects an empty workspace root with BAD_REQUEST before hitting the DB', async () => {
     const model = mockModel({ workingDirs: [{ path: '/Users/me/proj' }] });
     await expect(assertWorkspaceRootApproved(model, 'dev-1', '')).rejects.toMatchObject({
@@ -70,25 +117,43 @@ describe('assertWorkspaceRootApproved', () => {
 });
 
 describe('assertWorkspaceDeviceVisible', () => {
-  const mockHiddenModel = (hiddenIds: string[]) =>
+  const mockWorkspaceModel = (row: object | undefined) =>
     ({
-      queryWorkspaceHiddenDeviceIds: vi.fn().mockResolvedValue(hiddenIds),
+      findWorkspaceDeviceById: vi.fn().mockResolvedValue(row),
     }) as unknown as DeviceModel;
 
+  /** @example A visible registered device remains addressable by workspace RPCs. */
   it('allows a device the caller can see', async () => {
-    const model = mockHiddenModel(['someone-elses-private']);
+    const model = mockWorkspaceModel({ deviceId: 'public-dev' });
     await expect(assertWorkspaceDeviceVisible(model, 'public-dev')).resolves.toBeUndefined();
   });
 
-  it('allows a transient device with no DB row (empty hidden set)', async () => {
-    const model = mockHiddenModel([]);
-    await expect(assertWorkspaceDeviceVisible(model, 'transient-dev')).resolves.toBeUndefined();
+  /** @example A Gateway-only ghost is not authorized after its workspace row is removed. */
+  it('rejects a transient device with no workspace registry row', async () => {
+    const model = mockWorkspaceModel(undefined);
+    await expect(assertWorkspaceDeviceVisible(model, 'transient-dev')).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
   });
 
+  /** @example Another member's private device is indistinguishable from an unknown device. */
   it("rejects another member's private device with NOT_FOUND", async () => {
-    const model = mockHiddenModel(['someone-elses-private']);
+    const model = mockWorkspaceModel(undefined);
     await expect(
       assertWorkspaceDeviceVisible(model, 'someone-elses-private'),
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+});
+
+describe('assertWorkspaceDeviceEditable', () => {
+  it.each([
+    ['owner', 'owner'],
+    ['member', 'enroller'],
+  ] as const)('lets the %s edit the registration', (role, userId) => {
+    expect(() => assertWorkspaceDeviceEditable(role, userId, 'enroller')).not.toThrow();
+  });
+
+  it('rejects any other member', () => {
+    expect(() => assertWorkspaceDeviceEditable('member', 'member', 'enroller')).toThrow(TRPCError);
   });
 });

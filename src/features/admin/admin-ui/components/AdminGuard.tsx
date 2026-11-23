@@ -1,6 +1,6 @@
 'use client';
 
-import { Button } from '@lobehub/ui/base-ui';
+import { Button } from '@lobehub/ui';
 import { Result } from 'antd';
 import type { PropsWithChildren, ReactNode } from 'react';
 import { useNavigate } from 'react-router';

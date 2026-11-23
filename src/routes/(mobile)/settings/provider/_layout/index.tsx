@@ -2,10 +2,9 @@
 
 import { Navigate, Outlet, useParams } from 'react-router';
 
+import ProviderMenu from '@/features/Settings/provider/ProviderMenu';
 import { useWorkspaceAwareNavigate } from '@/features/Workspace/useWorkspaceAwareNavigate';
 import { usePlatformAiSettingsAccess } from '@/hooks/usePlatformAiSettingsAccess';
-
-import ProviderMenu from '../../../../(main)/settings/provider/ProviderMenu';
 
 const Layout = () => {
   const params = useParams<{ providerId: string }>();

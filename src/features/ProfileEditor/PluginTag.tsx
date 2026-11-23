@@ -1,21 +1,34 @@
 'use client';
 
-import { type ComposioAppType, type LobehubSkillProviderType } from '@lobechat/const';
-import { COMPOSIO_APP_TYPES, LOBEHUB_SKILL_PROVIDERS } from '@lobechat/const';
-import { Avatar, Flexbox, Icon, Tag, Tooltip } from '@lobehub/ui';
-import { McpIcon } from '@lobehub/ui/icons';
-import { createStaticStyles, cssVar } from 'antd-style';
+import type { ComposioAppType, LobehubSkillProviderType } from '@lobechat/const';
+import { resolveConnectorCatalogItem } from '@lobechat/const';
+import {
+  ActionIcon,
+  Avatar,
+  createStaticStyles,
+  cssVar,
+  Flexbox,
+  Icon,
+  Switch,
+  Tag,
+  Text,
+  Tooltip,
+} from '@lobehub/ui';
+import { McpIcon, SkillsIcon } from '@lobehub/ui/icons';
 import isEqual from 'fast-deep-equal';
-import { AlertCircle, Loader2, Square, SquareCheckBig, X } from 'lucide-react';
+import { AlertCircle, Loader2, Square, SquareCheckBig, SquareMinus, X } from 'lucide-react';
 import React, { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import MarketSkillIcon from '@/components/MarketSkillIcon';
 import PluginAvatar from '@/components/Plugins/PluginAvatar';
 import { useIsDark } from '@/hooks/useIsDark';
 import { useDiscoverStore } from '@/store/discover';
+import { pluginSelectors as discoverPluginSelectors } from '@/store/discover/selectors';
 import { serverConfigSelectors, useServerConfigStore } from '@/store/serverConfig';
 import { useToolStore } from '@/store/tool';
 import {
+  agentSkillsSelectors,
   builtinToolSelectors,
   composioStoreSelectors,
   lobehubSkillStoreSelectors,
@@ -23,6 +36,9 @@ import {
 } from '@/store/tool/selectors';
 import { type LobeToolMetaWithAvailability } from '@/store/tool/slices/builtin/selectors';
 import { connectorSelectors } from '@/store/tool/slices/connector/selectors';
+
+import { type ItemConnection, type ItemDetail } from './ItemDetailPanel';
+import ItemRow from './ItemRow';
 
 /**
  * Composio server icon component
@@ -90,10 +106,32 @@ export interface PluginTagProps {
    * so an agent-exclusive connector doesn't render as "Not Installed".
    */
   agentId?: string;
+  /**
+   * In a row, which connection the item runs on for this agent, when that is worth saying:
+   * a short label beside the name, and a sentence about it in the item's details.
+   */
+  connection?: ItemConnection;
   disabled?: boolean;
+  /** In a row, an on/off switch for the item; `onToggle` makes it appear. */
+  enabled?: boolean;
+  /** Trailing controls of a `row` (e.g. a link to manage the tool); ignored by the chip. */
+  extra?: React.ReactNode;
+  /**
+   * Renders the `selectable` checkbox in the "some but not all" state (a minus
+   * box instead of a tick), the antd `indeterminate` / Gmail select-all
+   * convention. Only meaningful together with `selected`: the chip represents
+   * a container whose children are partially selected — e.g. an agent-share
+   * tool granted for some of its APIs but not all.
+   */
+  indeterminate?: boolean;
+  /** In a row, name the kind as a skill rather than by how the item is stored. */
+  isSkill?: boolean;
+  /** In a row, opens the item's details. */
+  onOpen?: (detail: ItemDetail) => void;
   onRemove?: (e: React.MouseEvent) => void;
   /** Fires when the checkbox/tag is toggled in `selectable` mode. */
   onSelect?: () => void;
+  onToggle?: (next: boolean) => void;
   pluginId: string | { enabled: boolean; identifier: string; settings: Record<string, any> };
   /**
    * Whether the remove (×) button is shown. Default true. Set false to keep the
@@ -123,19 +161,29 @@ export interface PluginTagProps {
    * @default false
    */
   showDesktopOnlyLabel?: boolean;
+  /** In a row, replaces the kind label, e.g. where a skill comes from. */
+  tagLabel?: string;
   /**
    * Whether to use allMetaList (includes hidden tools) or metaList
    * @default false
    */
   useAllMetaList?: boolean;
+  /**
+   * `chip` is the compact tag used inside menus and inline lists; `row` is one line of a
+   * list — icon, name, what kind of tool it is, and the remove action.
+   * @default 'chip'
+   */
+  variant?: 'chip' | 'row';
 }
 
 const PluginTag = memo<PluginTagProps>(
   ({
     agentId,
+    connection,
     pluginId,
     onRemove,
     onSelect,
+    indeterminate = false,
     removable = true,
     selectable = false,
     selected = false,
@@ -143,12 +191,25 @@ const PluginTag = memo<PluginTagProps>(
     showAuthor = false,
     showDesktopOnlyLabel = false,
     useAllMetaList = false,
+    variant = 'chip',
+    extra,
+    isSkill = false,
+    enabled = true,
+    onToggle,
+    onOpen,
+    tagLabel,
   }) => {
     const isDarkMode = useIsDark();
     const { t } = useTranslation('setting');
 
     // Extract identifier
     const identifier = typeof pluginId === 'string' ? pluginId : pluginId?.identifier;
+    const showMarketSkillIcon = useToolStore(
+      (s) =>
+        variant === 'row' &&
+        isSkill &&
+        agentSkillsSelectors.getAgentSkillByIdentifier(identifier)(s)?.source === 'market',
+    );
 
     // Agent-scoped connectors (empty unless agentId is provided).
     const agentConnectors = useToolStore(
@@ -193,6 +254,11 @@ const PluginTag = memo<PluginTagProps>(
 
     // Custom connector state
     const customConnectors = useToolStore(connectorSelectors.customConnectors, isEqual);
+    // Marketplace MCPs installed on the connector path, without a legacy plugin row
+    const marketplaceConnectors = useToolStore(
+      connectorSelectors.marketplaceMcpConnectors,
+      isEqual,
+    );
 
     // Check if plugin is installed
     const isInstalled = useToolStore(pluginSelectors.isPluginInstalled(identifier));
@@ -208,38 +274,31 @@ const PluginTag = memo<PluginTagProps>(
         : undefined;
       const agentInstalled = !!agentConn;
 
-      // Check if it's a Composio server type
-      if (isComposioEnabledInEnv) {
-        const composioType = COMPOSIO_APP_TYPES.find((type) => type.identifier === identifier);
-        if (composioType) {
-          // Check if this Composio server is connected
-          const connectedServer = allComposioServers.find((s) => s.identifier === identifier);
-          return {
-            availableInWeb: true,
-            icon: composioType.icon,
-            isInstalled: !!connectedServer || agentInstalled,
-            label: composioType.label,
-            title: composioType.label,
-            type: 'composio' as const,
-          };
-        }
+      const connector = resolveConnectorCatalogItem(identifier, {
+        composio: isComposioEnabledInEnv,
+        lobehub: isLobehubSkillEnabled,
+      });
+      if (connector?.type === 'lobehub') {
+        const connectedServer = allLobehubSkillServers.find((s) => s.identifier === identifier);
+        return {
+          availableInWeb: true,
+          icon: connector.provider.icon,
+          isInstalled: !!connectedServer || agentInstalled,
+          label: connector.provider.label,
+          title: connector.provider.label,
+          type: 'lobehub-skill' as const,
+        };
       }
-
-      // Check if it's a LobeHub Skill provider
-      if (isLobehubSkillEnabled) {
-        const lobehubSkillProvider = LOBEHUB_SKILL_PROVIDERS.find((p) => p.id === identifier);
-        if (lobehubSkillProvider) {
-          // Check if this LobehubSkill provider is connected
-          const connectedServer = allLobehubSkillServers.find((s) => s.identifier === identifier);
-          return {
-            availableInWeb: true,
-            icon: lobehubSkillProvider.icon,
-            isInstalled: !!connectedServer || agentInstalled,
-            label: lobehubSkillProvider.label,
-            title: lobehubSkillProvider.label,
-            type: 'lobehub-skill' as const,
-          };
-        }
+      if (connector?.type === 'composio') {
+        const connectedServer = allComposioServers.find((s) => s.identifier === identifier);
+        return {
+          availableInWeb: true,
+          icon: connector.serverType.icon,
+          isInstalled: !!connectedServer || agentInstalled,
+          label: connector.serverType.label,
+          title: connector.serverType.label,
+          type: 'composio' as const,
+        };
       }
 
       // Check if it's a custom connector
@@ -265,8 +324,13 @@ const PluginTag = memo<PluginTagProps>(
         return {
           availableInWeb,
           avatar: builtinMeta.meta.avatar,
+          description: t(`tools.builtins.${identifier}.description` as any, {
+            defaultValue: builtinMeta.meta.description || '',
+          }),
           isInstalled: true,
-          title: builtinMeta.meta.title,
+          title: t(`tools.builtins.${identifier}.title` as any, {
+            defaultValue: builtinMeta.meta.title || identifier,
+          }),
           type: 'builtin' as const,
         };
       }
@@ -276,8 +340,24 @@ const PluginTag = memo<PluginTagProps>(
         return {
           availableInWeb: true,
           avatar: installedMeta.avatar,
+          description: installedMeta.description,
           isInstalled: true,
           title: installedMeta.title,
+          type: 'plugin' as const,
+        };
+      }
+
+      // A marketplace MCP installed as a connector alone: listed as the plugin it
+      // replaces, as Settings lists it
+      const marketplaceConnector = marketplaceConnectors.find((c) => c.identifier === identifier);
+      if (marketplaceConnector) {
+        const { avatar, description } = marketplaceConnector.metadata ?? {};
+        return {
+          availableInWeb: true,
+          avatar: typeof avatar === 'string' ? avatar : undefined,
+          description: typeof description === 'string' ? description : undefined,
+          isInstalled: true,
+          title: marketplaceConnector.name || identifier,
           type: 'plugin' as const,
         };
       }
@@ -287,6 +367,10 @@ const PluginTag = memo<PluginTagProps>(
       if (agentConn) {
         return {
           availableInWeb: true,
+          description:
+            typeof agentConn.metadata?.description === 'string'
+              ? agentConn.metadata.description
+              : undefined,
           icon: McpIcon,
           isInstalled: true,
           label: agentConn.name || identifier,
@@ -307,15 +391,19 @@ const PluginTag = memo<PluginTagProps>(
       isLobehubSkillEnabled,
       allLobehubSkillServers,
       customConnectors,
+      marketplaceConnectors,
+      t,
       useAllMetaList,
     ]);
 
     // Fetch from remote if not found locally
-    const usePluginDetail = useDiscoverStore((s) => s.usePluginDetail);
-    const { data: remoteData, isLoading } = usePluginDetail({
+    const usePluginDetail = useDiscoverStore((s) => s.useFetchPluginDetail);
+    const { isLoading, queryKey } = usePluginDetail({
       identifier: !localMeta && !isInstalled ? identifier : undefined,
       withManifest: false,
     });
+    // The replica view of this identifier; the sync hook only reports the fetch flags.
+    const remoteData = useDiscoverStore(discoverPluginSelectors.pluginDetail(queryKey));
 
     // Determine final metadata
     const meta = localMeta || {
@@ -340,6 +428,17 @@ const PluginTag = memo<PluginTagProps>(
       // Show warning icon when not installed
       if (!meta.isInstalled) {
         return <AlertCircle className={styles.warningIcon} size={14} />;
+      }
+
+      if (showMarketSkillIcon) {
+        return (
+          <MarketSkillIcon
+            fallback={<Icon icon={SkillsIcon} size={16} />}
+            identifier={identifier}
+            name={displayTitle}
+            size={16}
+          />
+        );
       }
 
       // Composio type has icon property
@@ -386,6 +485,104 @@ const PluginTag = memo<PluginTagProps>(
     // Only show error state when not installed and not loading
     const showErrorState = !meta.isInstalled && !isLoading;
 
+    // The tools an item brings, for its count and its details.
+    const builtinApi = useToolStore(
+      (s) => s.builtinTools.find((tool) => tool.identifier === identifier)?.manifest.api,
+      isEqual,
+    );
+    const connectorTools = (
+      agentConnectors.find((c) => c.identifier === identifier) ??
+      customConnectors.find((c) => c.identifier === identifier) ??
+      marketplaceConnectors.find((c) => c.identifier === identifier)
+    )?.tools;
+    const toolList: ItemDetail['tools'] = connectorTools?.length
+      ? connectorTools.map((tool) => ({
+          description: tool.description,
+          name: tool.displayName || tool.toolName,
+        }))
+      : (builtinApi ?? []).map((api) => ({ description: api.description, name: api.name }));
+
+    if (variant === 'row') {
+      const description =
+        'description' in meta && typeof meta.description === 'string'
+          ? meta.description
+          : undefined;
+
+      const kindLabel = tagLabel ?? t(`settingAgent.tools.type.${isSkill ? 'skill' : meta.type}`);
+      const title = getDisplayText() ?? identifier;
+
+      return (
+        <ItemRow
+          danger={showErrorState}
+          description={description}
+          icon={renderIcon()}
+          tag={kindLabel}
+          title={title}
+          actions={
+            <>
+              {extra}
+              {onToggle ? (
+                <Switch
+                  checked={enabled}
+                  disabled={disabled}
+                  size={'small'}
+                  title={t(enabled ? 'settingAgent.tools.disable' : 'settingAgent.tools.enable')}
+                  onChange={(next) => onToggle(next)}
+                />
+              ) : null}
+              {removable && !disabled ? (
+                <ActionIcon
+                  aria-label={t('settingAgent.tools.remove')}
+                  icon={X}
+                  size={'small'}
+                  title={t('settingAgent.tools.remove')}
+                  onClick={(e) => onRemove?.(e)}
+                />
+              ) : null}
+            </>
+          }
+          meta={
+            <>
+              {toolList.length > 0 ? (
+                <Text fontSize={12} style={{ flex: 'none' }} type={'secondary'}>
+                  {t('settingAgent.tools.toolCount', { count: toolList.length })}
+                </Text>
+              ) : null}
+              {author ? (
+                <Tooltip title={t('settingAgent.agentTools.authorizedBy', { name: author.name })}>
+                  <Avatar
+                    avatar={author.avatar}
+                    size={20}
+                    style={{ flexShrink: 0 }}
+                    title={author.name}
+                  />
+                </Tooltip>
+              ) : null}
+              {connection?.label ? (
+                <Tooltip title={connection.desc}>
+                  <Tag style={{ flex: 'none', margin: 0 }}>{connection.label}</Tag>
+                </Tooltip>
+              ) : null}
+            </>
+          }
+          onClick={
+            onOpen
+              ? () =>
+                  onOpen({
+                    connection,
+                    description,
+                    icon: renderIcon(),
+                    identifier,
+                    tag: kindLabel,
+                    title,
+                    tools: toolList,
+                  })
+              : undefined
+          }
+        />
+      );
+    }
+
     return (
       <Tag
         className={styles.tag}
@@ -398,7 +595,7 @@ const PluginTag = memo<PluginTagProps>(
           selectable ? (
             <Flexbox horizontal align={'center'} gap={6}>
               <Icon
-                icon={selected ? SquareCheckBig : Square}
+                icon={selected ? (indeterminate ? SquareMinus : SquareCheckBig) : Square}
                 size={14}
                 style={{ color: selected ? cssVar.colorPrimary : cssVar.colorTextQuaternary }}
               />

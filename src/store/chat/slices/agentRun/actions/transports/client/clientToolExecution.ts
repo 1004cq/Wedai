@@ -186,6 +186,7 @@ export class ClientToolExecutionActionImpl {
           workingDirectory: resolveEffectiveWorkingDirectory(
             this.#get(),
             topicId ?? operation?.context?.topicId,
+            agentId ?? operation?.context?.agentId,
           ),
         };
 
@@ -257,6 +258,8 @@ export class ClientToolExecutionActionImpl {
                 type: 'default',
               },
               {
+                // Resolve connectors as this agent's runs do: a linked one serves only its agent
+                agentId: agentId ?? operation?.context?.agentId ?? undefined,
                 signal: operation?.abortController?.signal,
                 topicId: operation?.context?.topicId ?? undefined,
               },

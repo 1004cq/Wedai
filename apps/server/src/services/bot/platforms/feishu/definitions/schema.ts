@@ -5,14 +5,19 @@ import {
   MIN_BOT_HISTORY_LIMIT,
 } from '@lobechat/const';
 
+import { larkBotWakeFields } from '../../botWakeFields';
 import {
   allowFromField,
   displayToolCallsField,
   makeDmPolicyField,
   makeGroupPolicyFields,
   makeUserIdField,
+  processingMessageField,
+  reactionModeField,
   watchKeywordsField,
 } from '../../const';
+import { deviceAccessFields, deviceChannelFields } from '../../deviceAccess';
+import { replyStyleFields } from '../../replyStyle';
 import type { FieldSchema } from '../../types';
 import { DEFAULT_FEISHU_CONNECTION_MODE, MAX_FEISHU_HISTORY_LIMIT } from '../const';
 
@@ -57,6 +62,8 @@ export const sharedSchema: FieldSchema[] = [
     label: 'channel.settings',
     properties: [
       makeUserIdField('feishu'),
+      ...deviceAccessFields,
+      ...deviceChannelFields,
       {
         key: 'connectionMode',
         default: DEFAULT_FEISHU_CONNECTION_MODE,
@@ -107,6 +114,8 @@ export const sharedSchema: FieldSchema[] = [
         type: 'boolean',
       },
       displayToolCallsField,
+      processingMessageField,
+      reactionModeField,
       {
         key: 'historyLimit',
         default: DEFAULT_BOT_HISTORY_LIMIT,
@@ -120,6 +129,8 @@ export const sharedSchema: FieldSchema[] = [
       ...makeGroupPolicyFields({ policy: 'open' }),
       allowFromField,
       watchKeywordsField,
+      ...larkBotWakeFields,
+      ...replyStyleFields,
     ],
     type: 'object',
   },

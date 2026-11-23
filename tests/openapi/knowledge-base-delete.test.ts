@@ -21,7 +21,9 @@ describe('KnowledgeBaseService.deleteKnowledgeBase', () => {
     } as unknown as LobeChatDatabase;
 
     deleteFilesSpy = vi.fn().mockResolvedValue(undefined);
-    vi.mocked(FileService).mockImplementation(() => ({ deleteFiles: deleteFilesSpy }) as any);
+    vi.mocked(FileService).mockImplementation(function () {
+      return { deleteFiles: deleteFilesSpy } as any;
+    });
   });
 
   afterEach(() => {
@@ -51,8 +53,8 @@ describe('KnowledgeBaseService.deleteKnowledgeBase', () => {
     });
 
     await expect(service.deleteKnowledgeBase('kb-1')).resolves.toEqual({
-      message: 'Knowledge base deleted successfully',
-      success: true,
+      deleted: true,
+      id: 'kb-1',
     });
 
     expect(deleteWithFilesSpy).toHaveBeenCalledWith('kb-1');

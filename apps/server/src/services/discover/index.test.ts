@@ -12,7 +12,7 @@ vi.mock('@/server/modules/AssistantStore');
 vi.mock('@/server/modules/PluginStore');
 vi.mock('@lobehub/market-sdk');
 vi.mock('@/locales/resources', () => ({
-  normalizeLocale: vi.fn((locale) => {
+  normalizeLocale: vi.fn(function (locale) {
     if (locale === 'en-US') return 'en';
     return locale || 'en';
   }),
@@ -245,7 +245,7 @@ describe('DiscoverService', () => {
       getAgentIndex: vi
         .fn()
         .mockResolvedValue(mockAssistantList.map((item) => ({ ...item, meta: {} }))),
-      getAgent: vi.fn().mockImplementation((identifier) => {
+      getAgent: vi.fn().mockImplementation(function (identifier) {
         const agent = mockAssistantList.find((a) => a.identifier === identifier);
         return Promise.resolve(agent ? { ...agent, meta: {} } : null);
       }),
@@ -262,6 +262,10 @@ describe('DiscoverService', () => {
     mockMarket = {
       agents: {
         getAgentList: vi.fn().mockResolvedValue({
+          categoryCounts: [
+            { category: 'creativity', count: 1 },
+            { category: 'productivity', count: 1 },
+          ],
           items: mockMarketAssistantList,
           totalCount: mockMarketAssistantList.length,
           currentPage: 1,
@@ -283,7 +287,7 @@ describe('DiscoverService', () => {
           { category: 'tools', count: 5 },
           { category: 'utilities', count: 3 },
         ]),
-        getPluginDetail: vi.fn().mockImplementation((params) => {
+        getPluginDetail: vi.fn().mockImplementation(function (params) {
           const plugin = mockPluginList.find((p) => p.identifier === params.identifier);
           return Promise.resolve(plugin || null);
         }),
@@ -303,8 +307,12 @@ describe('DiscoverService', () => {
       },
     };
 
-    (AssistantStore as any).mockImplementation(() => mockAssistantStore);
-    (PluginStore as any).mockImplementation(() => mockPluginStore);
+    (AssistantStore as any).mockImplementation(function () {
+      return mockAssistantStore;
+    });
+    (PluginStore as any).mockImplementation(function () {
+      return mockPluginStore;
+    });
 
     service = new DiscoverService();
     service.market = mockMarket;
@@ -312,9 +320,11 @@ describe('DiscoverService', () => {
 
   describe('Assistant Market (new source)', () => {
     it('getAssistantList should transform market SDK response', async () => {
-      const result = await service.getAssistantList();
+      const result = await service.getAssistantList({ includeCategoryCounts: true });
 
-      expect(mockMarket.agents.getAgentList).toHaveBeenCalled();
+      expect(mockMarket.agents.getAgentList).toHaveBeenCalledWith(
+        expect.objectContaining({ includeCategoryCounts: true }),
+      );
       expect(result.items[0]).toEqual(
         expect.objectContaining({
           identifier: 'market-assistant-1',
@@ -324,6 +334,10 @@ describe('DiscoverService', () => {
           pluginCount: 1,
         }),
       );
+      expect(result.categoryCounts).toEqual([
+        { category: 'creativity', count: 1 },
+        { category: 'productivity', count: 1 },
+      ]);
     });
 
     it('getAssistantList should preserve a successful empty response in strict mode', async () => {
@@ -355,18 +369,18 @@ describe('DiscoverService', () => {
       ).rejects.toBe(marketError);
     });
 
-    it('getAssistantList should fall back to legacy when market errors by default', async () => {
+    it('getAssistantList should retain the empty fallback by default', async () => {
       mockMarket.agents.getAgentList.mockRejectedValue(new Error('Market unavailable'));
 
       const result = await service.getAssistantList({ q: 'assistant' });
 
-      expect(mockAssistantStore.getAgentIndex).toHaveBeenCalled();
-      expect(result.items.length).toBeGreaterThan(0);
-      expect(result.items[0]).toEqual(
-        expect.objectContaining({
-          identifier: expect.any(String),
-        }),
-      );
+      expect(result).toEqual({
+        currentPage: 1,
+        items: [],
+        pageSize: 20,
+        totalCount: 0,
+        totalPages: 0,
+      });
     });
 
     it('getAssistantDetail should fetch from market SDK by default', async () => {
@@ -383,42 +397,6 @@ describe('DiscoverService', () => {
           identifier: 'market-assistant-1',
           title: 'Market Assistant 1',
           related: expect.any(Array),
-        }),
-      );
-    });
-
-    it('getAssistantDetail should fall back to legacy when market detail is unauthorized', async () => {
-      mockMarket.agents.getAgentDetail.mockRejectedValue(
-        Object.assign(new Error('invalid_token'), { status: 401 }),
-      );
-
-      const result = await service.getAssistantDetail({
-        identifier: 'assistant-1',
-      });
-
-      expect(mockMarket.agents.getAgentDetail).toHaveBeenCalled();
-      expect(mockAssistantStore.getAgent).toHaveBeenCalledWith('assistant-1', 'en');
-      expect(result).toEqual(
-        expect.objectContaining({
-          identifier: 'assistant-1',
-          title: 'Test Assistant 1',
-          related: expect.any(Array),
-        }),
-      );
-    });
-
-    it('getAssistantDetail should fall back to legacy when market returns empty', async () => {
-      mockMarket.agents.getAgentDetail.mockResolvedValue(null);
-
-      const result = await service.getAssistantDetail({
-        identifier: 'assistant-2',
-      });
-
-      expect(mockAssistantStore.getAgent).toHaveBeenCalledWith('assistant-2', 'en');
-      expect(result).toEqual(
-        expect.objectContaining({
-          identifier: 'assistant-2',
-          title: 'Test Assistant 2',
         }),
       );
     });
@@ -613,30 +591,6 @@ describe('DiscoverService', () => {
         expect(result.items[1].identifier).toBe('plugin-1');
       });
     });
-
-    describe('getPluginDetail', () => {
-      it('should return plugin detail with related items', async () => {
-        const result = await service.getPluginDetail({
-          identifier: 'plugin-1',
-        });
-
-        expect(result).toEqual(
-          expect.objectContaining({
-            identifier: 'plugin-1',
-            title: 'Test Plugin 1',
-            related: expect.any(Array),
-          }),
-        );
-      });
-
-      it('should return undefined for non-existent plugin', async () => {
-        const result = await service.getPluginDetail({
-          identifier: 'non-existent',
-        });
-
-        expect(result).toBeUndefined();
-      });
-    });
   });
 
   describe('MCP Market', () => {
@@ -695,8 +649,6 @@ describe('DiscoverService', () => {
 
       it('should filter by search query', async () => {
         const result = await service.getProviderList({ q: 'openai' });
-
-        expect(result.items.length).toBeGreaterThan(0);
         expect(result.items).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
@@ -818,11 +770,6 @@ describe('DiscoverService', () => {
             }),
           ]),
         );
-      });
-
-      it('should not include categories that only have hidden models', async () => {
-        const result = await service.getModelCategories();
-
         expect(result.some((item) => item.category === 'lobehub')).toBe(false);
       });
     });

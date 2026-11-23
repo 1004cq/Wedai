@@ -1,0 +1,129 @@
+'use client';
+
+import SiDiscord from '@icons-pack/react-simple-icons/icons/SiDiscord';
+import SiGithub from '@icons-pack/react-simple-icons/icons/SiGithub';
+import SiRss from '@icons-pack/react-simple-icons/icons/SiRss';
+import SiX from '@icons-pack/react-simple-icons/icons/SiX';
+import SiYoutube from '@icons-pack/react-simple-icons/icons/SiYoutube';
+import { BRANDING_EMAIL, BRANDING_NAME, SOCIAL_URL } from '@lobechat/business-const';
+import { isDesktop } from '@lobechat/const';
+import { Divider, Flexbox } from '@lobehub/ui';
+import { Form } from '@lobehub/ui/form';
+import { cssVar } from '@lobehub/ui/stylex/cssVar.stylex';
+import * as stylex from '@stylexjs/stylex';
+import { memo } from 'react';
+import { useTranslation } from 'react-i18next';
+
+import { BLOG, mailTo, OFFICIAL_SITE, PRIVACY_URL, TERMS_URL } from '@/const/url';
+import { densityTokens } from '@/styles/density.stylex';
+
+import AboutList from './AboutList';
+import ItemCard from './ItemCard';
+import ItemLink from './ItemLink';
+import UpdateChannel from './UpdateChannel';
+import Version from './Version';
+
+const styles = stylex.create({
+  title: {
+    fontSize: densityTokens['--lobe-density-font-size'],
+    fontWeight: 'bold',
+    color: cssVar.colorTextSecondary,
+  },
+});
+
+const About = memo<{ mobile?: boolean }>(({ mobile }) => {
+  const { t } = useTranslation('common');
+
+  return (
+    <Form.Group
+      collapsible={false}
+      style={{ maxWidth: '1024px', width: '100%' }}
+      title={`${t('about')} ${BRANDING_NAME}`}
+      variant={'filled'}
+    >
+      <Flexbox gap={20} paddingBlock={20} width={'100%'}>
+        <Version mobile={mobile} />
+        {isDesktop && <UpdateChannel mobile={mobile} />}
+        <Divider style={{ marginBlock: 0 }} />
+        <AboutList
+          grid
+          ItemRender={ItemCard}
+          items={[
+            {
+              href: BLOG,
+              icon: SiRss,
+              label: t('blog'),
+              value: 'blog',
+            },
+            {
+              href: SOCIAL_URL.github,
+              icon: SiGithub,
+              label: 'GitHub',
+              value: 'feedback',
+            },
+            {
+              href: SOCIAL_URL.discord,
+              icon: SiDiscord,
+              label: 'Discord',
+              value: 'discord',
+            },
+            {
+              href: SOCIAL_URL.x,
+              icon: SiX as any,
+              label: 'X / Twitter',
+              value: 'x',
+            },
+
+            {
+              href: SOCIAL_URL.youtube,
+              icon: SiYoutube,
+              label: 'YouTube',
+              value: 'youtube',
+            },
+          ]}
+        />
+        <Divider style={{ marginBlock: 0 }} />
+        <div {...stylex.props(styles.title)}>{t('contact')}</div>
+        <AboutList
+          ItemRender={ItemLink}
+          items={[
+            {
+              href: OFFICIAL_SITE,
+              label: t('officialSite'),
+              value: 'officialSite',
+            },
+            {
+              href: mailTo(BRANDING_EMAIL.support),
+              label: t('mail.support'),
+              value: 'support',
+            },
+            {
+              href: mailTo(BRANDING_EMAIL.business),
+              label: t('mail.business'),
+              value: 'business',
+            },
+          ]}
+        />
+        <Divider style={{ marginBlock: 0 }} />
+        <div {...stylex.props(styles.title)}>{t('legal')}</div>
+        <AboutList
+          ItemRender={ItemLink}
+          items={[
+            {
+              href: TERMS_URL,
+              label: t('terms'),
+              value: 'terms',
+            },
+            {
+              href: PRIVACY_URL,
+              label: t('privacy'),
+              value: 'privacy',
+            },
+          ]}
+        />
+      </Flexbox>
+    </Form.Group>
+  );
+});
+
+export default About;

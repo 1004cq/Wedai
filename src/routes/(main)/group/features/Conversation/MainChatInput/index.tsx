@@ -6,19 +6,18 @@ import { type ActionKeys } from '@/features/ChatInput';
 import { ChatInput } from '@/features/Conversation';
 import { useChatStore } from '@/store/chat';
 
-import { useSendMenuItems } from './useSendMenuItems';
-
 const leftActions: ActionKeys[] = [
-  'model',
   'search',
   'memory',
   'fileUpload',
   'tools',
+  'voiceDictation',
   '---',
   ['typo', 'params', 'clear'],
 ];
 
-const rightActions: ActionKeys[] = ['contextWindow'];
+const rightActions: ActionKeys[] = ['model', 'voiceMessage', 'contextWindow'];
+const sendButtonProps = { shape: 'round' } as const;
 
 /**
  * MainChatInput
@@ -29,14 +28,12 @@ const rightActions: ActionKeys[] = ['contextWindow'];
  * Only adds MessageFromUrl for desktop mode.
  */
 const MainChatInput = memo(() => {
-  const sendMenuItems = useSendMenuItems();
-
   return (
     <ChatInput
       skipScrollMarginWithList
       leftActions={leftActions}
       rightActions={rightActions}
-      sendMenu={{ items: sendMenuItems }}
+      sendButtonProps={sendButtonProps}
       onEditorReady={(instance) => {
         // Sync to global ChatStore for compatibility with other features
         useChatStore.setState({ mainInputEditor: instance });

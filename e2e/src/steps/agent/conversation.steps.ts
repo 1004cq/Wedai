@@ -152,9 +152,9 @@ Given('用户已发送消息 {string}', async function (this: CustomWorld, messa
       console.log('   📍 Fallback: checking for any message wrapper');
     });
 
-  // Verify the assistant message contains expected content
+  // Verify the assistant message contains expected content (inbox title varies by branding)
   const assistantMessage = this.page.locator('.message-wrapper').filter({
-    has: this.page.locator('text=Lobe AI'),
+    has: this.page.locator('.message-header', { hasText: /AI/ }),
   });
   await expect(assistantMessage).toBeVisible({ timeout: 5000 });
 
@@ -215,6 +215,7 @@ Then('回复内容应该可见', async function (this: CustomWorld) {
             .innerText()
             .catch(() => '')) || '';
         finalText = rawText
+          .replaceAll(/Wedai AI/gi, '')
           .replaceAll(/Lobe AI/gi, '')
           .replaceAll(/[·•]/g, '')
           .trim();

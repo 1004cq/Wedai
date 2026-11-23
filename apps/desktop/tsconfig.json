@@ -18,10 +18,15 @@
     "paths": {
       "@/*": ["./src/main/*"],
       "~common/*": ["./src/common/*"],
+      // Exact package map so typechecking ../../src fixtures resolves the
+      // desktop-installed MCP server; the catch-all `*` would otherwise map
+      // `@modelcontextprotocol/server` to a non-existent relative path.
+      "@modelcontextprotocol/server": ["./node_modules/@modelcontextprotocol/server"],
       "*": ["./*"]
     }
   },
   "include": [
+    "../../src/libs/mcp/__tests__/fixtures/negotiationServers.ts",
     "src/main/**/*",
     "src/main/global.d.ts",
     "src/preload/**/*",

@@ -1,10 +1,10 @@
 import { type ChatFileItem } from '@lobechat/types';
-import { Flexbox, Text } from '@lobehub/ui';
-import { createStaticStyles } from 'antd-style';
+import { createStaticStyles, Flexbox, Text } from '@lobehub/ui';
 import { memo } from 'react';
 
 import FileIcon from '@/components/FileIcon';
 import { useChatStore } from '@/store/chat';
+import { densityVars } from '@/styles/densityVars';
 import { formatSize } from '@/utils/format';
 
 const styles = createStaticStyles(({ css, cssVar }) => ({
@@ -15,7 +15,7 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
 
     max-width: 420px;
     padding-block: 8px;
-    padding-inline: 12px;
+    padding-inline: ${densityVars.contentGap};
     border-radius: 8px;
 
     background: ${cssVar.colorFillTertiary};

@@ -1,6 +1,6 @@
 'use client';
 
-import { Button, createModal, Select, useModalContext } from '@lobehub/ui/base-ui';
+import { Button, createModal, Select, useModalContext } from '@lobehub/ui';
 import { App, Form, Input } from 'antd';
 import { useState } from 'react';
 
@@ -64,6 +64,8 @@ const EditUserProfileContent = ({
 
   return (
     <Form<ProfileFormValues>
+      layout={'vertical'}
+      requiredMark={'optional'}
       initialValues={{
         email: user.email,
         fullName: user.nickname,
@@ -71,25 +73,15 @@ const EditUserProfileContent = ({
         role: user.role === 'super_admin' ? 'admin' : user.role,
         username: user.username,
       }}
-      layout={'vertical'}
-      requiredMark={'optional'}
       onFinish={handleFinish}
     >
-      <Form.Item
-        extra={'用于邮箱登录。与手机号至少保留一项。'}
-        label={'邮箱'}
-        name={'email'}
-      >
+      <Form.Item extra={'用于邮箱登录。与手机号至少保留一项。'} label={'邮箱'} name={'email'}>
         <Input autoComplete={'off'} placeholder={'user@example.com'} />
       </Form.Item>
       <Form.Item extra={'用于短信登录。国内 11 位手机号。'} label={'手机号'} name={'phone'}>
         <Input autoComplete={'off'} placeholder={'13800138000'} />
       </Form.Item>
-      <Form.Item
-        extra={'字母、数字或下划线，可空。'}
-        label={'用户名'}
-        name={'username'}
-      >
+      <Form.Item extra={'字母、数字或下划线，可空。'} label={'用户名'} name={'username'}>
         <Input autoComplete={'off'} maxLength={64} placeholder={'可选'} />
       </Form.Item>
       <Form.Item label={'昵称'} name={'fullName'}>

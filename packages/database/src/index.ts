@@ -1,8 +1,13 @@
 export * from './core/db-adaptor';
+export * from './models/agentCopyJob';
+export * from './models/agentHistoryJob';
+export * from './models/agentTransferJob';
 export * from './models/billing';
 export * from './repositories/compression';
 export * from './repositories/onboardingUnderstanding';
 export { billingAccounts, modelPrices, orders, webhookEvents } from './schemas/billing';
 export * from './type';
+export * from './utils/copiedTranscript';
+export * from './utils/copyMessagesInDatabase';
 export * from './utils/idGenerator';
 export * from './utils/workspace';

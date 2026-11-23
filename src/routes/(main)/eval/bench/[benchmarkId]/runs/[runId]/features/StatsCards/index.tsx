@@ -2,30 +2,31 @@
 
 import type { EvalRunMetrics } from '@lobechat/types';
 import { formatCost, formatShortenNumber } from '@lobechat/utils';
-import { Flexbox, Icon, Text } from '@lobehub/ui';
-import { createStaticStyles, cssVar } from 'antd-style';
+import { createStaticStyles, cssVar, Flexbox, Icon, Text } from '@lobehub/ui';
 import { CheckCircle2, Clock, DollarSign, Hash } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { densityVars } from '@/styles/densityVars';
+
 import { formatDuration } from '../../../../../../utils';
+import { attemptRates } from './attemptRates';
 
 const styles = createStaticStyles(({ css }) => ({
   card: css`
-    padding: 16px;
+    padding: ${densityVars.cardPadding};
     border: 1px solid ${cssVar.colorBorderSecondary};
     border-radius: ${cssVar.borderRadius};
   `,
   grid: css`
     display: grid;
-    gap: 16px;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: ${densityVars.sectionGap};
   `,
   // Pass rate hero — the run's headline outcome, given the most visual weight.
   hero: css`
     padding: 20px;
     border-radius: ${cssVar.borderRadiusLG};
-
     background: ${cssVar.colorFillQuaternary};
   `,
   heroValue: css`
@@ -52,9 +53,7 @@ const styles = createStaticStyles(({ css }) => ({
   progressFill: css`
     height: 100%;
     border-radius: 999px;
-
     background: ${cssVar.colorSuccess};
-
     transition: width 0.3s ease;
 
     @media (prefers-reduced-motion: reduce) {
@@ -69,6 +68,16 @@ const styles = createStaticStyles(({ css }) => ({
     border-radius: 999px;
 
     background: ${cssVar.colorFillSecondary};
+  `,
+  attemptRates: css`
+    padding-block-start: ${densityVars.contentGap};
+    border-block-start: 1px solid ${cssVar.colorBorderSecondary};
+  `,
+  attemptValue: css`
+    font-family: ${cssVar.fontFamilyCode};
+    font-size: ${cssVar.fontSizeLG};
+    font-weight: 600;
+    color: ${cssVar.colorText};
   `,
   subtitle: css`
     font-size: ${cssVar.fontSize};
@@ -87,16 +96,31 @@ const styles = createStaticStyles(({ css }) => ({
 }));
 
 interface StatsCardsProps {
+  /** Attempts per case; above 1 the pass rate is pass@k and pass^k is shown beside it. */
+  k?: number;
   metrics?: EvalRunMetrics;
 }
 
-const StatsCards = memo<StatsCardsProps>(({ metrics }) => {
+const percent = (rate: number) => `${Math.round(rate * 100)}%`;
+
+const StatsCards = memo<StatsCardsProps>(({ k = 1, metrics }) => {
   const { t } = useTranslation('eval');
 
   const passedCount = metrics?.passedCases ?? 0;
   const totalCases = metrics?.totalCases ?? 0;
   const hasPassRate = metrics?.passRate !== undefined;
   const passPct = hasPassRate ? Math.round((metrics?.passRate ?? 0) * 100) : 0;
+  const rates = attemptRates(metrics, k);
+  const attemptItems = rates
+    ? [
+        {
+          count: rates.allK?.count,
+          label: t('run.metrics.passAllK', { k }),
+          rate: rates.allK?.rate,
+        },
+        { label: t('run.metrics.perAttempt'), rate: rates.perAttempt?.rate },
+      ]
+    : [];
 
   const cards = [
     {
@@ -153,7 +177,9 @@ const StatsCards = memo<StatsCardsProps>(({ metrics }) => {
               <div className={styles.iconBox} style={{ background: cssVar.colorSuccessBg }}>
                 <Icon icon={CheckCircle2} size={16} style={{ color: cssVar.colorSuccess }} />
               </div>
-              <span className={styles.label}>{t('run.metrics.passRate')}</span>
+              <span className={styles.label}>
+                {rates ? t('run.metrics.passRate.anyK', { k }) : t('run.metrics.passRate')}
+              </span>
             </Flexbox>
             <span className={styles.heroValue}>{hasPassRate ? `${passPct}%` : '-'}</span>
           </Flexbox>
@@ -168,6 +194,25 @@ const StatsCards = memo<StatsCardsProps>(({ metrics }) => {
           <div className={styles.progressTrack}>
             <div className={styles.progressFill} style={{ width: `${passPct}%` }} />
           </div>
+        )}
+        {attemptItems.length > 0 && (
+          <Flexbox horizontal className={styles.attemptRates} gap={32} wrap={'wrap'}>
+            {attemptItems.map((item) => (
+              <Flexbox gap={2} key={item.label}>
+                <span className={styles.label}>{item.label}</span>
+                <Flexbox horizontal align={'baseline'} gap={8}>
+                  <span className={styles.attemptValue}>
+                    {item.rate === undefined ? '-' : percent(item.rate)}
+                  </span>
+                  {item.count !== undefined && totalCases > 0 && (
+                    <span className={styles.subtitleUnit}>
+                      {item.count}/{totalCases}
+                    </span>
+                  )}
+                </Flexbox>
+              </Flexbox>
+            ))}
+          </Flexbox>
         )}
       </Flexbox>
 

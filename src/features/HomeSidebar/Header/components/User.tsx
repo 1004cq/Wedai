@@ -1,0 +1,90 @@
+'use client';
+
+import { Block, Flexbox, Icon, Text } from '@lobehub/ui';
+import { cssVar } from '@lobehub/ui/stylex/cssVar.stylex';
+import * as stylex from '@stylexjs/stylex';
+import { ChevronDownIcon } from 'lucide-react';
+import { memo, use } from 'react';
+
+import { useActiveIdentity } from '@/business/client/hooks/useActiveIdentity';
+import { ProductLogo } from '@/components/Branding';
+import { USER_DROPDOWN_ICON_ID } from '@/features/NavPanel/constants';
+import { NavPanelDensityContext, useNavItemMetrics } from '@/features/NavPanel/density';
+import UserAvatar from '@/features/User/UserAvatar';
+import UserPanel from '@/features/User/UserPanel';
+import { useUserStore } from '@/store/user';
+import { authSelectors, userProfileSelectors } from '@/store/user/selectors';
+
+// The dropdown is a button surface, not selectable text. Without
+// `user-select: none` a triple-click (or click-drag through the avatar /
+// name) paints the system text-selection highlight across the whole row;
+// that bright blue is heavier than the Sidebar's active-route fill below
+// and inverts the visual hierarchy.
+const styles = stylex.create({ trigger: { userSelect: 'none' } });
+
+const User = memo<{ lite?: boolean }>(({ lite }) => {
+  const [nickname, username, isSignedIn] = useUserStore((s) => [
+    userProfileSelectors.nickName(s),
+    userProfileSelectors.username(s),
+    authSelectors.isLogin(s),
+  ]);
+
+  // When in a team workspace, reflect the workspace context in the header
+  // (avatar + name) instead of the user's identity. Personal workspaces and
+  // OSS builds fall back to the user-level display.
+  const activeIdentity = useActiveIdentity();
+  const compact = use(NavPanelDensityContext) === 'compact';
+  const { headerAvatarSize, headerLabelFontSize, headerLabelWeight } = useNavItemMetrics();
+  const displayAvatar = activeIdentity?.avatar ?? undefined;
+  const displayName = activeIdentity?.name ?? (nickname || username);
+
+  return (
+    <UserPanel>
+      <Block
+        clickable
+        horizontal
+        align={'center'}
+        className={stylex.props(styles.trigger).className}
+        gap={8}
+        paddingBlock={2}
+        variant={'borderless'}
+        style={{
+          minWidth: 32,
+          overflow: 'hidden',
+          paddingInlineEnd: lite ? 2 : 8,
+          paddingInlineStart: 2,
+        }}
+      >
+        <UserAvatar
+          avatarOverride={displayAvatar}
+          nameOverride={activeIdentity?.name ?? undefined}
+          shape={'square'}
+          size={headerAvatarSize}
+        />
+        {!lite && (
+          <Flexbox horizontal align={'center'} gap={4} style={{ overflow: 'hidden' }}>
+            {!isSignedIn && !activeIdentity ? (
+              <ProductLogo color={cssVar.colorText} size={compact ? 22 : 28} type={'text'} />
+            ) : (
+              <Text
+                ellipsis
+                fontSize={headerLabelFontSize}
+                style={{ flex: 1 }}
+                weight={headerLabelWeight}
+              >
+                {displayName}
+              </Text>
+            )}
+            <Icon
+              color={cssVar.colorTextDescription}
+              icon={ChevronDownIcon}
+              id={USER_DROPDOWN_ICON_ID}
+            />
+          </Flexbox>
+        )}
+      </Block>
+    </UserPanel>
+  );
+});
+
+export default User;

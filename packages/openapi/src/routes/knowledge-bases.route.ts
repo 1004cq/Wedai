@@ -1,17 +1,23 @@
-import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
 
 import { getAllScopePermissions } from '@/utils/rbac';
 
+import { routeDoc } from '../common/openapi';
+import { zValidator } from '../common/validator';
 import { KnowledgeBaseController } from '../controllers/knowledge-base.controller';
 import { requireAnyPermission } from '../middleware';
 import { requireAuth } from '../middleware/auth';
+import { DeletedResourceSchema } from '../types/common.type';
+import { FileListResponseSchema } from '../types/file.type';
 import {
   CreateKnowledgeBaseSchema,
+  KnowledgeBaseDetailResponseSchema,
   KnowledgeBaseFileBatchSchema,
   KnowledgeBaseFileListQuerySchema,
+  KnowledgeBaseFileOperationResultSchema,
   KnowledgeBaseIdParamSchema,
   KnowledgeBaseListQuerySchema,
+  KnowledgeBaseListResponseSchema,
   MoveKnowledgeBaseFilesSchema,
   UpdateKnowledgeBaseSchema,
 } from '../types/knowledge-base.type';
@@ -29,8 +35,16 @@ const app = new Hono();
  */
 app.get(
   '/',
+  routeDoc({
+    data: KnowledgeBaseListResponseSchema,
+    summary: 'List knowledge bases',
+    tags: ['knowledge-bases'],
+  }),
   requireAuth,
-  requireAnyPermission(getAllScopePermissions('KNOWLEDGE_BASE_READ'), 'You do not have permission to view knowledge base list'),
+  requireAnyPermission(
+    getAllScopePermissions('KNOWLEDGE_BASE_READ'),
+    'You do not have permission to view knowledge base list',
+  ),
   zValidator('query', KnowledgeBaseListQuerySchema),
   async (c) => {
     const controller = new KnowledgeBaseController();
@@ -52,8 +66,16 @@ app.get(
  */
 app.post(
   '/',
+  routeDoc({
+    data: KnowledgeBaseDetailResponseSchema,
+    summary: 'Create a knowledge base',
+    tags: ['knowledge-bases'],
+  }),
   requireAuth,
-  requireAnyPermission(getAllScopePermissions('KNOWLEDGE_BASE_CREATE'), 'You do not have permission to create a knowledge base'),
+  requireAnyPermission(
+    getAllScopePermissions('KNOWLEDGE_BASE_CREATE'),
+    'You do not have permission to create a knowledge base',
+  ),
   zValidator('json', CreateKnowledgeBaseSchema),
   async (c) => {
     const controller = new KnowledgeBaseController();
@@ -70,8 +92,17 @@ app.post(
  */
 app.get(
   '/:id',
+  routeDoc({
+    data: KnowledgeBaseDetailResponseSchema,
+    errors: [404],
+    summary: 'Get a knowledge base',
+    tags: ['knowledge-bases'],
+  }),
   requireAuth,
-  requireAnyPermission(getAllScopePermissions('KNOWLEDGE_BASE_READ'), 'You do not have permission to view knowledge base details'),
+  requireAnyPermission(
+    getAllScopePermissions('KNOWLEDGE_BASE_READ'),
+    'You do not have permission to view knowledge base details',
+  ),
   zValidator('param', KnowledgeBaseIdParamSchema),
   async (c) => {
     const controller = new KnowledgeBaseController();
@@ -96,8 +127,17 @@ app.get(
  */
 app.patch(
   '/:id',
+  routeDoc({
+    data: KnowledgeBaseDetailResponseSchema,
+    errors: [404],
+    summary: 'Update a knowledge base',
+    tags: ['knowledge-bases'],
+  }),
   requireAuth,
-  requireAnyPermission(getAllScopePermissions('KNOWLEDGE_BASE_UPDATE'), 'You do not have permission to update a knowledge base'),
+  requireAnyPermission(
+    getAllScopePermissions('KNOWLEDGE_BASE_UPDATE'),
+    'You do not have permission to update a knowledge base',
+  ),
   zValidator('param', KnowledgeBaseIdParamSchema),
   zValidator('json', UpdateKnowledgeBaseSchema),
   async (c) => {
@@ -115,8 +155,18 @@ app.patch(
  */
 app.delete(
   '/:id',
+  routeDoc({
+    data: DeletedResourceSchema,
+    description: 'Also deletes the files that belong to no other knowledge base.',
+    errors: [404],
+    summary: 'Delete a knowledge base',
+    tags: ['knowledge-bases'],
+  }),
   requireAuth,
-  requireAnyPermission(getAllScopePermissions('KNOWLEDGE_BASE_DELETE'), 'You do not have permission to delete a knowledge base'),
+  requireAnyPermission(
+    getAllScopePermissions('KNOWLEDGE_BASE_DELETE'),
+    'You do not have permission to delete a knowledge base',
+  ),
   zValidator('param', KnowledgeBaseIdParamSchema),
   async (c) => {
     const controller = new KnowledgeBaseController();
@@ -138,10 +188,16 @@ app.delete(
  * - keyword: string (optional) - Search keyword (matches file name)
  *
  * Notes:
- * - When neither page nor pageSize is provided, returns all data without pagination
+ * - When page/pageSize are omitted, defaults to page 1 with 20 items
  */
 app.get(
   '/:id/files',
+  routeDoc({
+    data: FileListResponseSchema,
+    errors: [404],
+    summary: 'List the files of a knowledge base',
+    tags: ['knowledge-bases'],
+  }),
   requireAuth,
   requireAnyPermission(
     getAllScopePermissions('KNOWLEDGE_BASE_READ'),
@@ -161,8 +217,18 @@ app.get(
  */
 app.post(
   '/:id/files/batch',
+  routeDoc({
+    operationId: 'knowledgeBases.addFiles',
+    data: KnowledgeBaseFileOperationResultSchema,
+    errors: [404],
+    summary: 'Add files to a knowledge base',
+    tags: ['knowledge-bases'],
+  }),
   requireAuth,
-  requireAnyPermission(getAllScopePermissions('KNOWLEDGE_BASE_UPDATE'), 'You do not have permission to update knowledge base files'),
+  requireAnyPermission(
+    getAllScopePermissions('KNOWLEDGE_BASE_UPDATE'),
+    'You do not have permission to update knowledge base files',
+  ),
   zValidator('param', KnowledgeBaseIdParamSchema),
   zValidator('json', KnowledgeBaseFileBatchSchema),
   async (c) => {
@@ -177,8 +243,20 @@ app.post(
  */
 app.delete(
   '/:id/files/batch',
+  routeDoc({
+    operationId: 'knowledgeBases.removeFiles',
+    data: KnowledgeBaseFileOperationResultSchema,
+    description:
+      'Detaches the files from the knowledge base without deleting them, and reports per file which ones were detached.',
+    errors: [404],
+    summary: 'Remove files from a knowledge base',
+    tags: ['knowledge-bases'],
+  }),
   requireAuth,
-  requireAnyPermission(getAllScopePermissions('KNOWLEDGE_BASE_UPDATE'), 'You do not have permission to update knowledge base files'),
+  requireAnyPermission(
+    getAllScopePermissions('KNOWLEDGE_BASE_UPDATE'),
+    'You do not have permission to update knowledge base files',
+  ),
   zValidator('param', KnowledgeBaseIdParamSchema),
   zValidator('json', KnowledgeBaseFileBatchSchema),
   async (c) => {
@@ -193,8 +271,18 @@ app.delete(
  */
 app.post(
   '/:id/files/move',
+  routeDoc({
+    operationId: 'knowledgeBases.moveFiles',
+    data: KnowledgeBaseFileOperationResultSchema,
+    errors: [404],
+    summary: 'Move files to another knowledge base',
+    tags: ['knowledge-bases'],
+  }),
   requireAuth,
-  requireAnyPermission(getAllScopePermissions('KNOWLEDGE_BASE_UPDATE'), 'You do not have permission to update knowledge base files'),
+  requireAnyPermission(
+    getAllScopePermissions('KNOWLEDGE_BASE_UPDATE'),
+    'You do not have permission to update knowledge base files',
+  ),
   zValidator('param', KnowledgeBaseIdParamSchema),
   zValidator('json', MoveKnowledgeBaseFilesSchema),
   async (c) => {

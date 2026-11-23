@@ -1,14 +1,26 @@
 'use client';
 
-import { Center, Flexbox, Icon, Input, Text, TextArea } from '@lobehub/ui';
-import { Select, toast, useModalContext } from '@lobehub/ui/base-ui';
-import { Form } from 'antd';
-import { createStaticStyles, cssVar } from 'antd-style';
+import {
+  Center,
+  createStaticStyles,
+  cssVar,
+  Flexbox,
+  Icon,
+  Input,
+  Select,
+  Text,
+  TextArea,
+  useModalContext,
+} from '@lobehub/ui';
+import { Form, useForm, useWatch } from '@lobehub/ui/form';
 import { CheckIcon } from 'lucide-react';
 import { type FC, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import InlineErrorText from '@/components/InlineErrorText';
+import { type InlineErrorState, toInlineError } from '@/components/InlineErrorText/errorDetail';
 import { agentEvalService } from '@/services/agentEval';
+import { densityVars } from '@/styles/densityVars';
 
 import { DATASET_PRESETS, getPresetsByCategory } from '../../config/datasetPresets';
 
@@ -41,7 +53,7 @@ const styles = createStaticStyles(({ css }) => ({
 
     position: relative;
 
-    padding: 12px;
+    padding: ${densityVars.contentGap};
     border: 1px solid ${cssVar.colorBorderSecondary};
     border-radius: ${cssVar.borderRadius};
 
@@ -121,26 +133,24 @@ const DatasetCreateContent: FC<DatasetCreateContentProps> = ({
   const { t } = useTranslation('eval');
   const { close } = useModalContext();
 
-  const [form] = Form.useForm();
   const [selectedPreset, setSelectedPreset] = useState<string>('custom');
   const [identifierTouched, setIdentifierTouched] = useState(false);
 
-  const nameValue = Form.useWatch('name', form);
-  const evalModeValue = Form.useWatch('evalMode', form);
-
-  useEffect(() => {
-    if (!identifierTouched && nameValue) {
-      form.setFieldValue('identifier', toIdentifier(nameValue));
-    }
-  }, [nameValue, identifierTouched, form]);
+  /** Submit failure shown below the form; the modal stays open with the user's input. */
+  const [error, setError] = useState<InlineErrorState | null>(null);
 
   const handleFinish = async (values: any) => {
+    setError(null);
     onLoadingChange?.(true);
     try {
       const result = await agentEvalService.createDataset({
         benchmarkId,
         description: values.description,
-        evalConfig: values.evalConfig?.judgePrompt ? values.evalConfig : undefined,
+        evalConfig:
+          (values.evalMode === 'llm-rubric' || values.evalMode === 'rule-checklist') &&
+          values.evalConfig?.judgePrompt
+            ? values.evalConfig
+            : undefined,
         evalMode: values.evalMode || undefined,
         identifier: values.identifier.trim(),
         metadata: {
@@ -154,12 +164,23 @@ const DatasetCreateContent: FC<DatasetCreateContentProps> = ({
         name: result.name,
         preset: selectedPreset,
       });
-    } catch (error: any) {
-      toast.error(error?.message || t('dataset.create.error'));
+    } catch (cause) {
+      console.error('Failed to create eval dataset:', cause);
+      setError(toInlineError(t('dataset.create.failedRetry'), cause));
     } finally {
       onLoadingChange?.(false);
     }
   };
+
+  const form = useForm({ onSubmit: handleFinish, onValuesChange: () => setError(null) });
+  const nameValue = useWatch(form, 'name');
+  const evalModeValue = useWatch(form, 'evalMode');
+
+  useEffect(() => {
+    if (!identifierTouched && nameValue) {
+      form.setValue('identifier', toIdentifier(nameValue));
+    }
+  }, [nameValue, identifierTouched, form]);
 
   const presetsByCategory = getPresetsByCategory();
   const orderedCategories = Object.entries(presetsByCategory).filter(
@@ -167,32 +188,32 @@ const DatasetCreateContent: FC<DatasetCreateContentProps> = ({
   );
 
   return (
-    <Form form={form} layout="vertical" name={formId} onFinish={handleFinish}>
-      <Form.Item
+    <Form form={form} id={formId} layout="vertical">
+      <Form.Field
         label={t('dataset.create.name.label')}
         name="name"
-        rules={[{ message: t('dataset.create.nameRequired'), required: true }]}
+        required={t('dataset.create.nameRequired')}
       >
         <Input placeholder={t('dataset.create.name.placeholder')} />
-      </Form.Item>
+      </Form.Field>
 
-      <Form.Item
+      <Form.Field
         label={t('dataset.create.identifier.label')}
         name="identifier"
-        rules={[{ message: t('dataset.create.identifierRequired'), required: true }]}
+        required={t('dataset.create.identifierRequired')}
       >
         <Input
           placeholder={t('dataset.create.identifier.placeholder')}
           style={{ fontFamily: cssVar.fontFamilyCode }}
           onChange={() => setIdentifierTouched(true)}
         />
-      </Form.Item>
+      </Form.Field>
 
-      <Form.Item label={t('dataset.create.description.label')} name="description">
+      <Form.Field label={t('dataset.create.description.label')} name="description">
         <TextArea placeholder={t('dataset.create.description.placeholder')} rows={3} />
-      </Form.Item>
+      </Form.Field>
 
-      <Form.Item extra={t('dataset.evalMode.hint')} label={t('evalMode.label')} name="evalMode">
+      <Form.Field extra={t('dataset.evalMode.hint')} label={t('evalMode.label')} name="evalMode">
         <Select
           allowClear
           placeholder={t('evalMode.placeholder')}
@@ -208,15 +229,16 @@ const DatasetCreateContent: FC<DatasetCreateContentProps> = ({
             { label: t('evalMode.equals'), value: 'equals' },
             { label: t('evalMode.contains'), value: 'contains' },
             { label: t('evalMode.llm-rubric'), value: 'llm-rubric' },
+            { label: t('evalMode.rule-checklist'), value: 'rule-checklist' },
             { label: t('evalMode.external'), value: 'external' },
           ]}
         />
-      </Form.Item>
+      </Form.Field>
 
-      {evalModeValue === 'llm-rubric' && (
-        <Form.Item label={t('evalMode.prompt.label')} name={['evalConfig', 'judgePrompt']}>
+      {(evalModeValue === 'llm-rubric' || evalModeValue === 'rule-checklist') && (
+        <Form.Field label={t('evalMode.prompt.label')} name="evalConfig.judgePrompt">
           <TextArea placeholder={t('evalMode.prompt.placeholder')} rows={3} />
-        </Form.Item>
+        </Form.Field>
       )}
 
       {/* Preset picker — selectable cards grouped by category, the bold upgrade
@@ -289,6 +311,7 @@ const DatasetCreateContent: FC<DatasetCreateContentProps> = ({
           </Flexbox>
         )}
       </Flexbox>
+      {error && <InlineErrorText detail={error.detail}>{error.summary}</InlineErrorText>}
     </Form>
   );
 };

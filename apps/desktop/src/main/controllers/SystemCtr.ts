@@ -1,10 +1,22 @@
 import { access, readdir } from 'node:fs/promises';
+import os from 'node:os';
 import process from 'node:process';
 
-import type { ElectronAppState, ThemeMode } from '@lobechat/electron-client-ipc';
+import type {
+  DebugLoggingDuration,
+  DebugLoggingSettings,
+  DiagnosticsBundleResult,
+  ElectronAppState,
+  RemoteDebuggingSettings,
+  ThemeMode,
+} from '@lobechat/electron-client-ipc';
 import { app, dialog, nativeTheme, shell } from 'electron';
 
 import { legacyLocalDbDir } from '@/const/dir';
+import { setDebugLogging } from '@/modules/debugLogging';
+import { writeDiagnosticsBundle } from '@/modules/diagnostics/bundle';
+import { getRemoteDebuggingLaunchState, REMOTE_DEBUGGING_PORT } from '@/modules/remoteDebugging';
+import { BUILD_CHANNEL } from '@/modules/updater/configs';
 import { createLogger } from '@/utils/logger';
 import {
   getAccessibilityStatus,
@@ -16,20 +28,23 @@ import {
   requestScreenCaptureAccess,
 } from '@/utils/permissions';
 import * as electronIs from '@/utils/platform';
+import { flushStructuredLogs, getStructuredLogDirectory } from '@/utils/structuredLog';
 import { getSystemLanguage, resolveUILocale } from '@/utils/system-language';
+import { safeGetPath } from '@/utils/user-path';
 
 import { ControllerModule, IpcMethod } from './index';
+import RemoteServerConfigCtr from './RemoteServerConfigCtr';
 
 const logger = createLogger('controllers:SystemCtr');
 
-interface SystemMonospaceFont {
+interface SystemFont {
   label: string;
   value: string;
 }
 
 export default class SystemController extends ControllerModule {
   static override readonly groupName = 'system';
-  private systemMonospaceFontsPromise?: Promise<SystemMonospaceFont[]>;
+  private systemFontsPromises = new Map<string, Promise<SystemFont[]>>();
   private systemThemeListenerInitialized = false;
 
   /**
@@ -64,12 +79,12 @@ export default class SystemController extends ControllerModule {
         // User Paths (ensure keys match UserPathData / DesktopAppState interface)
         desktop: app.getPath('desktop'),
         documents: app.getPath('documents'),
-        downloads: app.getPath('downloads'),
+        downloads: safeGetPath('downloads'),
         home: app.getPath('home'),
-        music: app.getPath('music'),
-        pictures: app.getPath('pictures'),
+        music: safeGetPath('music'),
+        pictures: safeGetPath('pictures'),
         userData: app.getPath('userData'),
-        videos: app.getPath('videos'),
+        videos: safeGetPath('videos'),
       },
     };
   }
@@ -80,7 +95,22 @@ export default class SystemController extends ControllerModule {
   }
 
   @IpcMethod()
-  requestAccessibilityAccess() {
+  setLastWorkspaceSlug(slug: string | null): void {
+    const { userId } = this.app.getController(RemoteServerConfigCtr).getDesktopBootstrapIdentity();
+    if (!userId) return;
+
+    const slugByAccount = { ...this.app.storeManager.get('lastWorkspaceSlugByAccount', {}) };
+    if (slug) slugByAccount[userId] = slug;
+    else delete slugByAccount[userId];
+
+    this.app.storeManager.set('lastWorkspaceSlugByAccount', slugByAccount);
+  }
+
+  @IpcMethod()
+  async requestAccessibilityAccess(): Promise<boolean> {
+    if (await this.app.permissionGuide.open('accessibility')) {
+      return getAccessibilityStatus() === 'granted';
+    }
     return requestAccessibilityAccess();
   }
 
@@ -121,6 +151,8 @@ export default class SystemController extends ControllerModule {
       logger.info('[FullDiskAccess] Not macOS, returning granted');
       return 'granted';
     }
+
+    if (await this.app.permissionGuide.open('fullDisk')) return 'opened_settings';
 
     const mainWindow = this.app.browserManager.getMainWindow()?.browserWindow;
 
@@ -167,12 +199,127 @@ export default class SystemController extends ControllerModule {
 
   @IpcMethod()
   async requestScreenAccess(): Promise<boolean> {
+    if (await this.app.permissionGuide.open('screen')) {
+      return getMediaAccessStatus('screen') === 'granted';
+    }
     return requestScreenCaptureAccess();
   }
 
   @IpcMethod()
   async openFullDiskAccessSettings() {
+    if (await this.app.permissionGuide.open('fullDisk')) return;
     return openFullDiskAccessSettings();
+  }
+
+  /**
+   * Settings → About → Debug logs. `alwaysOn` is true in dev, which records
+   * `debug` regardless of the setting.
+   */
+  @IpcMethod()
+  getDebugLoggingSettings(): DebugLoggingSettings {
+    const enabled = this.app.storeManager.get('debugLoggingEnabled', false);
+    const expiresAt = enabled ? this.app.storeManager.get('debugLoggingExpiresAt') : undefined;
+    return {
+      alwaysOn: !app.isPackaged,
+      enabled,
+      ...(expiresAt === undefined ? undefined : { expiresAt }),
+    };
+  }
+
+  /** Turns debug logging off, or on for a duration; a timed one turns itself off quietly. */
+  @IpcMethod()
+  setDebugLogging(duration: DebugLoggingDuration | 'off'): DebugLoggingSettings {
+    setDebugLogging(this.app.storeManager, duration);
+    logger.info(`Debug logging set to ${duration}`);
+    return this.getDebugLoggingSettings();
+  }
+
+  @IpcMethod()
+  getRemoteDebuggingSettings(): RemoteDebuggingSettings {
+    return {
+      ...getRemoteDebuggingLaunchState(),
+      enabled: this.app.storeManager.get('remoteDebuggingEnabled', false),
+      port: REMOTE_DEBUGGING_PORT,
+    };
+  }
+
+  /** Persists the toggle; Chromium reads the CDP switch only at startup, so it applies on restart. */
+  @IpcMethod()
+  setRemoteDebuggingEnabled(enabled: boolean): RemoteDebuggingSettings {
+    this.app.storeManager.set('remoteDebuggingEnabled', enabled);
+    logger.info(`Remote debugging ${enabled ? 'enabled' : 'disabled'} for the next launch`);
+    return this.getRemoteDebuggingSettings();
+  }
+
+  /** Reveals `<userData>/logs/` so a user can attach the files to a bug report. */
+  @IpcMethod()
+  async openLogDirectory(): Promise<void> {
+    const directory = getStructuredLogDirectory();
+    if (!directory) return;
+    const error = await shell.openPath(directory);
+    if (error) logger.warn(`Failed to open log directory: ${error}`);
+  }
+
+  /**
+   * Writes a zip of the last day of logs plus app and system details to Downloads
+   * (the log directory when Downloads is unavailable) and selects it in the file
+   * manager, so a user can attach one file to a report.
+   */
+  @IpcMethod()
+  async exportDiagnostics(): Promise<DiagnosticsBundleResult> {
+    const logDirectory = getStructuredLogDirectory();
+    if (!logDirectory) throw new Error('Structured logs are not open');
+    // Queued lines would otherwise miss the bundle, including the click that made it.
+    await flushStructuredLogs();
+
+    const options = { logDirectory, now: new Date(), systemInfo: this.getDiagnosticsSystemInfo() };
+    const downloads = safeGetPath('downloads');
+    let result: DiagnosticsBundleResult | undefined;
+    if (downloads) {
+      // Downloads can resolve yet be missing or unwritable (redirected, sandboxed, removed).
+      result = await writeDiagnosticsBundle({ ...options, outputDirectory: downloads }).catch(
+        (error) => {
+          logger.warn('Diagnostics could not be written to Downloads; using the log folder', error);
+          return undefined;
+        },
+      );
+    }
+    result ??= await writeDiagnosticsBundle({ ...options, outputDirectory: logDirectory });
+    shell.showItemInFolder(result.filePath);
+    logger.info(`Diagnostics exported: ${result.fileName} (${result.size} bytes)`);
+    return result;
+  }
+
+  /** `system.json` in the diagnostics zip; no host name, account or user content. */
+  private getDiagnosticsSystemInfo() {
+    const cpus = os.cpus();
+    return {
+      app: {
+        buildChannel: BUILD_CHANNEL,
+        isPackaged: app.isPackaged,
+        locale: app.getLocale(),
+        updateChannel: this.app.storeManager.get('updateChannel'),
+        version: app.getVersion(),
+      },
+      debugLogging: this.getDebugLoggingSettings(),
+      os: {
+        arch: process.arch,
+        cpu: cpus[0]?.model,
+        cpuCount: cpus.length,
+        freeMemory: os.freemem(),
+        platform: process.platform,
+        release: os.release(),
+        totalMemory: os.totalmem(),
+        uptimeSeconds: Math.round(os.uptime()),
+        version: os.version(),
+      },
+      remoteDebugging: this.getRemoteDebuggingSettings(),
+      runtime: {
+        chrome: process.versions.chrome,
+        electron: process.versions.electron,
+        node: process.versions.node,
+      },
+    };
   }
 
   @IpcMethod()
@@ -223,34 +370,46 @@ export default class SystemController extends ControllerModule {
   }
 
   @IpcMethod()
-  async getSystemMonospaceFonts(): Promise<SystemMonospaceFont[]> {
-    if (!this.systemMonospaceFontsPromise) {
-      this.systemMonospaceFontsPromise = import('font-list')
-        .then(({ getFonts2 }) => getFonts2())
-        .then((fonts) => {
-          const families = new Map<string, SystemMonospaceFont>();
+  async getSystemMonospaceFonts(): Promise<SystemFont[]> {
+    return this.loadSystemFonts(true);
+  }
 
-          for (const font of fonts) {
-            const label = font.name.trim();
-            const value = font.familyName.trim();
-            if (!font.monospace || !label || !value) continue;
+  @IpcMethod()
+  async getSystemFonts(): Promise<SystemFont[]> {
+    return this.loadSystemFonts(false);
+  }
 
-            const normalizedName = label.toLocaleLowerCase();
-            if (!families.has(normalizedName)) families.set(normalizedName, { label, value });
-          }
+  private loadSystemFonts(monospaceOnly: boolean): Promise<SystemFont[]> {
+    const cacheKey = monospaceOnly ? 'monospace' : 'all';
+    let cached = this.systemFontsPromises.get(cacheKey);
+    if (cached) return cached;
 
-          return [...families.values()].sort((left, right) =>
-            left.label.localeCompare(right.label),
-          );
-        })
-        .catch((error) => {
-          this.systemMonospaceFontsPromise = undefined;
-          logger.error('Failed to enumerate system monospace fonts:', error);
-          throw error;
-        });
-    }
+    cached = import('font-list')
+      .then(({ getFonts2 }) => getFonts2())
+      .then((fonts) => {
+        const families = new Map<string, SystemFont>();
 
-    return this.systemMonospaceFontsPromise;
+        for (const font of fonts) {
+          const label = font.name.trim();
+          const value = font.familyName.trim();
+          if (!label || !value) continue;
+          if (monospaceOnly && !font.monospace) continue;
+
+          const normalizedName = label.toLocaleLowerCase();
+          if (!families.has(normalizedName)) families.set(normalizedName, { label, value });
+        }
+
+        return [...families.values()].sort((left, right) => left.label.localeCompare(right.label));
+      })
+      .catch((error) => {
+        this.systemFontsPromises.delete(cacheKey);
+        logger.error('Failed to enumerate system fonts:', error);
+        throw error;
+      });
+
+    this.systemFontsPromises.set(cacheKey, cached);
+
+    return cached;
   }
 
   @IpcMethod()

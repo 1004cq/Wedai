@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "rootDir": "../../",
+    "paths": {
+      "@lobehub/sdk": ["./src/index.ts"]
+    }
+  },
+  "extends": "../../tsconfig.json",
+  "include": ["src/**/*.ts", "scripts/**/*.ts", "examples/**/*.ts"]
+}

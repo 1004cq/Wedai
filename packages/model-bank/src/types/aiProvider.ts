@@ -1,6 +1,11 @@
 import { z } from 'zod';
 
-import type { AiModelForSelect, EnabledAiModel, ModelSearchImplementType } from './aiModel';
+import type {
+  AiModelForSelect,
+  AiModelReasoningConfig,
+  EnabledAiModel,
+  ModelSearchImplementType,
+} from './aiModel';
 
 export type ResponseAnimationStyle = 'smooth' | 'fadeIn' | 'none';
 export type ResponseAnimation =
@@ -144,6 +149,13 @@ export interface AiProviderSettings {
    */
   authType?: AiProviderAuthType;
   /**
+   * How the connectivity checker verifies the provider.
+   * - `chat` (default): sends a chat message to the selected check model.
+   * - `credentials`: asks the provider runtime to verify the key without a model
+   *   (e.g. a balance endpoint), for providers that serve no chat models.
+   */
+  checkMode?: 'chat' | 'credentials';
+  /**
    * whether provider show browser request option by default
    *
    * @default false
@@ -227,8 +239,9 @@ const OAuthDeviceFlowConfigSchema = z.object({
   tokenExchangeEndpoint: z.string().optional(),
 });
 
-const AiProviderSettingsSchema = z.object({
+export const AiProviderSettingsSchema = z.object({
   authType: z.enum(AiProviderAuthTypes).optional(),
+  checkMode: z.enum(['chat', 'credentials']).optional(),
   defaultShowBrowserRequest: z.boolean().optional(),
   disableBrowserRequest: z.boolean().optional(),
   maxToolCount: z.number().optional(),
@@ -264,12 +277,32 @@ export interface AiProviderConfig {
   enableResponseApi?: boolean;
 }
 
+export const AiProviderBaseURLSchema = z.url({ protocol: /^https?$/ });
+
+/** Provider vaults support scalar secrets and string-valued custom header maps. */
+const AiProviderKeyVaultValueSchema = z
+  .union([z.string(), z.record(z.string(), z.string())])
+  .optional();
+
+const AiProviderKeyVaultsSchema = z
+  .record(z.string(), AiProviderKeyVaultValueSchema)
+  .superRefine((keyVaults, ctx) => {
+    const baseURL = keyVaults.baseURL;
+    if (!baseURL || AiProviderBaseURLSchema.safeParse(baseURL).success) return;
+
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Invalid baseURL',
+      path: ['baseURL'],
+    });
+  });
+
 // create
 export const CreateAiProviderSchema = z.object({
   config: z.object({}).passthrough().optional(),
   description: z.string().optional(),
   id: z.string(),
-  keyVaults: z.any().optional(),
+  keyVaults: AiProviderKeyVaultsSchema.optional(),
   logo: z.string().optional(),
   name: z.string(),
   sdkType: z.enum(AiProviderSdkTypes).optional(),
@@ -326,6 +359,12 @@ export interface AiProviderDetailItem {
    * the default model that used for connection check
    */
   checkModel?: string;
+  /**
+   * provider-level behaviour switches persisted on `ai_providers.config`
+   * (e.g. `enableResponseApi`). The detail query already selects the column,
+   * the field was missing from this type.
+   */
+  config?: AiProviderConfig;
   description?: string;
   enabled: boolean;
   fetchOnClient?: boolean;
@@ -368,15 +407,7 @@ export const UpdateAiProviderConfigSchema = z.object({
     })
     .optional(),
   fetchOnClient: z.boolean().nullish(),
-  keyVaults: z
-    .record(
-      z.string(),
-      z.union([
-        z.string().optional(),
-        z.record(z.string(), z.string()).optional(), // Support nested objects, e.g. customHeaders
-      ]),
-    )
-    .optional(),
+  keyVaults: AiProviderKeyVaultsSchema.optional(),
 });
 
 export type UpdateAiProviderConfigParams = z.infer<typeof UpdateAiProviderConfigSchema>;
@@ -425,11 +456,22 @@ export interface AiProviderRuntimeState {
   /** False when the server could not resolve the current user's hidden-model policy. */
   hiddenBuiltinModelsResolved?: boolean;
   /**
+   * The user's saved per-model reasoning defaults (personal scope, shared across
+   * workspaces), keyed by `${providerId}/${modelId}`. When present it is
+   * complete: a missing key means nothing is saved for that model.
+   */
+  modelReasoningConfigs?: Record<string, AiModelReasoningConfig>;
+  /**
    * Retired `${providerId}/${modelId}` → successor model id (same provider).
    * Requests for a key are transparently served by its successor, so clients can
    * render "superseded by X" instead of "removed". Keys are provider-scoped so a
    * same-named model under an unrelated provider is never treated as redirected.
    */
   modelRedirects?: Record<string, string>;
+  /**
+   * Secret-free provider-binding capabilities resolved by the server.
+   * Renderer consumers use this instead of inspecting provider runtime config.
+   */
+  providerBindingAgentTypes?: Record<string, string[]>;
   runtimeConfig: Record<string, AiProviderRuntimeConfig>;
 }

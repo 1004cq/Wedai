@@ -1,8 +1,7 @@
 'use client';
 
-import { Button } from '@lobehub/ui/base-ui';
+import { Button, cx } from '@lobehub/ui';
 import { App } from 'antd';
-import { cx } from 'antd-style';
 import { type FC, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router';
@@ -71,8 +70,8 @@ const Plans: FC = () => {
     return { kind: 'idle' };
   });
 
-  const [creatingPriceId, setCreatingPriceId] = useState<string>();
-  const pollTimerRef = useRef<ReturnType<typeof setInterval>>();
+  const [creatingPriceId, setCreatingPriceId] = useState<string | undefined>(undefined);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const pollStartRef = useRef<number>(0);
 
   const {

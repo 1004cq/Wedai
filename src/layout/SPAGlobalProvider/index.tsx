@@ -1,8 +1,6 @@
 'use client';
 
-import { ContextMenuHost, ModalHost, TooltipGroup } from '@lobehub/ui';
-import { ModalHost as BaseModalHost, ToastHost } from '@lobehub/ui/base-ui';
-import { StyleProvider } from 'antd-style';
+import { ContextMenuHost, ModalHost, ToastHost, TooltipGroup } from '@lobehub/ui';
 import { domMax, LazyMotion } from 'motion/react';
 import { Component, type CSSProperties, lazy, memo, type PropsWithChildren, Suspense } from 'react';
 
@@ -13,13 +11,15 @@ import { useDevDockMounted } from '@/hooks/useDevDockMounted';
 import AuthProvider from '@/layout/AuthProvider';
 import { MarketAuthProvider } from '@/layout/AuthProvider/MarketAuth';
 import AppTheme from '@/layout/GlobalProvider/AppTheme';
-import CacheHydrationGate from '@/layout/GlobalProvider/CacheHydrationGate';
 import { FaviconProvider } from '@/layout/GlobalProvider/FaviconProvider';
 import { GroupWizardProvider } from '@/layout/GlobalProvider/GroupWizardProvider';
 import QueryProvider from '@/layout/GlobalProvider/Query';
 import ServerVersionOutdatedAlert from '@/layout/GlobalProvider/ServerVersionOutdatedAlert';
-import StoreInitialization from '@/layout/GlobalProvider/StoreInitialization';
+import StoreInitialization, {
+  BuiltinAgentInitialization,
+} from '@/layout/GlobalProvider/StoreInitialization';
 import { registerNativeContextMenuInterceptor } from '@/libs/contextMenu';
+import PrePaintSignal from '@/libs/replica/PrePaintSignal';
 import { usePostRenderReady } from '@/spa/atoms/app';
 import { ServerConfigStoreProvider } from '@/store/serverConfig/Provider';
 import type { SPAServerConfig } from '@/types/spaServerConfig';
@@ -30,6 +30,8 @@ registerNativeContextMenuInterceptor();
 const DevDock = lazy(() => import('@/features/DevDock'));
 const ImperativeMountHost = lazy(() => import('@/components/ImperativeMount'));
 const DynamicFavicon = lazy(() => import('@/layout/GlobalProvider/DynamicFavicon'));
+const BackgroundActivityMonitor = lazy(() => import('@/features/BackgroundActivity/Monitor'));
+const TaskDock = lazy(() => import('@/features/TaskDock'));
 
 const devDockLayoutStyle: CSSProperties = {
   alignItems: 'center',
@@ -53,7 +55,7 @@ class DevDockBoundary extends Component<PropsWithChildren, { failed: boolean }> 
 }
 
 export const DevDockLayout = memo<PropsWithChildren>(({ children }) => {
-  const mounted = useDevDockMounted();
+  const mounted = useDevDockMounted() && !window.location.pathname.startsWith('/popup/processes');
 
   return (
     <>
@@ -95,17 +97,21 @@ const SPAGlobalProvider = memo<PropsWithChildren>(({ children }) => {
             <DragUploadProvider>
               <LazyMotion features={domMax}>
                 <TooltipGroup layoutAnimation={false}>
-                  <StyleProvider speedy={import.meta.env.PROD}>
-                    <LobeAnalyticsProviderWrapper>
-                      <CacheHydrationGate>{children}</CacheHydrationGate>
-                    </LobeAnalyticsProviderWrapper>
-                  </StyleProvider>
+                  <LobeAnalyticsProviderWrapper>
+                    <PrePaintSignal>
+                      <BuiltinAgentInitialization />
+                      <DevDockLayout>{children}</DevDockLayout>
+                    </PrePaintSignal>
+                  </LobeAnalyticsProviderWrapper>
                 </TooltipGroup>
                 <ModalHost />
-                <BaseModalHost />
                 <ToastHost />
                 <ContextMenuHost />
                 <Suspense>
+                  <TaskDock />
+                  {isDesktop && !window.location.pathname.startsWith('/popup') && (
+                    <BackgroundActivityMonitor />
+                  )}
                   <ImperativeMountHost />
                 </Suspense>
               </LazyMotion>
@@ -124,9 +130,7 @@ const SPAGlobalProvider = memo<PropsWithChildren>(({ children }) => {
           isMobile={isMobile}
           serverConfig={serverConfig?.config}
         >
-          <QueryProvider>
-            <DevDockLayout>{content}</DevDockLayout>
-          </QueryProvider>
+          <QueryProvider>{content}</QueryProvider>
         </ServerConfigStoreProvider>
       </AppTheme>
     </Locale>

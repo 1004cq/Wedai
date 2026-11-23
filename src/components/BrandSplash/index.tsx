@@ -9,7 +9,7 @@
  * server HTML matches the first client paint (no splash flash / mismatch).
  */
 import { BRANDING_NAME } from '@lobechat/business-const';
-import { createStaticStyles } from 'antd-style';
+import { createStaticStyles } from '@lobehub/ui';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 
 import Image from '@/libs/next/Image';

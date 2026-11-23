@@ -1,8 +1,32 @@
 import { describe, expect, it } from 'vitest';
 
-import { convertAlphaToSolid } from './colorUtils';
+import { convertAlphaToSolid, isFullyTransparentColor } from './colorUtils';
 
 describe('colorUtils', () => {
+  describe('isFullyTransparentColor', () => {
+    it.each([
+      'transparent',
+      'rgba(0, 0, 0, 0)',
+      'hsla(120, 50%, 50%, 0)',
+      '#0000',
+      '#00000000',
+      'rgb(0 0 0 / 0)',
+    ])('recognizes the fully transparent color %s', (color) => {
+      expect(isFullyTransparentColor(color)).toBe(true);
+    });
+
+    it.each([
+      'rgba(0, 0, 0)',
+      'rgba(12, 34, 0)',
+      'hsla(120, 100%, 0%)',
+      '#000',
+      'rgba(0, 0, 0, 0.5)',
+      'linear-gradient(red, blue)',
+    ])('does not mistake the visual value %s for transparency', (color) => {
+      expect(isFullyTransparentColor(color)).toBe(false);
+    });
+  });
+
   describe('convertAlphaToSolid', () => {
     it('should convert fully opaque color to same color', () => {
       // Fully opaque (alpha = 1.0)
@@ -38,8 +62,9 @@ describe('colorUtils', () => {
       // Using hex with alpha
       const result = convertAlphaToSolid('#ff000080', '#ffffff');
 
-      // #ff000080 is red with 50% opacity (80 in hex = 128/255 ≈ 0.5)
-      expect(result).toBe('#ff8080');
+      // 80 in hex is an alpha of exactly 128/255 (≈ 0.502), which chroma-js
+      // reads unrounded since 3.3.0: 255 * (1 - 128/255) = 127 → 7f
+      expect(result).toBe('#ff7f7f');
     });
 
     it('should handle named colors', () => {
@@ -156,9 +181,10 @@ describe('colorUtils', () => {
     });
 
     it('should produce same result regardless of input color format', () => {
+      // The same alpha in every format: hex `80` is exactly 128/255.
       const result1 = convertAlphaToSolid('#ff000080', '#ffffff');
-      const result2 = convertAlphaToSolid('rgba(255, 0, 0, 0.5)', 'white');
-      const result3 = convertAlphaToSolid('rgba(255, 0, 0, 0.5)', '#fff');
+      const result2 = convertAlphaToSolid(`rgba(255, 0, 0, ${128 / 255})`, 'white');
+      const result3 = convertAlphaToSolid(`rgba(255, 0, 0, ${128 / 255})`, '#fff');
 
       expect(result1).toBe(result2);
       expect(result2).toBe(result3);

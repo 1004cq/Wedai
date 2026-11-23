@@ -4,6 +4,7 @@ import type { RouteObject } from 'react-router';
 
 import { dynamicElement, ErrorBoundary } from '@/utils/router';
 
+import DesktopHomeRoute from './DesktopHomeRoute';
 import {
   createMainAreaRouteFactory,
   createSharedDesktopRoutes,
@@ -13,7 +14,8 @@ import {
 export { sharedMainAreaChildren } from './desktopRouter.shared';
 
 const mainAreaRouteOptions: MainAreaRouteOptions = {
-  createHomeElement: () => dynamicElement(() => import('./DesktopHomeRoute'), 'Desktop > Home'),
+  // The first screen every tab paints — eager so it never suspends behind a chunk fetch.
+  createHomeElement: () => <DesktopHomeRoute />,
   createWorkspaceSettingsIndexElement: () =>
     dynamicElement(
       () => import('@/routes/(main)/[workspaceSlug]/settings'),
@@ -36,12 +38,14 @@ export const desktopRoutes: RouteObject[] = createSharedDesktopRoutes({
     { element: null, index: true },
     { element: null, path: '*' },
   ],
-  onboardingRoute: {
-    element: dynamicElement(
-      () => import('@/routes/(desktop)/desktop-onboarding'),
-      'Desktop > Desktop Onboarding',
-    ),
-    errorElement: <ErrorBoundary />,
-    path: '/desktop-onboarding',
-  },
+  platformRoutes: [
+    {
+      element: dynamicElement(
+        () => import('@/routes/(desktop)/desktop-onboarding'),
+        'Desktop > Desktop Onboarding',
+      ),
+      errorElement: <ErrorBoundary />,
+      path: '/desktop-onboarding',
+    },
+  ],
 });

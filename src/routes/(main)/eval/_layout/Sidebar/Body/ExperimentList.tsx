@@ -1,16 +1,24 @@
 'use client';
 
-import { AccordionItem, Flexbox, Text } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
+import {
+  AccordionHeader,
+  AccordionItem,
+  AccordionPanel,
+  AccordionTrigger,
+  Button,
+  Flexbox,
+  Text,
+} from '@lobehub/ui';
 import { Beaker, RotateCw } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import NavItem from '@/features/NavPanel/components/NavItem';
+import SectionTitle, { useSectionTriggerStyle } from '@/features/NavPanel/components/SectionTitle';
 import SkeletonList from '@/features/NavPanel/components/SkeletonList';
 import { useWorkspaceAwareNavigate } from '@/features/Workspace/useWorkspaceAwareNavigate';
 import WorkspaceLink from '@/features/Workspace/WorkspaceLink';
-import { useEvalStore } from '@/store/eval';
+import { experimentSelectors, useEvalStore } from '@/store/eval';
 import { isModifierClick } from '@/utils/navigation';
 
 interface ExperimentListProps {
@@ -19,10 +27,11 @@ interface ExperimentListProps {
 }
 
 const ExperimentList = memo<ExperimentListProps>(({ activeKey, itemKey }) => {
+  const sectionTriggerStyle = useSectionTriggerStyle();
   const { t } = useTranslation('eval');
   const { t: tCommon } = useTranslation('common');
   const navigate = useWorkspaceAwareNavigate();
-  const experimentList = useEvalStore((s) => s.experimentList);
+  const experimentList = useEvalStore(experimentSelectors.agentExperimentList);
   const isInit = useEvalStore((s) => s.experimentListInit);
   const useFetchExperiments = useEvalStore((s) => s.useFetchExperiments);
   const { error, mutate } = useFetchExperiments();
@@ -74,26 +83,24 @@ const ExperimentList = memo<ExperimentListProps>(({ activeKey, itemKey }) => {
   })();
 
   return (
-    <AccordionItem
-      itemKey={itemKey}
-      paddingBlock={4}
-      paddingInline={'8px 4px'}
-      title={
-        <Flexbox horizontal align="center" gap={4}>
-          <Text ellipsis fontSize={12} type={'secondary'} weight={500}>
-            {t('sidebar.experiments')}
-          </Text>
-          {experimentList.length > 0 && (
-            <Text fontSize={12} type="secondary">
-              {experimentList.length}
-            </Text>
-          )}
+    <AccordionItem value={itemKey}>
+      <AccordionHeader>
+        <AccordionTrigger style={sectionTriggerStyle}>
+          <Flexbox horizontal align="center" gap={4}>
+            <SectionTitle>{t('sidebar.experiments')}</SectionTitle>
+            {experimentList.length > 0 && (
+              <Text fontSize={12} type="secondary">
+                {experimentList.length}
+              </Text>
+            )}
+          </Flexbox>
+        </AccordionTrigger>
+      </AccordionHeader>
+      <AccordionPanel>
+        <Flexbox gap={1} paddingBlock={1}>
+          {body}
         </Flexbox>
-      }
-    >
-      <Flexbox gap={1} paddingBlock={1}>
-        {body}
-      </Flexbox>
+      </AccordionPanel>
     </AccordionItem>
   );
 });

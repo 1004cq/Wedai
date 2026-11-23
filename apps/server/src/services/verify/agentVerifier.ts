@@ -1,6 +1,7 @@
 import { BUILTIN_AGENT_SLUGS } from '@lobechat/builtin-agents';
 import { VerifyToolIdentifier } from '@lobechat/builtin-tool-verify';
 import { buildVerifierPrompt } from '@lobechat/prompts';
+import { RequestTrigger } from '@lobechat/types';
 import debug from 'debug';
 
 import { AgentModel } from '@/database/models/agent';
@@ -69,10 +70,16 @@ export const createVerifierAgentRunner = (params: {
 
   return async ({ checkItem, evidence, goal, operationId }) => {
     // The detailed instruction is the criterion's rule body, stored in a document.
-    const instruction = checkItem.documentId
-      ? ((await new DocumentModel(db, userId, workspaceId).findById(checkItem.documentId))
-          ?.content ?? undefined)
-      : undefined;
+    const instruction =
+      checkItem.definition || checkItem.resourceSnapshot
+        ? JSON.stringify({
+            definition: checkItem.definition,
+            resources: checkItem.resourceSnapshot,
+          })
+        : checkItem.documentId
+          ? ((await new DocumentModel(db, userId, workspaceId).findById(checkItem.documentId))
+              ?.content ?? undefined)
+          : undefined;
 
     const agentModel = new AgentModel(db, userId, workspaceId);
 
@@ -127,6 +134,7 @@ export const createVerifierAgentRunner = (params: {
             {
               checkItemId: checkItem.id,
               errorMessage: event.errorMessage,
+              errorType: event.errorType,
               parentOperationId: operationId,
               reason: event.reason,
               verifierOperationId: event.operationId,
@@ -172,6 +180,9 @@ export const createVerifierAgentRunner = (params: {
       prompt: verifierPrompt,
       ...(useProvidedModelConfig && provider ? { provider } : {}),
       ...agentRef,
+      // Every LobeHub-routed model call must name its trigger, so spend logs
+      // attribute the verifier run to acceptance.
+      trigger: RequestTrigger.Verify,
       userInterventionConfig: { approvalMode: 'headless' },
     });
 

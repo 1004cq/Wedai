@@ -1,11 +1,11 @@
-import { Flexbox, Icon, Input, Text } from '@lobehub/ui';
-import { Button, toast } from '@lobehub/ui/base-ui';
-import { Form as AForm } from 'antd';
-import { createStaticStyles } from 'antd-style';
+import { Button, createStaticStyles, Flexbox, Icon, Input, Text, toast } from '@lobehub/ui';
+import { Form, useForm } from '@lobehub/ui/form';
 import { EditIcon, LinkIcon, Settings2Icon, TerminalIcon } from 'lucide-react';
 import { useImperativeHandle, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import InlineErrorText from '@/components/InlineErrorText';
+import { type InlineErrorState, toInlineError } from '@/components/InlineErrorText/errorDetail';
 import KeyValueEditor from '@/components/KeyValueEditor';
 import MCPStdioCommandInput from '@/components/MCPStdioCommandInput';
 import ArgsInput from '@/features/PluginDevModal/MCPManifestForm/ArgsInput';
@@ -13,21 +13,6 @@ import { useToolStore } from '@/store/tool';
 import { pluginSelectors } from '@/store/tool/selectors';
 
 const styles = createStaticStyles(({ css, cssVar }) => ({
-  compactForm: css`
-    .ant-form-item {
-      margin-block-end: ${cssVar.marginSM};
-    }
-
-    .ant-form-item-label {
-      padding-block-end: ${cssVar.paddingXXS};
-
-      label {
-        height: auto;
-        font-size: ${cssVar.fontSizeSM};
-      }
-    }
-  `,
-
   configFormContainer: css`
     padding: ${cssVar.paddingLG};
     border: 1px solid ${cssVar.colorBorder};
@@ -154,6 +139,16 @@ export interface SettingsRef {
   save: () => Promise<void>;
 }
 
+interface ConnectionValues {
+  args?: string[];
+  command?: string;
+  url?: string;
+}
+
+interface EnvValues {
+  env?: Record<string, string>;
+}
+
 interface SettingsProps {
   hideFooter?: boolean;
   identifier: string;
@@ -165,21 +160,92 @@ const Settings = ({
   hideFooter,
 }: SettingsProps & { ref?: React.RefObject<SettingsRef | null> }) => {
   const { t } = useTranslation(['plugin', 'common']);
-  const [connectionForm] = AForm.useForm();
-  const [envForm] = AForm.useForm();
   const [loading, setLoading] = useState(false);
   const [connectionLoading, setConnectionLoading] = useState(false);
   const [isEditingConnection, setIsEditingConnection] = useState(false);
+  /** Connection save failure, shown above the form's buttons: the form stays in edit mode with the user's input. */
+  const [connectionError, setConnectionError] = useState<InlineErrorState | null>(null);
+  /** Env save failure, shown above the form's buttons: the editor keeps the user's variables. */
+  const [envError, setEnvError] = useState<InlineErrorState | null>(null);
 
   const [updatePluginSettings, updateInstallPlugin] = useToolStore((s) => [
     s.updatePluginSettings,
     s.updateInstallMcpPlugin,
   ]);
 
+  // Get installed plugin info
+  const installedPlugin = useToolStore(pluginSelectors.getInstalledPluginById(identifier));
+  const pluginSettings = useToolStore(pluginSelectors.getPluginSettingsById(identifier));
+
+  const customParams = installedPlugin?.customParams?.mcp;
+  const isStdioType = customParams?.type === 'stdio';
+
+  const getConnectionValues = (): ConnectionValues => ({
+    args: customParams?.args,
+    command: customParams?.command,
+    url: customParams?.url,
+  });
+
+  const handleConnectionSubmit = async (values: ConnectionValues) => {
+    setConnectionError(null);
+    setConnectionLoading(true);
+    try {
+      await updateInstallPlugin(identifier!, values);
+
+      toast.success(t('settings.messages.connectionUpdateSuccess'));
+      setIsEditingConnection(false);
+    } catch (error) {
+      console.error('Connection update failed:', error);
+      setConnectionError(toInlineError(t('settings.messages.connectionUpdateFailedRetry'), error));
+    } finally {
+      setConnectionLoading(false);
+    }
+  };
+
+  const handleEnvSubmit = async (values: EnvValues) => {
+    setEnvError(null);
+    setLoading(true);
+    try {
+      await updatePluginSettings(identifier!, values.env || {}, { override: true });
+      toast.success(t('settings.messages.envUpdateSuccess'));
+    } catch (error) {
+      console.error('Settings update failed:', error);
+      setEnvError(toInlineError(t('settings.messages.envUpdateFailedRetry'), error));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const connectionForm = useForm<ConnectionValues>({
+    initialValues: getConnectionValues(),
+    onSubmit: handleConnectionSubmit,
+  });
+  const envForm = useForm<EnvValues>({
+    initialValues: { env: pluginSettings },
+    onSubmit: handleEnvSubmit,
+  });
+
+  const resetEnvForm = () => {
+    setEnvError(null);
+    envForm.reset({ env: pluginSettings });
+  };
+
+  const handleStartEdit = () => {
+    setConnectionError(null);
+    connectionForm.reset(getConnectionValues());
+    setIsEditingConnection(true);
+  };
+
+  const handleCancelEdit = () => {
+    setConnectionError(null);
+    connectionForm.reset(getConnectionValues());
+    setIsEditingConnection(false);
+  };
+
   useImperativeHandle(ref, () => ({
     reset: () => {
-      connectionForm.resetFields();
-      envForm.resetFields();
+      connectionForm.reset(getConnectionValues());
+      resetEnvForm();
       setIsEditingConnection(false);
     },
     save: async () => {
@@ -190,49 +256,9 @@ const Settings = ({
     },
   }));
 
-  // Get installed plugin info
-  const installedPlugin = useToolStore(pluginSelectors.getInstalledPluginById(identifier));
-  const pluginSettings = useToolStore(pluginSelectors.getPluginSettingsById(identifier));
-
   if (!installedPlugin) {
     return null;
   }
-
-  const customParams = installedPlugin.customParams?.mcp;
-  const isStdioType = customParams?.type === 'stdio';
-
-  const handleConnectionSubmit = async (values: any) => {
-    setConnectionLoading(true);
-    try {
-      await updateInstallPlugin(identifier!, values);
-
-      toast.success(t('settings.messages.connectionUpdateSuccess'));
-      setIsEditingConnection(false);
-    } catch (error) {
-      console.error('Connection update failed:', error);
-      toast.error(t('settings.messages.connectionUpdateFailed'));
-    } finally {
-      setConnectionLoading(false);
-    }
-  };
-
-  const handleCancelEdit = () => {
-    connectionForm.resetFields();
-    setIsEditingConnection(false);
-  };
-
-  const handleEnvSubmit = async (values: { env?: Record<string, string> }) => {
-    setLoading(true);
-    try {
-      await updatePluginSettings(identifier!, values.env || {}, { override: true });
-      toast.success(t('settings.messages.envUpdateSuccess'));
-    } catch (error) {
-      console.error('Settings update failed:', error);
-      toast.error(t('settings.messages.envUpdateFailed'));
-    } finally {
-      setLoading(false);
-    }
-  };
 
   return (
     <Flexbox paddingBlock={8} paddingInline={12}>
@@ -247,7 +273,7 @@ const Settings = ({
                 icon={<EditIcon size={12} />}
                 size="small"
                 type="text"
-                onClick={() => setIsEditingConnection(true)}
+                onClick={handleStartEdit}
               >
                 {t('settings.edit')}
               </Button>
@@ -297,41 +323,46 @@ const Settings = ({
           ) : (
             // Edit mode
             <div className={styles.connectionForm}>
-              <AForm
-                className={styles.compactForm}
-                form={connectionForm}
-                initialValues={customParams}
-                layout="vertical"
-                onFinish={handleConnectionSubmit}
-              >
+              <Form form={connectionForm} layout="vertical">
                 {customParams?.type === 'http' && (
-                  <AForm.Item
+                  <Form.Field
                     label={t('settings.connection.url')}
                     name={'url'}
-                    rules={[{ message: t('settings.rules.urlRequired'), required: true }]}
+                    required={t('settings.rules.urlRequired')}
                   >
                     <Input placeholder="https://mcp.example.com/server" size="small" />
-                  </AForm.Item>
+                  </Form.Field>
                 )}
 
                 {customParams?.type === 'stdio' && (
                   <>
-                    <AForm.Item
+                    <Form.Field
                       label={t('settings.connection.command')}
                       name={'command'}
-                      rules={[{ message: t('settings.rules.commandRequired'), required: true }]}
+                      required={t('settings.rules.commandRequired')}
                     >
-                      <MCPStdioCommandInput placeholder="npx, uv, python..." />
-                    </AForm.Item>
+                      <MCPStdioCommandInput
+                        placeholder="npx, uv, python..."
+                        onParsedArgs={(args) => {
+                          const existing: string[] = connectionForm.getValue('args') ?? [];
+                          connectionForm.setValue('args', [...args, ...existing.filter(Boolean)]);
+                        }}
+                      />
+                    </Form.Field>
 
-                    <AForm.Item
+                    <Form.Field
                       label={t('settings.connection.args')}
                       name={'args'}
-                      rules={[{ message: t('settings.rules.argsRequired'), required: true }]}
+                      required={t('settings.rules.argsRequired')}
                     >
                       <ArgsInput placeholder="e.g: mcp-hello-world" />
-                    </AForm.Item>
+                    </Form.Field>
                   </>
+                )}
+                {connectionError && (
+                  <InlineErrorText detail={connectionError.detail}>
+                    {connectionError.summary}
+                  </InlineErrorText>
                 )}
                 <Flexbox horizontal className={styles.footer} gap={8}>
                   <Button htmlType="submit" loading={connectionLoading} type="primary">
@@ -339,7 +370,7 @@ const Settings = ({
                   </Button>
                   <Button onClick={handleCancelEdit}>{t('common:cancel')}</Button>
                 </Flexbox>
-              </AForm>
+              </Form>
             </div>
           )}
         </Flexbox>
@@ -354,27 +385,25 @@ const Settings = ({
             <Text style={{ fontSize: 12 }} type="secondary">
               {t('settings.envConfigDescription')}
             </Text>
-            <AForm
-              form={envForm}
-              initialValues={{ env: pluginSettings }}
-              layout="vertical"
-              onFinish={handleEnvSubmit}
-            >
-              <AForm.Item name="env" style={{ marginBottom: 0 }}>
+            <Form form={envForm} layout="vertical">
+              <Form.Field bare name="env">
                 <KeyValueEditor
                   addButtonText={t('dev.mcp.env.add')}
                   keyPlaceholder="VARIABLE_NAME"
                 />
-              </AForm.Item>
+              </Form.Field>
+              {envError && (
+                <InlineErrorText detail={envError.detail}>{envError.summary}</InlineErrorText>
+              )}
               {!hideFooter && (
                 <Flexbox horizontal className={styles.footer} gap={8}>
                   <Button htmlType="submit" loading={loading} type="primary">
                     {t('common:save')}
                   </Button>
-                  <Button onClick={() => envForm.resetFields()}>{t('common:reset')}</Button>
+                  <Button onClick={resetEnvForm}>{t('common:reset')}</Button>
                 </Flexbox>
               )}
-            </AForm>
+            </Form>
           </Flexbox>
         )}
 

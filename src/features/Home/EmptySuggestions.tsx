@@ -1,15 +1,21 @@
-import { Flexbox, Icon, Text } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
-import { createStaticStyles } from 'antd-style';
+import { Button, createStaticStyles, Flexbox, Icon, Text } from '@lobehub/ui';
 import { FileTextIcon, ListTodoIcon, SearchIcon } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
+
+import { useDensityTokens } from '@/styles/density';
+import { densityVars } from '@/styles/densityVars';
 
 import { homeType } from './components/homeType';
 
 const styles = createStaticStyles(({ css, cssVar }) => ({
   description: css`
+    font-size: 13px;
     color: ${cssVar.colorTextTertiary};
+
+    html[data-density='compact'] & {
+      font-size: 12px;
+    }
   `,
   icon: css`
     flex: none;
@@ -21,11 +27,15 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
 
     width: calc(100% + 20px);
     height: auto;
-    min-height: 58px;
+    min-height: calc(${densityVars.listRowHeight} + 10px);
     margin-inline: -10px;
     padding-block: 9px;
     padding-inline: 10px;
     border: 0;
+
+    html[data-density='compact'] & {
+      padding-block: 6px;
+    }
     border-radius: ${cssVar.borderRadiusLG};
 
     text-align: start;
@@ -51,9 +61,13 @@ interface EmptySuggestionsProps {
 
 const EmptySuggestions = memo<EmptySuggestionsProps>(({ onSelect }) => {
   const { t } = useTranslation('home');
+  const { contentGap, iconSize } = useDensityTokens();
 
   return (
-    <Flexbox gap={8}>
+    // Inset from the column edge: the composer above and the list rows below
+    // are both padded surfaces, so a flush-left block here reads as hanging
+    // outside the page's own rhythm.
+    <Flexbox gap={12} paddingBlock={8} paddingInline={12}>
       <Flexbox gap={2}>
         <Text className={homeType.sectionLabel}>{t('dashboard.empty.title')}</Text>
         <Text className={homeType.supporting}>{t('dashboard.empty.subtitle')}</Text>
@@ -64,15 +78,15 @@ const EmptySuggestions = memo<EmptySuggestionsProps>(({ onSelect }) => {
 
           return (
             <Button className={styles.row} key={key} type={'text'} onClick={() => onSelect(prompt)}>
-              <Flexbox horizontal align={'flex-start'} gap={12} style={{ width: '100%' }}>
+              <Flexbox horizontal align={'flex-start'} gap={contentGap} style={{ width: '100%' }}>
                 <Flexbox className={styles.icon}>
-                  <Icon icon={icon} size={18} />
+                  <Icon icon={icon} size={iconSize} />
                 </Flexbox>
                 <Flexbox gap={2} style={{ flex: 1, minWidth: 0 }}>
                   <Text className={homeType.itemTitleProse}>
                     {t(`dashboard.empty.${key}.title`)}
                   </Text>
-                  <Text className={styles.description} fontSize={13}>
+                  <Text className={styles.description}>
                     {t(`dashboard.empty.${key}.description`)}
                   </Text>
                 </Flexbox>

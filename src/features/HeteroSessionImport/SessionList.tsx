@@ -1,20 +1,30 @@
 import type { HeteroSessionDigest } from '@lobechat/types';
 import { ClaudeCode, Codex } from '@lobehub/icons';
-import { Flexbox, Icon, NeuralNetworkLoading, Tag, Text, Tooltip } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
-import { Checkbox } from 'antd';
-import { createStaticStyles, cx } from 'antd-style';
+import {
+  Button,
+  Checkbox,
+  createStaticStyles,
+  cx,
+  Flexbox,
+  Icon,
+  Spin,
+  Tag,
+  Text,
+  Tooltip,
+} from '@lobehub/ui';
 import dayjs from 'dayjs';
 import { Check, RotateCcw, X } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
+
+import { densityVars } from '@/styles/densityVars';
 
 import { baseName, fmtTokens, type ImportRowState, selectable, type SessionStatus } from './utils';
 
 const styles = createStaticStyles(({ css, cssVar }) => ({
   row: css`
     padding-block: 10px;
-    padding-inline: 16px;
+    padding-inline: ${densityVars.cardPadding};
     border-radius: ${cssVar.borderRadius};
 
     &:hover {
@@ -68,7 +78,7 @@ const ImportState = memo<{ onRetry: () => void; showRetry: boolean; state?: Impo
     if (state === 'running')
       return (
         <Flexbox horizontal align="center" gap={6}>
-          <NeuralNetworkLoading size={14} />
+          <Spin size="small" />
           <Text fontSize={12} type="secondary">
             {t('heteroImport.state.running')}
           </Text>

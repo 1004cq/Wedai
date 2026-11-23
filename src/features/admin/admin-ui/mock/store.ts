@@ -186,14 +186,16 @@ let smtpConfig: SmtpConfig = {
 
 let smsConfig: SmsConfig = {
   accessKeyIdConfigured: false,
+  accessKeyIdMasked: null,
   accessKeySecretConfigured: false,
+  configured: false,
   enablePhoneRegister: false,
   enabled: false,
-  endpoint: '',
-  provider: 'aliyun',
-  region: 'cn-hangzhou',
-  signName: '',
-  templateCode: '',
+  mock: false,
+  provider: 'aliyun_pnvs',
+  schemeName: null,
+  signName: null,
+  templateCode: null,
 };
 
 const wait = () => new Promise<void>((resolve) => setTimeout(resolve, MOCK_DELAY_MS));
@@ -395,10 +397,17 @@ export const adminMockApi = {
     await wait();
     const { accessKeyId, accessKeySecret, ...publicConfig } = input;
     smsConfig = {
+      ...smsConfig,
       ...publicConfig,
       accessKeyIdConfigured: smsConfig.accessKeyIdConfigured || isNonEmptySecret(accessKeyId),
+      accessKeyIdMasked: smsConfig.accessKeyIdMasked,
       accessKeySecretConfigured:
         smsConfig.accessKeySecretConfigured || isNonEmptySecret(accessKeySecret),
+      configured:
+        smsConfig.configured ||
+        isNonEmptySecret(accessKeyId) ||
+        isNonEmptySecret(accessKeySecret) ||
+        Boolean(publicConfig.signName && publicConfig.templateCode),
     };
     pushAudit({
       action: 'system:sms:config',

@@ -1,5 +1,6 @@
-import { Center, Checkbox, Flexbox, Skeleton } from '@lobehub/ui';
-import { cssVar } from 'antd-style';
+import { Center, Checkbox, cssVar, Flexbox, Skeleton } from '@lobehub/ui';
+
+import { useDensityTokens } from '@/styles/density';
 
 import { FILE_DATE_WIDTH, FILE_SIZE_WIDTH, getListViewMinWidth } from './ListItem/constants';
 
@@ -19,6 +20,7 @@ const ListViewSkeleton = ({
   count = 6,
   showUploader = true,
 }: ListViewSkeletonProps) => {
+  const { listRowHeight } = useDensityTokens();
   // Calculate opacity gradient from 100% to 20%
   const getOpacity = (index: number) => 1 - (index / (count - 1)) * 0.8;
 
@@ -28,7 +30,7 @@ const ListViewSkeleton = ({
         <Flexbox
           horizontal
           align={'center'}
-          height={48}
+          height={listRowHeight}
           key={index}
           paddingInline={8}
           style={{
@@ -52,11 +54,11 @@ const ListViewSkeleton = ({
               width: columnWidths.name,
             }}
           >
-            <Skeleton.Avatar active shape={'square'} size={24} style={{ marginInline: 8 }} />
-            <Skeleton.Button active style={{ height: 16, width: '60%' }} />
+            <Skeleton.Avatar shape={'square'} size={24} style={{ marginInline: 8 }} />
+            <Skeleton height={16} width={'60%'} />
           </Flexbox>
           <Flexbox style={{ flexShrink: 0, paddingInline: '0 24px' }} width={columnWidths.date}>
-            <Skeleton.Button active style={{ height: 16, width: '80%' }} />
+            <Skeleton height={16} width={'80%'} />
           </Flexbox>
           {showUploader && (
             <Flexbox
@@ -66,12 +68,12 @@ const ListViewSkeleton = ({
               style={{ flexShrink: 0, paddingInline: '0 24px' }}
               width={columnWidths.uploader}
             >
-              <Skeleton.Avatar active size={20} />
-              <Skeleton.Button active style={{ height: 16, width: '70%' }} />
+              <Skeleton.Avatar size={20} />
+              <Skeleton height={16} width={'70%'} />
             </Flexbox>
           )}
           <Flexbox style={{ flexShrink: 0, paddingInline: '0 24px' }} width={columnWidths.size}>
-            <Skeleton.Button active style={{ height: 16, width: '60%' }} />
+            <Skeleton height={16} width={'60%'} />
           </Flexbox>
         </Flexbox>
       ))}

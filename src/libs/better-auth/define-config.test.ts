@@ -1,19 +1,28 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({
-  betterAuth: vi.fn((options) => options),
-  clearMismatchedOIDCSession: vi.fn(),
-  EnvHttpProxyAgent: vi.fn((options) => ({ options })),
-  serverDB: {},
-  setGlobalDispatcher: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+  const authHandler = vi.fn(async () => new Response(null));
+
+  return {
+    appEnv: { APP_URL: 'https://example.com' },
+    authHandler,
+    betterAuth: vi.fn((options) => ({ ...options, handler: authHandler })),
+    clearMismatchedOIDCSession: vi.fn(),
+    EnvHttpProxyAgent: vi.fn(function (options) {
+      return { options };
+    }),
+    passkey: vi.fn(() => ({ id: 'passkey' })),
+    serverDB: {},
+    setGlobalDispatcher: vi.fn(),
+  };
+});
 
 vi.mock('@better-auth/expo', () => ({
   expo: vi.fn(() => ({ id: 'expo' })),
 }));
 
 vi.mock('@better-auth/passkey', () => ({
-  passkey: vi.fn(() => ({ id: 'passkey' })),
+  passkey: mocks.passkey,
 }));
 
 vi.mock('@lobechat/database', () => ({
@@ -56,9 +65,7 @@ vi.mock('undici', () => ({
 }));
 
 vi.mock('@/envs/app', () => ({
-  appEnv: {
-    APP_URL: 'https://example.com',
-  },
+  appEnv: mocks.appEnv,
 }));
 
 vi.mock('@/envs/auth', () => ({
@@ -79,6 +86,15 @@ vi.mock('@/libs/better-auth/email-templates', () => ({
   getVerificationOTPEmailTemplate: vi.fn(() => ({})),
 }));
 
+vi.mock('@/libs/better-auth/plugins/change-email-uniqueness', () => ({
+  changeEmailUniqueness: vi.fn(() => ({ id: 'change-email-uniqueness' })),
+}));
+vi.mock('@/libs/better-auth/plugins/deferred-session-refresh', () => ({
+  deferredSessionRefresh: vi.fn(() => ({ id: 'deferred-session-refresh' })),
+}));
+vi.mock('@/libs/better-auth/session-options', () => ({
+  sessionOptions: { cookieCache: { enabled: true, maxAge: 120 }, storeSessionInDatabase: true },
+}));
 vi.mock('@/libs/better-auth/plugins/email-whitelist', () => ({
   emailWhitelist: vi.fn(() => ({ id: 'email-whitelist' })),
 }));
@@ -92,6 +108,7 @@ vi.mock('@/libs/better-auth/sso', () => ({
 
 vi.mock('@/libs/better-auth/utils/config', () => ({
   createSecondaryStorage: vi.fn(() => ({ id: 'secondary-storage' })),
+  getPasskeyOrigins: vi.fn(() => ['https://example.com']),
   getTrustedOrigins: vi.fn(() => ['https://example.com']),
 }));
 
@@ -107,16 +124,23 @@ vi.mock('@/server/services/email', () => ({
   EmailService: vi.fn(),
 }));
 
+vi.mock('@/server/services/sms', () => ({
+  SmsRateLimitError: class SmsRateLimitError extends Error {},
+  checkVerifyCode: vi.fn(),
+  normalizePhoneToE164: vi.fn((v) => v),
+  sendVerifyCode: vi.fn(),
+}));
+
 vi.mock('@/server/services/user', () => ({
   UserService: vi.fn(),
 }));
 
-vi.mock('@/server/services/sms', () => ({
-  checkVerifyCode: vi.fn(async () => true),
-  normalizePhoneToE164: vi.fn(() => '+8613800138000'),
-  sendVerifyCode: vi.fn(async () => undefined),
-  SmsRateLimitError: class SmsRateLimitError extends Error {},
-}));
+const createResponseWithCookie = (cookie: string) => {
+  const response = new Response(null);
+  response.headers.append('set-cookie', cookie);
+
+  return response;
+};
 
 describe('defineConfig', () => {
   const originalEnv = process.env;
@@ -124,6 +148,7 @@ describe('defineConfig', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
+    mocks.appEnv.APP_URL = 'https://example.com';
     process.env = { ...originalEnv, NODE_ENV: 'test' };
     delete process.env.HTTP_PROXY;
     delete process.env.http_proxy;
@@ -138,16 +163,16 @@ describe('defineConfig', () => {
     process.env = originalEnv;
   });
 
-  it('should not require email verification for email/password login', async () => {
+  it('should configure passkeys with the approved origins', async () => {
     const { defineConfig } = await import('./define-config');
 
     defineConfig({ plugins: [] });
 
-    expect(mocks.betterAuth).toHaveBeenCalledWith(
+    expect(mocks.passkey).toHaveBeenCalledWith(
       expect.objectContaining({
-        emailAndPassword: expect.objectContaining({
-          requireEmailVerification: false,
-        }),
+        origin: ['https://example.com'],
+        rpID: 'example.com',
+        rpName: 'Wedai',
       }),
     );
   });
@@ -228,5 +253,88 @@ describe('defineConfig', () => {
     const { mergeLocalNoProxy } = await import('./define-config');
 
     expect(mergeLocalNoProxy('*')).toBe('*');
+  });
+
+  it('should keep auth cookies host-only when no cookie domain is given', async () => {
+    const { defineConfig } = await import('./define-config');
+
+    defineConfig({ plugins: [] });
+    const [options] = mocks.betterAuth.mock.lastCall!;
+
+    expect(options.advanced.crossSubDomainCookies).toBeUndefined();
+  });
+
+  it('should namespace every Better Auth cookie with the configured prefix', async () => {
+    const { defineConfig } = await import('./define-config');
+
+    defineConfig({ cookiePrefix: 'example-app', plugins: [] });
+    const [options] = mocks.betterAuth.mock.lastCall!;
+
+    expect(options.advanced.cookiePrefix).toBe('example-app');
+  });
+
+  it.each([['https://app.example.com'], ['https://example.com']])(
+    'should share auth cookies across subdomains when APP_URL %s is under the cookie domain',
+    async (appUrl) => {
+      mocks.appEnv.APP_URL = appUrl;
+      const { defineConfig } = await import('./define-config');
+
+      defineConfig({ cookieDomain: '.example.com', plugins: [] });
+      const [options] = mocks.betterAuth.mock.lastCall!;
+
+      expect(options.advanced.crossSubDomainCookies).toEqual({
+        domain: '.example.com',
+        enabled: true,
+      });
+    },
+  );
+
+  it.each([['https://preview-branch.vercel.app'], ['http://localhost:3010']])(
+    'should ignore a cookie domain that APP_URL %s does not belong to',
+    async (appUrl) => {
+      mocks.appEnv.APP_URL = appUrl;
+      const { defineConfig } = await import('./define-config');
+
+      defineConfig({ cookieDomain: '.example.com', plugins: [] });
+      const [options] = mocks.betterAuth.mock.lastCall!;
+
+      expect(options.advanced.crossSubDomainCookies).toBeUndefined();
+    },
+  );
+
+  it('should expire the legacy host-only twin of every domain-scoped cookie', async () => {
+    mocks.appEnv.APP_URL = 'https://app.example.com';
+    mocks.authHandler.mockResolvedValueOnce(
+      createResponseWithCookie(
+        '__Secure-better-auth.session_token=token; Path=/; Domain=.example.com; HttpOnly; Secure; SameSite=Lax',
+      ),
+    );
+    const { defineConfig } = await import('./define-config');
+
+    const auth = defineConfig({ cookieDomain: '.example.com', plugins: [] });
+    const response = await auth.handler(
+      new Request('https://app.example.com/api/auth/get-session'),
+    );
+
+    expect(response.headers.getSetCookie()).toEqual([
+      '__Secure-better-auth.session_token=token; Path=/; Domain=.example.com; HttpOnly; Secure; SameSite=Lax',
+      '__Secure-better-auth.session_token=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax; HttpOnly; Secure',
+    ]);
+  });
+
+  it('should leave cookies alone when no cookie domain is configured', async () => {
+    mocks.authHandler.mockResolvedValueOnce(
+      createResponseWithCookie('__Secure-better-auth.session_token=token; Path=/; Secure'),
+    );
+    const { defineConfig } = await import('./define-config');
+
+    const auth = defineConfig({ plugins: [] });
+    const response = await auth.handler(
+      new Request('https://app.example.com/api/auth/get-session'),
+    );
+
+    expect(response.headers.getSetCookie()).toEqual([
+      '__Secure-better-auth.session_token=token; Path=/; Secure',
+    ]);
   });
 });

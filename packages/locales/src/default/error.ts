@@ -1,7 +1,21 @@
 export default {
   'asyncState.desc': 'Something went wrong while loading. Please try again.',
+  'asyncState.hideDetails': 'Hide details',
   'asyncState.metricLabel': 'Failed to load',
+  'asyncState.showDetails': 'Show details',
   'asyncState.title': 'Failed to load',
+  'otherScope.desc': 'It belongs to {{name}}, not the space you are in now.',
+  'otherScope.personal': 'your personal space',
+  'otherScope.switch': 'Switch to {{name}}',
+  'otherScope.title': 'This is in another space',
+  'chatRequestBlocked.contactSupport': 'Contact support',
+  'chatRequestBlocked.description':
+    'This request was blocked by our security checks. If you think this is a mistake, contact support to restore access.',
+  'chatRequestBlocked.title': 'Request blocked',
+  'chatOnboardingRequired.action': 'Finish onboarding',
+  'chatOnboardingRequired.description':
+    'Finish the short onboarding to keep chatting. You will come back to this conversation afterwards.',
+  'chatOnboardingRequired.title': 'Finish onboarding to continue',
   'saveState.retry': 'Retry',
   'saveState.saveFailed': 'Failed to save your changes. Please try again.',
   'error.backHome': 'Back to Home',
@@ -11,6 +25,9 @@ export default {
   'error.title': 'Oops, something went wrong..',
   'fetchError.detail': 'Error details',
   'fetchError.title': 'Request failed',
+  'import.github.access':
+    'Couldn’t open this repository or branch. Check the link and your GitHub account’s access.',
+  'import.github.connect': 'Private repositories need a GitHub account with read access.',
   'import.importConfigFile.description': 'Error reason: {{reason}}',
   'import.importConfigFile.title': 'Import Failed',
   'import.incompatible.description':
@@ -102,10 +119,16 @@ export default {
     'The conversation has exceeded the context window limit. You can compact the context to compress history and continue chatting.',
   'exceededContext.title': 'Context Window Exceeded',
 
+  'requestBodyTooLarge.desc':
+    'This request is too large for the model provider, often because the conversation contains many large images or files. Compact the context to summarize the history into text and try again. If the large files are in the message you just sent, edit it to remove some of them first.',
+  'requestBodyTooLarge.title': 'Request Too Large',
+
   'unknownError.copyTraceId': 'Trace ID Copied',
   'unknownError.copyTraceIdTooltip': 'Click to copy',
   'unknownError.desc': 'An unexpected error occurred. You can retry or report on',
   'unknownError.retry': 'Retry',
+  'unknownError.sharedDesc': 'Please report this issue on',
+  'unknownError.sharedTitle': 'Unable to generate this answer',
   'unknownError.traceIdLabel': 'Trace ID:',
   'unknownError.title': 'Oops, the request took a nap',
 
@@ -114,9 +137,11 @@ export default {
   'response.QuotaLimitReachedCloud':
     'The model service is currently under heavy load. Please try again later or switch to another model.',
   'response.FreePlanLimit':
-    'You are currently a free user and cannot use this feature. Please upgrade to a paid plan to continue using it.',
+    'Your free allowance is used up. Top up or upgrade your plan to continue, or use a model on your own API key.',
+  'response.InsufficientBudgetForAgentRunFee':
+    'Not enough credits to pay the agent run fee. Each agent run carries a small fee, including runs on your own CLI account. Top up or upgrade your plan, then try again.',
   'response.InsufficientBudgetForModel':
-    'Your remaining credits are insufficient for this model. Please top up credits, upgrade your plan, or try a less expensive model.',
+    'Your remaining balance is insufficient for this model. Please top up, upgrade your plan, or try a less expensive model.',
   'response.GoogleAIBlockReason.BLOCKLIST':
     'The content includes blocked terms. Please rephrase and try again.',
   'response.GoogleAIBlockReason.IMAGE_SAFETY':
@@ -137,6 +162,10 @@ export default {
     'The content was blocked ({{blockReason}}). Please adjust it and try again.',
   'response.InvalidAccessCode':
     'Invalid access code or empty. Please enter the correct access code or add a custom API Key.',
+  'response.ModelContentModerationCooldown':
+    'This request could not use the selected model or related models because of a temporary content safety restriction. Try again later or choose a different model.',
+  'response.ModelContentModerationCooldownUntil':
+    'The selected model and related models are temporarily unavailable due to content safety restrictions. Access is expected to resume at {{time}}. You can use a different model meanwhile.',
   'response.NoOpenAIAPIKey': 'OpenAI API Key is empty, please add a custom OpenAI API Key',
   'response.PluginApiNotFound':
     "Sorry, the API does not exist in the skill's manifest. Please check if your request method matches the skill manifest API",
@@ -170,8 +199,16 @@ export default {
     'Repeated content policy rejections detected. Please revise your prompt before retrying.',
   'response.ProviderImageContentModerationWarning':
     'Repeated image safety rejections detected. Similar prompts may temporarily pause image generation.',
+  'response.ProviderImageContentModerationCooldown':
+    'Image generation is temporarily paused due to repeated safety rejections. Try again later with safer prompts.',
+  'response.ProviderImageContentModerationCooldownUntil':
+    'Image generation is temporarily paused due to repeated safety rejections and is expected to resume at {{time}}. Revise your prompt before retrying.',
+  'response.ProviderImageContentModerationCooldownExpired':
+    'This generation was paused due to content safety restrictions. Its waiting period has ended. Revise your prompt and try again.',
   'response.DeviceGatewayNotConfigured':
     "Couldn't reach a run device for this agent. Connect a device, or configure the device gateway on the server, then try again.",
+  'response.DeviceResponseTimeout':
+    "The device didn't respond in time. It may be offline or asleep, or it may still be starting this run. Check that the device is connected and whether this run is already in progress, then try again.",
   'response.RemoteServerOffline':
     'You appear to be offline. This is a problem with your local network, not the app — please check your internet connection and try again.',
   'response.RemoteServerTimeout':
@@ -186,24 +223,27 @@ export default {
     'The server could not be reached. This usually indicates a local network problem — please check your internet connection, proxy, or VPN settings and try again.',
   'response.ServerAgentRuntimeError':
     'Sorry, the Agent service is currently unavailable. Please try again later or contact us via email for support.',
-  'response.SubscriptionKeyMismatch':
-    'We apologize for the inconvenience. Due to a temporary system malfunction, your current subscription usage is inactive. Please click the button below to restore your subscription, or contact us via email for support.',
   'response.SubscriptionPlanLimit':
-    'Your subscription points have been exhausted, and you cannot use this feature. Please upgrade to a higher plan or configure a custom model API to continue using it.',
+    'You have reached your subscription usage limit, so this feature is unavailable. Upgrade your plan or configure a custom model API to continue.',
   'response.SubscriptionPlanLimitUltimate':
-    'Your subscription points have been exhausted, and you cannot use this feature. Please top up credits or configure a custom model API to continue using it.',
+    'You have reached your subscription usage limit, so this feature is unavailable. Top up or configure a custom model API to continue.',
   'response.SystemTimeNotMatchError':
     'Sorry, your system time does not match the server. Please check your system time and try again.',
   'response.LobeHubModelDeprecated':
     'The model "{{model}}" is no longer available. Please pick a current model from the model selector.',
   'response.UnknownChatFetchError':
     'Sorry, an unknown request error occurred. Please check the information below or try again.',
+  'response.UnreadableServerResponse':
+    'The server returned a response the app could not read. This is usually a temporary network or gateway problem — please try again in a moment.',
   'response.WorkspaceAgentRequiresWorkspaceDevice':
     'This agent lives in a workspace, so it can only bind devices the whole team can reach. Personal devices stay with the user who registered them — pick a workspace device instead, or enroll this device to the workspace first.',
   'response.WorkspaceFrozenByAdmin':
     'This workspace is frozen by an admin and cannot run requests. Please contact the workspace owner to resolve the issue.',
   'response.WorkspaceFrozenByRiskControl':
     'This workspace was auto-frozen by risk control and cannot run requests. Please contact support to review the status.',
+  'response.withRequestDetail': '{{message}} (HTTP {{status}} · Request ID: {{requestId}})',
+  'response.withStatusDetail': '{{message}} (HTTP {{status}})',
+  'unknownError.troubleshoot': 'Troubleshoot',
   'workspaceBillingInactive.bannerHint': 'Click for details',
   'workspaceBillingInactive.bannerTitle': 'Workspace subscription inactive',
   'workspaceBillingInactive.confirm': 'Got it',
@@ -220,29 +260,47 @@ export default {
   'workspaceFrozenByAdmin.frozenAt': 'Frozen at',
   'workspaceFrozenByAdmin.reason': 'Reason',
   'workspaceFrozenByAdmin.title': 'Workspace is frozen',
-  'workspaceFrozenByRiskControl.available': 'Available credits',
-  'workspaceFrozenByRiskControl.bannerDescription': 'Top up credits to resume spend.',
+  'workspaceFrozenByRiskControl.available': 'Available balance',
+  'workspaceFrozenByRiskControl.bannerDescription': 'Top up to resume spend.',
   'workspaceFrozenByRiskControl.bannerHint': 'Click for details',
   'workspaceFrozenByRiskControl.bannerTitle': 'Workspace frozen by risk control',
   'workspaceFrozenByRiskControl.contactSupport': 'Contact support',
   'workspaceFrozenByRiskControl.description':
-    'This workspace was auto-frozen by risk control after abnormal spending was detected. Top up credits so the workspace is ready to resume, and contact support to unfreeze.',
+    'This workspace was auto-frozen by risk control after abnormal spending was detected. Top up so the workspace is ready to resume, and contact support to unfreeze.',
   'workspaceFrozenByRiskControl.frozenAt': 'Frozen at',
   'workspaceFrozenByRiskControl.title': 'Workspace auto-frozen by risk control',
-  'workspaceFrozenByRiskControl.topup': 'Top up credits',
+  'workspaceFrozenByRiskControl.topup': 'Top up',
   'stt.responseError': 'Service request failed, please check the configuration or try again',
   'supervisor.decisionFailed':
     'The group host is unable to function. Please check your host configuration to ensure the correct model, API Key, and API endpoint are set.',
   'testConnectionFailed': 'Test connection failed: {{error}}',
-  'tts.responseError': 'Service request failed, please check the configuration or try again',
+  'transfer.agentOwnedByGroup':
+    'This agent belongs to a chat group and cannot be moved on its own. Move the group instead, or remove the agent from it first.',
+  'transfer.groupHasInaccessibleMember':
+    'This group includes a member you do not have access to. Ask its owner to share it with the workspace, or remove it from the group, then try again.',
   'transfer.noPermission': "You don't have permission to move this resource.",
   'transfer.ownerOnly': 'Only workspace owners can transfer resources created by other members.',
   'transfer.resourceNotFound':
     'This resource no longer exists or you no longer have access. Refresh and try again.',
+  'transfer.copyInProgress':
+    'A previous copy of this agent is still duplicating its history. Try again once it finishes.',
+  'transfer.transferInProgress':
+    'A previous move of this resource is still migrating its history. Try again once it finishes.',
+  'transfer.sharedTransferBlocked':
+    'This agent has a share link and cannot be transferred, even while sharing is paused.',
   'transfer.sameWorkspace':
     'This resource is already in the selected workspace. Choose another target.',
+  'transfer.targetIsCurrentOwner': 'This agent already belongs to that member. Pick someone else.',
   'transfer.targetNoWriteAccess':
     'You need Member or Owner access to move resources into the target workspace.',
+  'transfer.targetNotWorkspaceMember':
+    'The selected recipient is not an active member of this workspace. Refresh the member list and try again.',
+  'transfer.transferRequestPending':
+    'This agent already has a pending transfer request. Withdraw it or wait for the recipient to respond.',
+  'transfer.transferRequestExpired':
+    'This transfer request has expired. Ask for a new one to be sent.',
+  'transfer.transferRequestStale':
+    'The agent changed since this request was created, so it can no longer complete.',
   'unlock.addProxyUrl': 'Add OpenAI proxy URL (optional)',
   'unlock.apiKey.description': 'Enter your {{name}} API Key to start the session',
   'unlock.apiKey.imageGenerationDescription': 'Enter your {{name}} API Key to start generating',
@@ -267,8 +325,11 @@ export default {
   'upload.desc': 'Details: {{detail}}',
   'upload.fileOnlySupportInServerMode':
     'The current deployment mode does not support uploading non-image files. To upload files in {{ext}} format, please switch to server database deployment or use the {{cloud}} service.',
+  'upload.fileTooLarge': 'This file is over the {{max}} upload limit and can’t be uploaded.',
   'upload.networkError':
     "Please check your network connection and ensure that the file storage service's cross-origin configuration is correct.",
+  'upload.serviceUnavailable':
+    'The upload service is temporarily unavailable. Please try again in a moment.',
   'upload.storageBlock.billingUnavailable':
     'Your subscription billing status cannot be verified. Please try again later or update your billing details.',
   'upload.storageBlock.cleanupFiles': 'Free up space',
@@ -287,6 +348,8 @@ export default {
   'upload.permissionDenied': "You don't have permission to upload files in this workspace.",
   'upload.storageLimitExceeded':
     'Your file storage has reached the plan limit. Please upgrade your plan or delete unused files to free up space.',
+  'upload.storageRejected':
+    'The file storage service rejected the upload ({{detail}}). Please try again later.',
   'upload.title': 'File upload failed. Please check your network connection or try again later',
   'upload.unknownError': 'Error reason: {{reason}}',
   'upload.uploadFailed': 'File upload failed.',

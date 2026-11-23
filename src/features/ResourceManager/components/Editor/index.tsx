@@ -1,19 +1,20 @@
 'use client';
 
-import { ActionIcon, Flexbox, Skeleton } from '@lobehub/ui';
-import { createModal } from '@lobehub/ui/base-ui';
-import { cssVar, useTheme } from 'antd-style';
+import { ActionIcon, createModal, cssVar, Flexbox, Skeleton, useTheme } from '@lobehub/ui';
 import { t as i18nT } from 'i18next';
 import { ArrowLeftIcon, DownloadIcon, InfoIcon } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import ShareButton from '@/business/client/features/FileShare/ShareButton';
 import NavHeader from '@/features/NavHeader';
 import { PageAgentProvider } from '@/features/PageEditor/PageAgentProvider';
-import FileDetailComponent from '@/routes/(main)/resource/features/FileDetail';
-import { useResourceManagerStore } from '@/routes/(main)/resource/features/store';
+import FileDetailComponent from '@/features/ResourceManager/FileDetail';
+import { useResourceManagerStore } from '@/features/ResourceManager/store';
 import { fileManagerSelectors, useFileStore } from '@/store/file';
+import { useDensityTokens, useHeaderActionSize } from '@/styles/density';
 import { downloadFile } from '@/utils/client/downloadFile';
+import { isMobileSurface } from '@/utils/mobileSurface';
 
 import FileContent from './FileContent';
 
@@ -23,12 +24,8 @@ interface FileEditorProps {
 
 const FileDetailSkeleton = () => (
   <Flexbox gap={16}>
-    <Skeleton
-      active
-      paragraph={{ rows: 5, width: ['80%', '60%', '40%', '70%', '70%'] }}
-      title={false}
-    />
-    <Skeleton active paragraph={{ rows: 2, width: ['50%', '60%'] }} title={false} />
+    <Skeleton.Text rows={5} width={['80%', '60%', '40%', '70%', '70%']} />
+    <Skeleton.Text rows={2} width={['50%', '60%']} />
   </Flexbox>
 );
 
@@ -63,6 +60,8 @@ const openFileDetailModal = () =>
 const FileEditorCanvas = memo<FileEditorProps>(({ onBack }) => {
   const { t } = useTranslation(['common', 'file']);
   const theme = useTheme();
+  const { controlHeight, fontSize } = useDensityTokens();
+  const headerActionSize = useHeaderActionSize(true);
 
   const currentViewItemId = useResourceManagerStore((s) => s.currentViewItemId);
 
@@ -72,22 +71,30 @@ const FileEditorCanvas = memo<FileEditorProps>(({ onBack }) => {
   const fileDetail = fromStore ?? fromFetch;
 
   return (
-    <Flexbox horizontal height={'100%'} width={'100%'}>
-      <Flexbox flex={1} height={'100%'}>
+    <Flexbox horizontal height={'100%'} style={{ minHeight: 0 }} width={'100%'}>
+      <Flexbox flex={1} height={'100%'} style={{ minHeight: 0 }}>
         <NavHeader
+          // The page's own back leads to its list; mobile drops the shell's
+          // history back so there is one.
+          showTogglePanelButton={!isMobileSurface()}
           left={
             <Flexbox
               horizontal
               align={'center'}
               gap={12}
-              style={{ minHeight: 32, minWidth: 0, overflow: 'hidden' }}
+              style={{ minHeight: controlHeight, minWidth: 0, overflow: 'hidden' }}
             >
-              <ActionIcon icon={ArrowLeftIcon} title={t('back')} onClick={onBack} />
+              <ActionIcon
+                icon={ArrowLeftIcon}
+                size={headerActionSize}
+                title={t('back')}
+                onClick={onBack}
+              />
               <span
                 title={fileDetail?.name}
                 style={{
                   color: theme.colorText,
-                  fontSize: 14,
+                  fontSize,
                   fontWeight: 500,
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
@@ -100,9 +107,11 @@ const FileEditorCanvas = memo<FileEditorProps>(({ onBack }) => {
           }
           right={
             <Flexbox horizontal gap={8}>
+              {fileDetail && <ShareButton fileId={fileDetail.fileId ?? fileDetail.id} />}
               {fileDetail?.url && (
                 <ActionIcon
                   icon={DownloadIcon}
+                  size={headerActionSize}
                   title={t('download', { ns: 'common' })}
                   onClick={() => {
                     if (fileDetail?.url && fileDetail?.name) {
@@ -111,7 +120,7 @@ const FileEditorCanvas = memo<FileEditorProps>(({ onBack }) => {
                   }}
                 />
               )}
-              <ActionIcon icon={InfoIcon} onClick={openFileDetailModal} />
+              <ActionIcon icon={InfoIcon} size={headerActionSize} onClick={openFileDetailModal} />
             </Flexbox>
           }
           style={{
@@ -121,8 +130,8 @@ const FileEditorCanvas = memo<FileEditorProps>(({ onBack }) => {
             left: { flex: 1, minWidth: 0, overflow: 'hidden', padding: 0 },
           }}
         />
-        <Flexbox flex={1} style={{ overflow: 'hidden' }}>
-          <FileContent fileId={currentViewItemId} />
+        <Flexbox flex={1} style={{ minHeight: 0, overflow: 'hidden' }}>
+          <FileContent fileId={currentViewItemId} onClose={onBack} />
         </Flexbox>
       </Flexbox>
     </Flexbox>

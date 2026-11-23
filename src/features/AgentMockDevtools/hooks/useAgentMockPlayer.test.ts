@@ -101,7 +101,6 @@ const createChatStoreMock = (overrides: Record<string, unknown> = {}) => ({
   internal_dispatchMessage: vi.fn(),
   internal_dispatchTopic: vi.fn(),
   internal_toggleToolCallingStreaming: vi.fn(),
-  internal_updateTopicLoading: vi.fn(),
   operations: {},
   operationsByMessage: {},
   optimisticCreateTmpMessage: vi.fn(),
@@ -495,6 +494,7 @@ describe('useAgentMockPlayer', () => {
         },
       },
       { operationId: secondOperationId },
+      { creationOrigin: 'client' },
     );
     expect(secondHandle.player.seekToEventIndex).toHaveBeenCalledWith(2);
     expect(secondHandle.start).toHaveBeenCalledTimes(1);

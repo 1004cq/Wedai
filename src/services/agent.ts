@@ -1,7 +1,20 @@
-import { type AgentItem, type AgentRankItem, type LobeAgentConfig } from '@lobechat/types';
+import {
+  type AgentDeleteImpact,
+  type AgentItem,
+  type AgentPluginEntry,
+  type AgentPluginMode,
+  type AgentRankItem,
+  type LobeAgentConfig,
+} from '@lobechat/types';
 import { type PartialDeep } from 'type-fest';
 
 import { lambdaClient } from '@/libs/trpc/client';
+
+/** One of my agents that carries a plugin or skill explicitly, and how. */
+export interface PluginAgentMode {
+  agentId: string;
+  mode: Exclude<AgentPluginMode, 'auto'>;
+}
 
 export const AVAILABLE_AGENTS_CONTEXT_LIMIT = 10;
 export const AVAILABLE_AGENTS_CONTEXT_QUERY_LIMIT = AVAILABLE_AGENTS_CONTEXT_LIMIT + 2;
@@ -11,6 +24,10 @@ export interface AvailableAgentItem {
   backgroundColor: string | null;
   description: string | null;
   id: string;
+  /** Product-owned inbox (Lobe AI). A builtin can never join a chat group. */
+  isInbox?: boolean;
+  /** Personal name; resolve the label with `agentDisplayName(item, fallback)`. */
+  name: string | null;
   title: string | null;
 }
 
@@ -28,7 +45,16 @@ type MarketAgentModel =
 type AgentMetaUpdate = Partial<
   Pick<
     AgentItem,
-    'avatar' | 'backgroundColor' | 'description' | 'marketIdentifier' | 'tags' | 'title'
+    | 'avatar'
+    | 'backgroundColor'
+    | 'description'
+    | 'marketIdentifier'
+    | 'metadata'
+    | 'name'
+    | 'profile'
+    | 'societyId'
+    | 'tags'
+    | 'title'
   >
 >;
 
@@ -85,6 +111,24 @@ export interface CreateAgentOnlyResult {
   agentId: string;
 }
 
+interface AgentGroupMembershipImpactRef {
+  agentId: string;
+  groupAvatar: string | null;
+  groupBackgroundColor: string | null;
+  /** `null` when the caller may not see the group; identity is withheld. */
+  groupId: string | null;
+  groupTitle: string | null;
+  /** `false` when the caller may not see the group; its identity is withheld. */
+  groupVisible: boolean;
+}
+
+export interface RemoveAgentOptions {
+  /** The user confirmed a warning that other members' content goes with the agent. */
+  acknowledgeForeignContent?: boolean;
+  /** The user confirmed a warning that someone else created the agent. */
+  acknowledgeOtherCreator?: boolean;
+}
+
 class AgentService {
   /**
    * Check if an agent with the given marketIdentifier already exists
@@ -105,8 +149,14 @@ class AgentService {
    * Get an agent by forkedFromIdentifier stored in params
    * @returns agent id if exists, null otherwise
    */
-  getAgentByForkedFromIdentifier = async (forkedFromIdentifier: string): Promise<string | null> => {
-    return lambdaClient.agent.getAgentByForkedFromIdentifier.query({ forkedFromIdentifier });
+  getAgentByForkedFromIdentifier = async (
+    forkedFromIdentifier: string,
+    options?: { virtual?: boolean },
+  ): Promise<string | null> => {
+    return lambdaClient.agent.getAgentByForkedFromIdentifier.query({
+      forkedFromIdentifier,
+      ...options,
+    });
   };
 
   /**
@@ -215,13 +265,38 @@ class AgentService {
   /**
    * Update agent config and return the updated agent data
    */
+  /** Which of my own agents carry a plugin or skill, in one query over their `plugins`. */
+  getPluginAgentModes = async (identifier: string): Promise<PluginAgentMode[]> => {
+    return lambdaClient.agent.getPluginAgentModes.query({ identifier });
+  };
+
+  /**
+   * Sets a plugin or skill's mode on my own agents in one atomic server write.
+   * `auto` removes it; `auto` without `agentIds` removes it from every agent
+   * carrying it. Returns each written agent's new `plugins`.
+   */
+  setPluginMode = async (params: {
+    agentIds?: string[];
+    identifier: string;
+    mode: AgentPluginMode;
+  }): Promise<{ id: string; plugins: AgentPluginEntry[] }[]> => {
+    return lambdaClient.agent.setPluginMode.mutate(params, {
+      context: { showNotification: false },
+    });
+  };
+
   updateAgentConfig = async (
     agentId: string,
     config: PartialDeep<LobeAgentConfig>,
     signal?: AbortSignal,
+    replaceWorkingDirDeviceIds: string[] = [],
   ) => {
     return lambdaClient.agent.updateAgentConfig.mutate(
-      { agentId, value: config },
+      {
+        agentId,
+        replaceWorkingDirDeviceIds,
+        value: config,
+      },
       { context: { showNotification: false }, signal },
     );
   };
@@ -242,10 +317,33 @@ class AgentService {
   };
 
   /**
+   * Resolve a url slug to its agent id. Returns `null` for an unknown slug and
+   * for one the caller can't see — the two are deliberately indistinguishable.
+   */
+  resolveAgentIdBySlug = async (slug: string): Promise<string | null> => {
+    const { agentId } = await lambdaClient.agent.resolveAgentIdBySlug.query({ slug });
+    return agentId;
+  };
+
+  /** Rename an agent's url slug (validated server-side; see `updateAgentSlug`). */
+  updateAgentSlug = async (agentId: string, slug: string) => {
+    return lambdaClient.agent.updateAgentSlug.mutate({ agentId, slug });
+  };
+
+  /**
    * Remove an agent and its associated session
    */
-  removeAgent = async (agentId: string) => {
-    return lambdaClient.agent.removeAgent.mutate({ agentId });
+  removeAgent = async (agentId: string, options?: RemoveAgentOptions) => {
+    return lambdaClient.agent.removeAgent.mutate({ agentId, ...options });
+  };
+
+  /**
+   * What deleting the agent takes down besides the caller's own work — other
+   * members' topics (counted) and any other foreign content — for the delete
+   * confirmation.
+   */
+  getAgentDeleteImpact = async (agentId: string): Promise<AgentDeleteImpact> => {
+    return lambdaClient.agent.getAgentDeleteImpact.query({ agentId });
   };
 
   /**
@@ -253,6 +351,7 @@ class AgentService {
    * Returns agents with minimal info (id, title, description, avatar, backgroundColor).
    */
   queryAgents = async (params?: {
+    includeInbox?: boolean;
     keyword?: string;
     limit?: number;
     offset?: number;
@@ -266,6 +365,7 @@ class AgentService {
    */
   countAgents = async (params?: {
     endDate?: string;
+    includeInbox?: boolean;
     keyword?: string;
     range?: [string, string];
     startDate?: string;
@@ -298,16 +398,72 @@ class AgentService {
     return lambdaClient.agent.rankAgents.query(limit);
   };
 
+  /**
+   * Async history-backfill progress for a transferred agent (null when no
+   * backfill is running), including the topic ids still awaiting migration.
+   */
+  getTransferJobStatus = async (
+    agentId: string,
+    topicIds: string[],
+  ): Promise<{
+    completedTopics: number;
+    jobId: string;
+    pendingTopicIds: string[];
+    totalTopics: number;
+    type: string;
+  } | null> => {
+    return lambdaClient.agent.getTransferJobStatus.query({ agentId, topicIds });
+  };
+
+  /**
+   * The user opened a topic whose history is still migrating — jump it to the
+   * front of the backfill queue. `pending: false` means it already migrated.
+   */
+  prioritizeTransferTopic = async (topicId: string): Promise<{ pending: boolean }> => {
+    return lambdaClient.agent.prioritizeTransferTopic.mutate({ topicId });
+  };
+
+  /**
+   * Chat groups a move would affect: `blocked` refuses the move outright,
+   * `leaving` is the silent side effect worth confirming first.
+   */
+  getGroupMembershipImpact = async (
+    agentIds: string[],
+  ): Promise<{
+    blocked: AgentGroupMembershipImpactRef[];
+    leaving: AgentGroupMembershipImpactRef[];
+  }> => {
+    return lambdaClient.agent.getGroupMembershipImpact.query({ agentIds });
+  };
+
   transferAgent = async (
     agentId: string,
     targetWorkspaceId: string | null,
     targetVisibility?: 'private' | 'public',
-  ): Promise<{ agentId: string; slug: string | null }> => {
-    return lambdaClient.agent.transferAgent.mutate({
+  ): Promise<{ agentId: string; slug: string | null; transferJobId: string | null }> => {
+    const result = await lambdaClient.agent.transferAgent.mutate({
       agentId,
       targetVisibility,
       targetWorkspaceId,
     });
+    // Without `targetMemberId` the endpoint always takes the scope-move path.
+    return result as { agentId: string; slug: string | null; transferJobId: string | null };
+  };
+
+  /**
+   * Hand ownership to another member of the current workspace. Creates a
+   * pending transfer request the recipient must accept — nothing moves yet.
+   */
+  requestAgentTransferToMember = async (params: {
+    agentId: string;
+    targetMemberId: string;
+  }): Promise<{ requestId: string; status: 'pending' }> => {
+    const result = await lambdaClient.agent.transferAgent.mutate({
+      agentId: params.agentId,
+      targetMemberId: params.targetMemberId,
+      targetWorkspaceId: null,
+    });
+    return result as { requestId: string; status: 'pending' };
   };
 
   /**
@@ -318,7 +474,7 @@ class AgentService {
     agentIds: string[],
     targetWorkspaceId: string | null,
     targetVisibility?: 'private' | 'public',
-  ): Promise<{ agentId: string; slug: string | null }[]> => {
+  ): Promise<{ agentId: string; slug: string | null; transferJobId: string | null }[]> => {
     return lambdaClient.agent.transferAgents.mutate({
       agentIds,
       targetVisibility,

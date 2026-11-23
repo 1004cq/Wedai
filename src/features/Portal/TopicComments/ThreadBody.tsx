@@ -1,26 +1,27 @@
-import { Center, Empty, Flexbox, Text } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
+import { Button, Center, Empty, Flexbox, Skeleton } from '@lobehub/ui';
 import { MessageCircle } from 'lucide-react';
 import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import AsyncError from '@/components/AsyncError';
-import Loading from '@/components/Loading/BrandTextLoading';
+import SurfaceSkeleton from '@/components/Skeleton/Surface';
 import {
   useTopicCommentDetail,
   useTopicCommentReplies,
   useTopicCommentReplyCount,
 } from '@/features/TopicComment/hooks';
-import { mutate } from '@/libs/swr';
-import { topicCommentKeys } from '@/libs/swr/keys';
 import { useChatStore } from '@/store/chat';
 import { chatPortalSelectors } from '@/store/chat/selectors';
+import { useTopicCommentStore } from '@/store/topicComment';
 
 import CommentCard from './CommentCard';
 import Composer from './Composer';
 import { styles } from './styles';
 import { resolveTopicCommentThreadState } from './threadState';
 import { useTopicCommentEvents } from './useTopicCommentEvents';
+
+/** At most this many placeholder rows while the replies load. */
+const REPLY_SKELETON_MAX = 3;
 
 const ThreadBody = memo(() => {
   const { t } = useTranslation('chat');
@@ -44,15 +45,16 @@ const ThreadBody = memo(() => {
     view?.rootCommentId,
     replies.total ?? view?.initialReplyCount ?? replies.items.length,
   );
+  const revalidateSummary = useTopicCommentStore((s) => s.revalidateTopicCommentSummary);
   const refresh = useCallback(async () => {
     if (!topicId) return;
     await Promise.all([
       rootMutate(),
       hasFocusedReply ? focusedReplyMutate() : Promise.resolve(),
       repliesReload(),
-      mutate(topicCommentKeys.summary(topicId)),
+      revalidateSummary(topicId),
     ]);
-  }, [focusedReplyMutate, hasFocusedReply, repliesReload, rootMutate, topicId]);
+  }, [focusedReplyMutate, hasFocusedReply, repliesReload, revalidateSummary, rootMutate, topicId]);
   useTopicCommentEvents(topicId, refresh);
   const listRef = useRef<HTMLDivElement>(null);
   const visibleReplies = useMemo(() => {
@@ -74,8 +76,25 @@ const ThreadBody = memo(() => {
     ).find((element) => element.dataset.topicCommentId === view.focusCommentId);
     if (!target) return;
 
-    requestAnimationFrame(() => target.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+    // Honor reduced motion: jump to the comment instead of gliding.
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    requestAnimationFrame(() =>
+      target.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'center' }),
+    );
   }, [focusedReply.data, replies.items, root.data, view?.focusCommentId]);
+
+  // The viewer's own reply lands at the end of the list; bring it into view once it is posted.
+  const lastReplyId = visibleReplies.at(-1)?.id;
+  const lastReplyIsOwnPending = Boolean(lastReplyId && replies.pendingCommentIds.has(lastReplyId));
+  useEffect(() => {
+    if (!lastReplyIsOwnPending) return;
+    const list = listRef.current;
+    if (!list) return;
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    requestAnimationFrame(() =>
+      list.scrollTo({ behavior: reduceMotion ? 'auto' : 'smooth', top: list.scrollHeight }),
+    );
+  }, [lastReplyId, lastReplyIsOwnPending]);
 
   if (!view) return null;
   const state = resolveTopicCommentThreadState({
@@ -100,9 +119,13 @@ const ThreadBody = memo(() => {
     );
   }
   if (state === 'loading') {
-    return <Loading debugId="TopicCommentThreadPortal" />;
+    return <SurfaceSkeleton header={false} variant={'list'} />;
   }
   if (!root.data) return null;
+
+  // No heading for a thread nobody has replied to: the composer already says what to do.
+  const shownReplyCount = Math.max(replyCount, visibleReplies.length);
+  const repliesLoading = replies.isLoadingInitial && visibleReplies.length === 0;
 
   return (
     <Flexbox className={styles.body}>
@@ -117,12 +140,28 @@ const ThreadBody = memo(() => {
             void root.mutate();
           }}
         />
-        <Text fontSize={12} style={{ marginTop: 16 }} type={'secondary'} weight={500}>
-          {t('topicComment.repliesTitle')}
-        </Text>
+        {shownReplyCount > 0 && (
+          <div className={styles.repliesDivider}>
+            {t('topicComment.replies', { count: shownReplyCount })}
+          </div>
+        )}
+        {repliesLoading && (
+          <Flexbox gap={16} paddingBlock={12}>
+            {Array.from({ length: Math.min(shownReplyCount, REPLY_SKELETON_MAX) }).map(
+              (_, index) => (
+                <Flexbox gap={8} key={index}>
+                  <Flexbox horizontal align={'center'} gap={8}>
+                    <Skeleton height={24} radius={12} width={24} />
+                    <Skeleton height={14} width={96 + (index % 2) * 24} />
+                  </Flexbox>
+                  <Skeleton height={14} width={`${48 + (index % 3) * 14}%`} />
+                </Flexbox>
+              ),
+            )}
+          </Flexbox>
+        )}
         {visibleReplies.map((reply) => (
           <CommentCard
-            replyStyle
             comment={reply}
             key={reply.id}
             pending={replies.pendingCommentIds.has(reply.id)}
@@ -152,6 +191,7 @@ const ThreadBody = memo(() => {
         )}
       </Flexbox>
       <Composer
+        autoFocus={view.initialReplyCount === 0}
         parentCommentId={root.data.id}
         rootReplyCount={replyCount}
         topicId={view.topicId}

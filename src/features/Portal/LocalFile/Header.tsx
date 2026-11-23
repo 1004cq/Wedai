@@ -1,40 +1,26 @@
 'use client';
 
-import {
-  AGENT_CHAT_TOPIC_PAGE_URL,
-  AGENT_CHAT_TOPIC_URL,
-  DESKTOP_HEADER_ICON_SMALL_SIZE,
-  isDesktop,
-} from '@lobechat/const';
+import { isDesktop } from '@lobechat/const';
 import { ActionIcon } from '@lobehub/ui';
-import { ArrowLeft, FolderOpen, X } from 'lucide-react';
-import { Fragment, memo, useCallback } from 'react';
+import { FolderOpen } from 'lucide-react';
+import { memo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useLocation, useParams } from 'react-router';
 
-import NavHeader from '@/features/NavHeader';
-import { useWorkspaceAwareNavigate } from '@/features/Workspace/useWorkspaceAwareNavigate';
+import PortalHeader from '@/features/Portal/components/Header';
 import { localFileService } from '@/services/electron/localFileService';
 import { useChatStore } from '@/store/chat';
 import { chatPortalSelectors } from '@/store/chat/selectors';
+import { useHeaderActionSize } from '@/styles/density';
 
 import TabStrip from './TabStrip';
 
-const Header = memo(() => {
+const Header = memo<{ onClose?: () => void }>(({ onClose }) => {
+  const headerActionSize = useHeaderActionSize(true);
   const { t } = useTranslation('chat');
-  const location = useLocation();
-  const navigate = useWorkspaceAwareNavigate();
-  const params = useParams<{ aid?: string; topicId?: string }>();
   const activeLocalFilePath = useChatStore(chatPortalSelectors.activeLocalFilePath);
-  const [canGoBack, goBack, clearPortalStack] = useChatStore((s) => [
-    chatPortalSelectors.canGoBack(s),
-    s.goBack,
-    s.clearPortalStack,
-  ]);
-  const isTopicPageRoute =
-    !!params.aid &&
-    !!params.topicId &&
-    location.pathname.startsWith(AGENT_CHAT_TOPIC_PAGE_URL(params.aid, params.topicId));
+  // Remote device and sandbox paths cannot be revealed in the local filesystem.
+  const isRemoteFile = useChatStore(chatPortalSelectors.isCurrentLocalFileRemote);
+  const canGoBack = useChatStore(chatPortalSelectors.canGoBack);
   const handleOpenFileFolder = useCallback(() => {
     if (!activeLocalFilePath) return;
 
@@ -42,47 +28,29 @@ const Header = memo(() => {
   }, [activeLocalFilePath]);
 
   return (
-    <NavHeader
-      showTogglePanelButton={false}
-      style={{ padding: '0 8px 0 0' }}
-      left={
-        <Fragment>
-          {canGoBack && (
-            <ActionIcon icon={ArrowLeft} size={DESKTOP_HEADER_ICON_SMALL_SIZE} onClick={goBack} />
-          )}
-          <TabStrip />
-        </Fragment>
-      }
-      right={
-        <Fragment>
-          {isDesktop && activeLocalFilePath && (
-            <ActionIcon
-              icon={FolderOpen}
-              size={DESKTOP_HEADER_ICON_SMALL_SIZE}
-              title={t('workingPanel.files.showInSystem')}
-              onClick={handleOpenFileFolder}
-            />
-          )}
+    <PortalHeader
+      // The tab strip runs the full header height and starts at the edge: it
+      // carries its own 8px start inset inside the scroll area, so tabs that
+      // overflow scroll out under the panel edge instead of being clipped 8px
+      // in. The back arrow sits outside the scroll area, so when it shows the
+      // header pads the left like the right, as every other Portal header does.
+      paddingInline={0}
+      style={{ padding: canGoBack ? '0 8px' : '0 8px 0 0' }}
+      title={<TabStrip />}
+      rightExtra={
+        isDesktop &&
+        activeLocalFilePath &&
+        !isRemoteFile && (
           <ActionIcon
-            icon={X}
-            size={DESKTOP_HEADER_ICON_SMALL_SIZE}
-            onClick={() => {
-              if (params.aid && params.topicId && isTopicPageRoute) {
-                navigate(AGENT_CHAT_TOPIC_URL(params.aid, params.topicId));
-                return;
-              }
-
-              clearPortalStack();
-            }}
+            aria-label={t('workingPanel.files.showInSystem')}
+            icon={FolderOpen}
+            size={headerActionSize}
+            title={t('workingPanel.files.showInSystem')}
+            onClick={handleOpenFileFolder}
           />
-        </Fragment>
+        )
       }
-      styles={{
-        left: {
-          flex: 1,
-          minWidth: 0,
-        },
-      }}
+      onClose={onClose}
     />
   );
 });

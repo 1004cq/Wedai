@@ -1,6 +1,10 @@
 import { getDocumentTemplate } from '@lobechat/agent-templates';
 import { BUILTIN_AGENT_SLUGS } from '@lobechat/builtin-agents';
-import { CURRENT_ONBOARDING_VERSION } from '@lobechat/const';
+import {
+  CURRENT_ONBOARDING_VERSION,
+  DEFAULT_INBOX_AVATAR,
+  DEFAULT_INBOX_TITLE,
+} from '@lobechat/const';
 import type { OnboardingUserInfo } from '@lobechat/context-engine';
 import { OnboardingUnderstandingRepository } from '@lobechat/database';
 import type {
@@ -13,8 +17,10 @@ import type {
   SaveUserQuestionInput,
   UserAgentOnboarding,
   UserAgentOnboardingContext,
+  UserOnboarding,
 } from '@lobechat/types';
 import {
+  agentDisplayName,
   MAX_ONBOARDING_STEPS,
   MIN_DISCOVERY_USER_MESSAGES,
   RECOMMENDED_DISCOVERY_USER_MESSAGES,
@@ -35,6 +41,8 @@ import {
   userPersonaDocuments,
 } from '@/database/schemas';
 import type { LobeChatDatabase } from '@/database/type';
+import { notShareVisitorTopic, notShareVisitorTopicRef } from '@/database/utils/shareVisitor';
+import { notTrashed } from '@/database/utils/softDelete';
 import { KeyVaultsGateKeeper } from '@/server/modules/KeyVaultsEncrypt';
 import { AgentService } from '@/server/services/agent';
 import { AgentDocumentsService } from '@/server/services/agentDocuments';
@@ -176,6 +184,8 @@ export class OnboardingService {
           content: template.content,
           filename: template.filename,
           loadPosition: template.loadPosition,
+          // Seeded templates are not user writes; the character limit does not apply.
+          source: 'system',
           loadRules: template.loadRules,
           policy: template.policyLoadFormat
             ? {
@@ -194,25 +204,57 @@ export class OnboardingService {
 
   private transferToInbox = async (topicId: string): Promise<void> => {
     const inboxAgentId = await this.getInboxAgentId();
-    const topic = await this.topicModel.findById(topicId);
+    // Use the creator-scoped lookup so an `activeTopicId` pointing at an
+    // agent-share visitor topic (which lives under the creator's userId with
+    // a non-null `senderId`) resolves to nothing and turns the transfer into
+    // a no-op. The `notShareVisitor*` predicates below keep the write guarded
+    // as defense in depth even if a caller ever bypasses the lookup.
+    const topic = await this.topicModel.findOwnTopicById(topicId);
 
     if (!topic || topic.agentId === inboxAgentId) return;
 
     await this.db.transaction(async (tx) => {
-      await tx
+      const [updatedTopic] = await tx
         .update(topics)
         .set({ agentId: inboxAgentId, updatedAt: topics.updatedAt })
-        .where(and(eq(topics.id, topicId), eq(topics.userId, this.userId)));
+        .where(
+          and(
+            eq(topics.id, topicId),
+            eq(topics.userId, this.userId),
+            notTrashed(topics.isDeleted),
+            notShareVisitorTopic(),
+          ),
+        )
+        .returning({ id: topics.id });
+
+      // The topic may have been trashed after the creator-scoped pre-read.
+      // The guarded update is the transaction's serialization point: when it
+      // loses that race, do not re-parent children behind the hidden topic.
+      if (!updatedTopic) return;
 
       await tx
         .update(messages)
         .set({ agentId: inboxAgentId, updatedAt: messages.updatedAt })
-        .where(and(eq(messages.topicId, topicId), eq(messages.userId, this.userId)));
+        .where(
+          and(
+            eq(messages.topicId, topicId),
+            eq(messages.userId, this.userId),
+            notTrashed(messages.isDeleted),
+            notShareVisitorTopicRef(messages.topicId),
+          ),
+        );
 
       await tx
         .update(threads)
         .set({ agentId: inboxAgentId, updatedAt: threads.updatedAt })
-        .where(and(eq(threads.topicId, topicId), eq(threads.userId, this.userId)));
+        .where(
+          and(
+            eq(threads.topicId, topicId),
+            eq(threads.userId, this.userId),
+            notTrashed(threads.isDeleted),
+            notShareVisitorTopicRef(threads.topicId),
+          ),
+        );
     });
   };
 
@@ -302,8 +344,12 @@ export class OnboardingService {
 
     // Agent identity fields — stored on inbox agent
     const inboxAgent = await this.agentModel.getBuiltinAgent(BUILTIN_AGENT_SLUGS.inbox);
-    if (!inboxAgent?.title?.trim()) missingFields.push('agentName');
-    if (!inboxAgent?.avatar?.trim()) missingFields.push('agentEmoji');
+    // `getBuiltinAgent` already fills a blank inbox with the default name and avatar, so those
+    // defaults count as not chosen yet.
+    const agentName = agentDisplayName(inboxAgent);
+    const agentAvatar = inboxAgent?.avatar?.trim();
+    if (!agentName || agentName === DEFAULT_INBOX_TITLE) missingFields.push('agentName');
+    if (!agentAvatar || agentAvatar === DEFAULT_INBOX_AVATAR) missingFields.push('agentEmoji');
 
     // User fields
     if (!userState.fullName?.trim()) missingFields.push('fullName');
@@ -320,6 +366,7 @@ export class OnboardingService {
           eq(messages.topicId, topicId),
           eq(messages.userId, this.userId),
           eq(messages.role, 'user'),
+          notTrashed(messages.isDeleted),
         ),
       );
 
@@ -756,7 +803,8 @@ export class OnboardingService {
       await this.userModel.updateUser(userPatch);
     }
 
-    // Update inbox agent avatar and title when agent identity fields are provided
+    // The name the user gives the assistant is its personal `name`, the label every surface shows
+    // first; `title` stays the role it plays.
     const agentName =
       typeof parsed.agentName === 'string' && parsed.agentName.trim()
         ? parsed.agentName.trim()
@@ -780,9 +828,9 @@ export class OnboardingService {
     } else if (agentName || agentEmoji) {
       try {
         const inboxAgentId = await this.getInboxAgentId();
-        const agentPatch: { avatar?: string; title?: string } = {};
+        const agentPatch: { avatar?: string; name?: string } = {};
 
-        if (agentName) agentPatch.title = agentName;
+        if (agentName) agentPatch.name = agentName;
         if (agentEmoji) agentPatch.avatar = agentEmoji;
 
         // Update both inbox and web-onboarding agents so the current conversation reflects the change
@@ -925,12 +973,42 @@ export class OnboardingService {
     }
   };
 
-  reset = async () => {
-    const previousState = this.ensureState((await this.getUserState()).agentOnboarding);
-    const understandingCleanup = previousState.activeTopicId
-      ? await this.understandingRepository.removeForReset(previousState.activeTopicId)
-      : undefined;
+  private resetUnderstandingData = async (state?: UserAgentOnboarding): Promise<void> => {
+    const activeTopicId = this.ensureState(state).activeTopicId;
+    if (!activeTopicId) return;
+
+    const understandingCleanup = await this.understandingRepository.removeForReset(activeTopicId);
     if (understandingCleanup) await this.cleanupUnderstandingReset(understandingCleanup.id);
+  };
+
+  /**
+   * Updates the classic onboarding cursor and invalidates generated data on a fresh run.
+   *
+   * Use when:
+   * - Persisting normal onboarding step navigation
+   * - Restarting at the welcome step or moving to a new onboarding version
+   *
+   * Expects:
+   * - The complete classic onboarding state accepted by the user router
+   *
+   * Returns:
+   * - The underlying user update result
+   */
+  updateOnboarding = async (input: UserOnboarding) => {
+    const previousState = await this.getUserState();
+    const isRestart = input.currentStep === 1;
+    const isVersionChange = previousState.onboarding?.version !== input.version;
+
+    if (isRestart || isVersionChange) {
+      await this.resetUnderstandingData(previousState.agentOnboarding);
+    }
+
+    return this.userModel.updateUser({ onboarding: input });
+  };
+
+  reset = async () => {
+    const previousState = await this.getUserState();
+    await this.resetUnderstandingData(previousState.agentOnboarding);
     const state = defaultAgentOnboardingState();
 
     // Preserve users.full_name and users.username on reset.
@@ -964,8 +1042,8 @@ export class OnboardingService {
     try {
       const inboxAgentId = await this.getInboxAgentId();
 
-      // Reset inbox agent title and avatar
-      await this.agentModel.update(inboxAgentId, { avatar: null, title: null });
+      // Reset the inbox agent's name, legacy title, and avatar
+      await this.agentModel.update(inboxAgentId, { avatar: null, name: null, title: null });
 
       await this.agentDocumentsService.deleteTemplateDocuments(inboxAgentId, 'claw');
       this.inboxDocumentsInitialized = false;

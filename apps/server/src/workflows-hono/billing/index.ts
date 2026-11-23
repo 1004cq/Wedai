@@ -10,7 +10,8 @@
  */
 import { Hono } from 'hono';
 
-import { qstashAuth } from '../middlewares/qstashAuth';
+import { qstashAuth } from '@/server/router-hono/workflows/middlewares/qstashAuth';
+
 import { reapStaleHoldsHandler } from './handlers/reapStaleHolds';
 
 const app = new Hono();

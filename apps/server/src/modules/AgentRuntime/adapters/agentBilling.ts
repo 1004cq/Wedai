@@ -34,7 +34,11 @@
  */
 import debug from 'debug';
 
-import { chargeAfterChat, chargeBeforeChat, InsufficientBalanceError } from '@/business/server/chat-billing';
+import {
+  chargeAfterChat,
+  chargeBeforeChat,
+  InsufficientBalanceError,
+} from '@/business/server/chat-billing';
 import { initModelRuntimeFromDB } from '@/server/modules/ModelRuntime';
 
 import type { RuntimeExecutorContext } from '../context';
@@ -68,7 +72,12 @@ export function agentRequestId(ctx: RuntimeExecutorContext, attempt = 0): string
  * @param call  The actual LLM call to execute.
  * @returns The result of the call.
  */
-export async function withAgentBilling<T extends { usage?: { inputTextTokens?: number; outputTextTokens?: number; totalTokens?: number } | undefined }>(
+export async function withAgentBilling<
+  T extends {
+    usage?:
+      { inputTextTokens?: number; outputTextTokens?: number; totalTokens?: number } | undefined;
+  },
+>(
   ctx: RuntimeExecutorContext,
   provider: string,
   model: string,
@@ -76,6 +85,14 @@ export async function withAgentBilling<T extends { usage?: { inputTextTokens?: n
   promptTokenEstimate: number,
   maxCompletionTokens: number,
   call: () => Promise<T>,
+  options?: {
+    /**
+     * When set, skip the ModelRuntime probe used for BYOK detection.
+     * Client-site LLM relay already runs on the user's device — treat as BYOK
+     * so we neither charge platform credits nor init a server-side runtime.
+     */
+    userHasProviderKey?: boolean;
+  },
 ): Promise<T> {
   if (!ctx.userId || !ctx.serverDB) {
     // No billing context available (e.g. system/eval runs).
@@ -84,13 +101,28 @@ export async function withAgentBilling<T extends { usage?: { inputTextTokens?: n
 
   const requestId = agentRequestId(ctx, attempt);
 
-  // Detect BYOK: if the model runtime has a user-supplied baseURL the user pays the provider directly.
-  let userHasProviderKey = false;
-  try {
-    const modelRuntime = await initModelRuntimeFromDB(ctx.serverDB, ctx.userId, provider, ctx.workspaceId);
-    userHasProviderKey = modelRuntime.baseURL !== undefined;
-  } catch {
-    // Can't detect key — default to platform billing.
+  // Detect BYOK: prefer a user-supplied endpoint/key so the user pays the provider directly.
+  // ModelRuntime no longer exposes `baseURL` publicly — inspect the underlying runtime.
+  // Callers that already know (client-site relay) pass `userHasProviderKey` to avoid
+  // probing a server runtime that must not be used for that attempt.
+  let userHasProviderKey = options?.userHasProviderKey ?? false;
+  if (options?.userHasProviderKey === undefined) {
+    try {
+      const modelRuntime = await initModelRuntimeFromDB(
+        ctx.serverDB,
+        ctx.userId,
+        provider,
+        ctx.workspaceId,
+      );
+      const runtimeWithBase = modelRuntime as unknown as {
+        _runtime?: { baseURL?: string };
+        baseURL?: string;
+      };
+      userHasProviderKey =
+        runtimeWithBase.baseURL !== undefined || runtimeWithBase._runtime?.baseURL !== undefined;
+    } catch {
+      // Can't detect key — default to platform billing.
+    }
   }
 
   let billingContext: Awaited<ReturnType<typeof chargeBeforeChat>>;
@@ -107,10 +139,23 @@ export async function withAgentBilling<T extends { usage?: { inputTextTokens?: n
     });
   } catch (err) {
     if (err instanceof InsufficientBalanceError) {
-      log('insufficient_balance %O', { attempt, model, outcome: '402', provider, stepIndex: ctx.stepIndex });
+      log('insufficient_balance %O', {
+        attempt,
+        model,
+        outcome: '402',
+        provider,
+        stepIndex: ctx.stepIndex,
+      });
       throw err; // surface to agent — step fails cleanly
     }
-    log('hold_error %O', { attempt, err: (err as Error).message, model, outcome: 'error', provider, stepIndex: ctx.stepIndex });
+    log('hold_error %O', {
+      attempt,
+      err: (err as Error).message,
+      model,
+      outcome: 'error',
+      provider,
+      stepIndex: ctx.stepIndex,
+    });
     if (isStrict()) throw err;
     // Fail-open: proceed without billing.
     return call();

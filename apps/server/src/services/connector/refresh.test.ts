@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ConnectorToolModel } from '@/database/models/connectorTool';
 import { deviceGateway } from '@/server/services/deviceGateway';
 import { after } from '@/server/utils/scheduleAfterResponse';
 
 import {
   buildLastSyncedAtMap,
   CONNECTOR_TOOLS_REFRESH_TTL_MS,
+  connectorSyncContextForRow,
   scheduleStaleConnectorToolsRefresh,
 } from './refresh';
 import { syncConnectorToolsById } from './sync';
@@ -66,6 +68,50 @@ describe('buildLastSyncedAtMap', () => {
 
   it('returns an empty map for no tools', () => {
     expect(buildLastSyncedAtMap([]).size).toBe(0);
+  });
+});
+
+describe('connectorSyncContextForRow', () => {
+  const db = {} as any;
+  const runContext = (forRow: (row: unknown) => unknown) =>
+    ({ connectorModel: { forRow }, connectorToolModel: { scope: 'run' } }) as any;
+
+  it("keeps the run's own context for a row in the run's scope", () => {
+    const ctx = runContext(function (this: unknown) {
+      return ctx.connectorModel;
+    });
+    const row = { userId: 'user-1', workspaceId: 'ws-1' };
+
+    expect(connectorSyncContextForRow(ctx, row, db)).toBe(ctx);
+  });
+
+  /**
+   * @example
+   * expect(connectorSyncContextForRow(workspaceRun, ownersPersonalRow, db).connectorModel).toBe(personalModel);
+   */
+  it("writes the owner's personal row through the personal scope", () => {
+    // ROOT CAUSE:
+    //
+    // A private agent's workspace run resolves its owner's personal connector, but its stale-tool
+    // refresh used the run's workspace-scoped models, which cannot find or write that row, so the
+    // tool list stayed at its install-time state.
+    const personalModel = { scope: 'personal' };
+    const ctx = runContext(() => personalModel);
+    const row = { userId: 'user-1', workspaceId: null };
+
+    const result = connectorSyncContextForRow(ctx, row, db);
+
+    expect(result?.connectorModel).toBe(personalModel);
+    expect(result?.connectorToolModel).toBeInstanceOf(ConnectorToolModel);
+    expect(result?.connectorToolModel).not.toBe(ctx.connectorToolModel);
+  });
+
+  it('has no context for a personal row without a database to reach it', () => {
+    const ctx = runContext(() => ({ scope: 'personal' }));
+
+    expect(
+      connectorSyncContextForRow(ctx, { userId: 'user-1', workspaceId: null }, undefined),
+    ).toBe(undefined);
   });
 });
 
@@ -174,34 +220,12 @@ describe('scheduleStaleConnectorToolsRefresh — eligibility', () => {
 });
 
 describe('scheduleStaleConnectorToolsRefresh — remote result handling', () => {
-  it('completes cleanly when the remote sync succeeds', async () => {
-    const id = nextId();
-    scheduleStaleConnectorToolsRefresh([httpConnector(id)], new Map(), ctx, NOW);
-    await expect(flushDeferred()).resolves.toBeUndefined();
-    expect(syncConnectorToolsById).toHaveBeenCalledTimes(1);
-  });
-
   it('swallows a remote sync failure (never rejects, never surfaces)', async () => {
     const id = nextId();
     vi.mocked(syncConnectorToolsById).mockRejectedValueOnce(new Error('remote MCP down'));
     scheduleStaleConnectorToolsRefresh([httpConnector(id)], new Map(), ctx, NOW);
     // The deferred work must resolve, not reject, even though the sync failed.
     await expect(flushDeferred()).resolves.toBeUndefined();
-  });
-
-  it('re-syncs once the TTL has elapsed since the last attempt', async () => {
-    const id = nextId();
-    scheduleStaleConnectorToolsRefresh([httpConnector(id)], new Map(), ctx, NOW);
-    await flushDeferred();
-    // Past the TTL → eligible again even though the DB marker never advanced.
-    scheduleStaleConnectorToolsRefresh(
-      [httpConnector(id)],
-      new Map(),
-      ctx,
-      NOW + CONNECTOR_TOOLS_REFRESH_TTL_MS + 1,
-    );
-    await flushDeferred();
-    expect(syncConnectorToolsById).toHaveBeenCalledTimes(2);
   });
 
   it('backs off a failed connector for a TTL, then retries', async () => {

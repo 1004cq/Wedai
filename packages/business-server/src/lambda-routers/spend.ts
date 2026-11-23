@@ -1,12 +1,13 @@
 /**
  * spendRouter — user-facing balance, usage, and ledger queries.
  */
+import { TRPCError } from '@trpc/server';
 import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 
+import { billingAccounts, ledgerEntries, usageRecords, wallets } from '@/database/schemas';
 import { authedProcedure, router } from '@/libs/trpc/lambda';
 import { bannedCheck, serverDatabase } from '@/libs/trpc/lambda/middleware';
-import { billingAccounts, ledgerEntries, usageRecords, wallets } from '@/database/schemas';
 
 const spendProcedure = authedProcedure.use(serverDatabase).use(bannedCheck);
 
@@ -14,6 +15,7 @@ export const spendRouter = router({
   /** Current wallet balances for the calling user. */
   balance: spendProcedure.query(async ({ ctx }) => {
     const { serverDB, userId } = ctx;
+    if (!serverDB || !userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
 
     const [account] = await serverDB
       .select()
@@ -45,6 +47,7 @@ export const spendRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const { serverDB, userId } = ctx;
+      if (!serverDB || !userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
 
       const [account] = await serverDB
         .select()
@@ -91,6 +94,7 @@ export const spendRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const { serverDB, userId } = ctx;
+      if (!serverDB || !userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
 
       const [account] = await serverDB
         .select()
@@ -114,12 +118,7 @@ export const spendRouter = router({
           createdAt: usageRecords.createdAt,
         })
         .from(usageRecords)
-        .where(
-          and(
-            eq(usageRecords.billingAccountId, account.id),
-            eq(usageRecords.userId, userId),
-          ),
-        )
+        .where(and(eq(usageRecords.billingAccountId, account.id), eq(usageRecords.userId, userId)))
         .orderBy(desc(usageRecords.createdAt))
         .limit(input.limit + 1)
         .offset(input.cursor);

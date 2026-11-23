@@ -1,21 +1,8 @@
-import { Hono } from 'hono';
-
-import agentSignalApp from './agent-signal';
-import billingApp from './billing';
-import memoryUserMemoryApp from './memory-user-memory';
-import onboardingTaskRecommendationApp from './onboarding-task-recommendation';
-import onboardingUnderstandingApp from './onboarding-understanding';
-import taskApp from './task';
-import verifyApp from './verify';
-
-const app = new Hono().basePath('/api/workflows');
-
-app.route('/agent-signal', agentSignalApp);
-app.route('/billing', billingApp);
-app.route('/memory-user-memory', memoryUserMemoryApp);
-app.route('/onboarding/understanding', onboardingUnderstandingApp);
-app.route('/onboarding/task-recommendations', onboardingTaskRecommendationApp);
-app.route('/task', taskApp);
-app.route('/verify', verifyApp);
-
-export default app;
+/**
+ * Wedai commercial billing workflows.
+ *
+ * Upstream workflow routes live under `router-hono/workflows`. This module only
+ * exposes the billing sub-app so it can be mounted there without pulling a
+ * duplicate copy of every upstream workflow tree.
+ */
+export { default } from './billing';

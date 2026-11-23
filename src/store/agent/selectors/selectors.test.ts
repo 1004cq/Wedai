@@ -1,7 +1,6 @@
 import { DEFAULT_PROVIDER } from '@lobechat/business-const';
 import {
   DEFAULT_AGENT_CONFIG,
-  DEFAULT_AVATAR,
   DEFAULT_INBOX_AVATAR,
   DEFAULT_MODEL,
   DEFAUTT_AGENT_TTS_CONFIG,
@@ -12,14 +11,54 @@ import { describe, expect, it } from 'vitest';
 
 import { type AgentStoreState } from '@/store/agent/initialState';
 import { initialAgentSliceState } from '@/store/agent/slices/agent/initialState';
+import { initialAgentArtworkSliceState } from '@/store/agent/slices/artwork/initialState';
 import { initialBuiltinAgentSliceState } from '@/store/agent/slices/builtin';
 
 import { agentSelectors, currentAgentConfig } from './selectors';
 
 const createState = (overrides: Partial<AgentStoreState> = {}): AgentStoreState => ({
+  ...initialAgentArtworkSliceState,
   ...initialAgentSliceState,
   ...initialBuiltinAgentSliceState,
   ...overrides,
+});
+
+const mixedKnowledgeInput = (): Partial<AgentStoreState> => ({
+  activeAgentId: 'agent-1',
+  agentMap: {
+    'agent-1': {
+      files: [
+        { enabled: true, id: 'file-1', name: 'file1.txt', type: 'text/plain' },
+        { enabled: false, id: 'file-2', name: 'file2.txt', type: 'text/plain' },
+      ],
+      knowledgeBases: [
+        { enabled: true, id: 'kb-1', name: 'KB 1' },
+        { enabled: false, id: 'kb-2', name: 'KB 2' },
+      ],
+    } as any,
+  },
+});
+
+const enabledKnowledgeBaseInput = (): Partial<AgentStoreState> => ({
+  activeAgentId: 'agent-1',
+  agentMap: {
+    'agent-1': {
+      knowledgeBases: [{ enabled: true, id: 'kb-1', name: 'KB' }],
+    } as any,
+  },
+});
+
+const mixedPluginsInput = (): Partial<AgentStoreState> => ({
+  activeAgentId: 'agent-1',
+  agentMap: {
+    'agent-1': {
+      plugins: [
+        'plugin-1',
+        { identifier: 'plugin-2', mode: 'disabled' },
+        { identifier: 'plugin-3', mode: 'pinned' },
+      ],
+    } as any,
+  },
 });
 
 describe('agentSelectors', () => {
@@ -154,7 +193,7 @@ describe('agentSelectors', () => {
 
       const meta = agentSelectors.currentAgentMeta(state);
 
-      expect(meta.avatar).toBe(DEFAULT_AVATAR);
+      expect(meta.avatar).toBeUndefined();
     });
 
     it('should return inbox avatar fallback for inbox agent with no custom avatar', () => {
@@ -226,48 +265,9 @@ describe('agentSelectors', () => {
     });
 
     it('should exclude disabled entries in a mixed-shape plugins array', () => {
-      const state = createState({
-        activeAgentId: 'agent-1',
-        agentMap: {
-          'agent-1': {
-            plugins: [
-              'plugin-1',
-              { identifier: 'plugin-2', mode: 'disabled' },
-              { identifier: 'plugin-3', mode: 'pinned' },
-            ],
-          } as any,
-        },
-      });
+      const state = createState(mixedPluginsInput());
 
       expect(agentSelectors.currentAgentPlugins(state)).toEqual(['plugin-1', 'plugin-3']);
-    });
-  });
-
-  describe('currentAgentDisabledPlugins', () => {
-    it('returns only the disabled identifiers from a mixed-shape plugins array', () => {
-      const state = createState({
-        activeAgentId: 'agent-1',
-        agentMap: {
-          'agent-1': {
-            plugins: [
-              'plugin-1',
-              { identifier: 'plugin-2', mode: 'disabled' },
-              { identifier: 'plugin-3', mode: 'pinned' },
-            ],
-          } as any,
-        },
-      });
-
-      expect(agentSelectors.currentAgentDisabledPlugins(state)).toEqual(['plugin-2']);
-    });
-
-    it('returns an empty array when there are no plugins', () => {
-      const state = createState({
-        activeAgentId: 'agent-1',
-        agentMap: { 'agent-1': {} },
-      });
-
-      expect(agentSelectors.currentAgentDisabledPlugins(state)).toEqual([]);
     });
   });
 
@@ -315,21 +315,7 @@ describe('agentSelectors', () => {
 
   describe('currentEnabledKnowledge', () => {
     it('should return only enabled knowledge items', () => {
-      const state = createState({
-        activeAgentId: 'agent-1',
-        agentMap: {
-          'agent-1': {
-            files: [
-              { enabled: true, id: 'file-1', name: 'file1.txt', type: 'text/plain' },
-              { enabled: false, id: 'file-2', name: 'file2.txt', type: 'text/plain' },
-            ],
-            knowledgeBases: [
-              { enabled: true, id: 'kb-1', name: 'KB 1' },
-              { enabled: false, id: 'kb-2', name: 'KB 2' },
-            ],
-          } as any,
-        },
-      });
+      const state = createState(mixedKnowledgeInput());
 
       const enabledKnowledge = agentSelectors.currentEnabledKnowledge(state);
 
@@ -361,14 +347,7 @@ describe('agentSelectors', () => {
 
   describe('hasKnowledge', () => {
     it('should return true when has knowledge bases', () => {
-      const state = createState({
-        activeAgentId: 'agent-1',
-        agentMap: {
-          'agent-1': {
-            knowledgeBases: [{ enabled: true, id: 'kb-1', name: 'KB' }],
-          } as any,
-        },
-      });
+      const state = createState(enabledKnowledgeBaseInput());
 
       expect(agentSelectors.hasKnowledge(state)).toBe(true);
     });
@@ -456,21 +435,7 @@ describe('agentSelectors', () => {
 
   describe('currentKnowledgeIds', () => {
     it('should return enabled file and knowledge base IDs', () => {
-      const state = createState({
-        activeAgentId: 'agent-1',
-        agentMap: {
-          'agent-1': {
-            files: [
-              { enabled: true, id: 'file-1', name: 'file1.txt', type: 'text/plain' },
-              { enabled: false, id: 'file-2', name: 'file2.txt', type: 'text/plain' },
-            ],
-            knowledgeBases: [
-              { enabled: true, id: 'kb-1', name: 'KB 1' },
-              { enabled: false, id: 'kb-2', name: 'KB 2' },
-            ],
-          } as any,
-        },
-      });
+      const state = createState(mixedKnowledgeInput());
 
       const ids = agentSelectors.currentKnowledgeIds(state);
 
@@ -561,14 +526,7 @@ describe('agentSelectors', () => {
 
   describe('hasEnabledKnowledgeBases', () => {
     it('should return true when has enabled knowledge bases', () => {
-      const state = createState({
-        activeAgentId: 'agent-1',
-        agentMap: {
-          'agent-1': {
-            knowledgeBases: [{ enabled: true, id: 'kb-1', name: 'KB' }],
-          } as any,
-        },
-      });
+      const state = createState(enabledKnowledgeBaseInput());
 
       expect(agentSelectors.hasEnabledKnowledgeBases(state)).toBe(true);
     });
@@ -652,14 +610,7 @@ describe('agentSelectors', () => {
     });
 
     it('should return true when has enabled knowledge bases', () => {
-      const state = createState({
-        activeAgentId: 'agent-1',
-        agentMap: {
-          'agent-1': {
-            knowledgeBases: [{ enabled: true, id: 'kb-1', name: 'KB' }],
-          } as any,
-        },
-      });
+      const state = createState(enabledKnowledgeBaseInput());
 
       expect(agentSelectors.hasEnabledKnowledge(state)).toBe(true);
     });

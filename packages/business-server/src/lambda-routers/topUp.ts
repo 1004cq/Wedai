@@ -9,17 +9,11 @@
  */
 import crypto from 'node:crypto';
 
+import { PriceSnapshotService } from '@lobechat/billing';
+import { BillingAccountModel, billingAccounts, OrderModel, orders } from '@lobechat/database';
 import { TRPCError } from '@trpc/server';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
-
-import { PriceSnapshotService } from '@lobechat/billing';
-import {
-  BillingAccountModel,
-  OrderModel,
-  billingAccounts,
-  orders,
-} from '@lobechat/database';
 
 import { authedProcedure, router } from '@/libs/trpc/lambda';
 import { bannedCheck, serverDatabase } from '@/libs/trpc/lambda/middleware';
@@ -33,7 +27,7 @@ import { bannedCheck, serverDatabase } from '@/libs/trpc/lambda/middleware';
  * Unique enough for display; the DB `id` is the authoritative primary key.
  */
 function generateOrderNo(): string {
-  const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const date = new Date().toISOString().slice(0, 10).replaceAll('-', '');
   const suffix = crypto.randomBytes(3).toString('hex').toUpperCase();
   return `ORD-${date}-${suffix}`;
 }
@@ -80,6 +74,7 @@ export const topUpRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { userId, serverDB: db } = ctx;
+      if (!userId || !db) throw new TRPCError({ code: 'UNAUTHORIZED' });
 
       // 1. Freeze price snapshot server-side.
       const pss = new PriceSnapshotService(db);
@@ -95,9 +90,8 @@ export const topUpRouter = router({
       const existing = await om.findByIdempotencyKey(ikey);
       if (existing && existing.status === 'pending') {
         // Re-create a Stripe session if the original session expired.
-        const { StripePaymentService } = await import(
-          '@/server/services/payment/StripePaymentService'
-        );
+        const { StripePaymentService } =
+          await import('@/server/services/payment/StripePaymentService');
         const appUrl = process.env.APP_URL ?? 'http://localhost:3010';
         const { url } = await StripePaymentService.createCheckoutSession({
           orderId: existing.id,
@@ -132,9 +126,8 @@ export const topUpRouter = router({
       });
 
       // 5. Create Stripe Checkout Session.
-      const { StripePaymentService } = await import(
-        '@/server/services/payment/StripePaymentService'
-      );
+      const { StripePaymentService } =
+        await import('@/server/services/payment/StripePaymentService');
       const appUrl = process.env.APP_URL ?? 'http://localhost:3010';
 
       const { url } = await StripePaymentService.createCheckoutSession({
@@ -159,6 +152,7 @@ export const topUpRouter = router({
     .input(z.object({ orderId: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
       const { userId, serverDB: db } = ctx;
+      if (!userId || !db) throw new TRPCError({ code: 'UNAUTHORIZED' });
       const om = new OrderModel(db, userId);
       const order = await om.findById(input.orderId);
       if (!order) throw new TRPCError({ code: 'NOT_FOUND', message: 'Order not found' });
@@ -184,6 +178,7 @@ export const topUpRouter = router({
     .input(z.object({ orderId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       const { userId, serverDB: db } = ctx;
+      if (!userId || !db) throw new TRPCError({ code: 'UNAUTHORIZED' });
       const om = new OrderModel(db, userId);
       const order = await om.findById(input.orderId);
       if (!order) throw new TRPCError({ code: 'NOT_FOUND', message: 'Order not found' });

@@ -201,9 +201,10 @@ export const adminConfigRouter = router({
     });
 
     const cfg = await getSmsConfig();
+    const view = await getAdminSmsConfigView();
     return {
+      ...view,
       configured: isSmsOperational(cfg),
-      ...(await getAdminSmsConfigView()),
     };
   }),
 

@@ -1,0 +1,270 @@
+import type { AgentShareToolGrant } from '@lobechat/types';
+import { LocalExecutionHeterogeneousAgentTypeSchema } from '@lobechat/types';
+
+/**
+ * Default `AgentShareConfig.maxMessagesPerVisitor` applied when a share is
+ * first created and whenever a partial config is normalized. Kept
+ * conservative — the creator can raise it explicitly via `updateShareConfig`.
+ */
+export const AGENT_SHARE_DEFAULT_MAX_MESSAGES_PER_VISITOR = 100;
+
+/**
+ * Page size of a visitor's own topic list on a shared agent. A fixed, generous
+ * bound: no share setting caps how many topics a visitor has.
+ */
+export const AGENT_SHARE_VISITOR_TOPIC_LIST_LIMIT = 200;
+
+/**
+ * Default `AgentShareConfig.monthlySpendLimit` (in USD credits) applied when a
+ * share is first created and whenever a partial config is normalized.
+ *
+ * The cap is mandatory — a share never runs uncapped — so this is the value a
+ * creator starts from and can raise or lower, but never clear.
+ */
+export const AGENT_SHARE_DEFAULT_MONTHLY_SPEND_LIMIT = 10;
+
+/**
+ * Upper bound on a visitor-submitted `prompt` for an agent-share visitor run.
+ *
+ * Unlike the creator's own account (where oversized input is self-inflicted),
+ * a share visitor run executes as the CREATOR: the text is persisted verbatim
+ * into creator-owned messages. Without a size bound, any authenticated
+ * visitor with a live link could submit HTTP-infrastructure-limit-sized
+ * prompts on repeat, bloating the creator's message rows.
+ *
+ * 20,000 characters (~5-8k tokens for typical English/code text) comfortably
+ * covers legitimate long-form asks (pasted code, long questions) while
+ * keeping a single turn's contribution to storage/transport negligible.
+ *
+ * Kept in `@lobechat/const` (instead of inline in a router) so both the
+ * server input schema and any client-side `maxLength`/error copy share one
+ * source of truth — the server bound is still the real gate; a client mirror
+ * is convenience only.
+ */
+export const SHARE_VISITOR_PROMPT_MAX_LENGTH = 20_000;
+
+/**
+ * Upper bound on attachments a share visitor may pin to one turn.
+ *
+ * Visitor attachments are stored under the CREATOR's account (the creator's
+ * storage quota pays for them, like every other share artifact), and every
+ * attached document is parsed and injected into the creator-billed model call
+ * while every image rides along as vision input. This cap bounds that per-turn
+ * cost; together with {@link SHARE_VISITOR_MAX_FILE_SIZE} it bounds how much
+ * storage one visitor turn can put on the creator. Ten mirrors what a single
+ * owner turn realistically carries.
+ */
+export const SHARE_VISITOR_MAX_FILES_PER_TURN = 10;
+
+/**
+ * Largest single file a share visitor may upload, in bytes.
+ *
+ * Far below the owner's own `MAX_UPLOAD_FILE_SIZE` (2 GB): the bytes land on
+ * the CREATOR's storage quota and a visitor is an untrusted party. Also kept
+ * under the client's multipart threshold (64 MB) so the share upload path is
+ * a single reserved PUT — no multipart session to abort or resume.
+ */
+export const SHARE_VISITOR_MAX_FILE_SIZE = 32 * 1024 * 1024;
+
+/**
+ * Default `AgentShareConfig.maxFileStorage` (bytes) applied when a share is
+ * first created and whenever a partial config is normalized.
+ *
+ * Total storage a share's visitor uploads may occupy on the CREATOR's
+ * account — settled files plus in-flight reservations. Mandatory like
+ * `monthlySpendLimit`: the creator can move the number (or set `0` to turn
+ * visitor attachments off) but never clear it — without a ceiling, anyone
+ * with the link could upload, never send, and fill the creator's quota. The
+ * creator's own plan limit still applies on top.
+ */
+export const AGENT_SHARE_DEFAULT_MAX_FILE_STORAGE = 512 * 1024 * 1024;
+
+/**
+ * Message prefix of the `FORBIDDEN` error `shareChat.createUploadUrl` throws
+ * when a visitor upload is refused for storage reasons — the share's
+ * `maxFileStorage` cap or the creator's own account-level block. The client
+ * matches the prefix only; the suffix is a visitor-safe cause, never the
+ * creator's billing state.
+ */
+export const SHARE_UPLOAD_STORAGE_BLOCK_PREFIX = 'storage_block:';
+
+/**
+ * Validates `AgentShareConfig.slug`: lowercase alphanumerics and hyphens
+ * only, 3-64 characters, no leading/trailing hyphen. Deliberately excludes
+ * uppercase and underscores to keep share URLs visually unambiguous and
+ * case-insensitive-safe. UUID-shaped slugs are additionally rejected in
+ * `AgentShareModel.updateSlug` — `findBySlugOrId` resolves UUID-shaped input
+ * as a share id first, so such a slug would be unreachable.
+ */
+export const AGENT_SHARE_SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/;
+
+/**
+ * Slugs a share may not claim. Two groups:
+ *
+ * 1. words that collide with existing (or foreseeable) static routes next to
+ *    the share URL (`/a/<slug>`) or the agent surface (`/agent/new`), or that
+ *    would otherwise confuse a share URL;
+ * 2. every builtin agent slug — share links used to live at `/agent/<slug>`,
+ *    the same route the creator's own agents use, and such legacy links are
+ *    still resolved there, where an own agent always wins the lookup. A share
+ *    on a builtin slug would be unreachable from any of those links.
+ *
+ * The builtin slugs are duplicated here rather than imported: `@lobechat/const`
+ * sits *below* `@lobechat/builtin-agents` in the dependency graph. The copy is
+ * kept honest by a test that diffs it against `BUILTIN_AGENT_SLUGS`.
+ *
+ * Checked by `AgentShareModel.updateSlug` before a custom slug is written.
+ */
+export const RESERVED_AGENT_SHARE_SLUGS: string[] = [
+  'admin',
+  'api',
+  'edit',
+  'index',
+  'new',
+  'profile',
+  'settings',
+  'share',
+  // Builtin agent slugs — mirror of `BUILTIN_AGENT_SLUGS`.
+  'agent-builder',
+  'group-agent-builder',
+  'group-supervisor',
+  'inbox',
+  'nightly-review',
+  'onboarding-understanding',
+  'onboarding-task-recommender',
+  'page-agent',
+  'self-feedback-intent',
+  'self-reflection',
+  'skill-management',
+  'task-agent',
+  'verify-agent',
+  'web-onboarding',
+];
+
+/**
+ * One identifier's resolved grant: `'all'` for a toolset-level grant (no
+ * `apis`), or the specific `Set` of API names the grant named.
+ */
+export type ShareToolGrant = 'all' | Set<string>;
+
+/**
+ * Reduce `shareConfig.toolGrants` into one grant per identifier.
+ *
+ * `toolGrants` is expected to hold at most one entry per identifier (the
+ * router rejects duplicates), but the reduction still merges defensively so a
+ * hand-edited row can never widen access unexpectedly: a grant without `apis`
+ * always wins over per-API ones for the same identifier, regardless of array
+ * order, and two per-API grants union their API names. An explicit empty
+ * `apis` array is malformed (the router rejects it) and is read fail-closed as
+ * "no API granted" — never silently widened to a toolset-level grant.
+ */
+export const resolveShareToolGrants = (
+  toolGrants: AgentShareToolGrant[] | undefined,
+): Map<string, ShareToolGrant> => {
+  const grants = new Map<string, ShareToolGrant>();
+
+  for (const { identifier, apis } of toolGrants ?? []) {
+    if (!identifier) continue;
+    if (grants.get(identifier) === 'all') continue;
+
+    if (!apis) {
+      grants.set(identifier, 'all');
+      continue;
+    }
+    if (apis.length === 0) continue;
+
+    const existing = grants.get(identifier);
+    const apiNames = existing instanceof Set ? existing : new Set<string>();
+    for (const apiName of apis) apiNames.add(apiName);
+    grants.set(identifier, apiNames);
+  }
+
+  return grants;
+};
+
+/** Whether `identifier` has any grant (toolset-level or per-API) in `grants`. */
+export const hasShareToolGrant = (
+  grants: Map<string, ShareToolGrant>,
+  identifier: string,
+): boolean => grants.has(identifier);
+
+/**
+ * The skills a share visitor's run may load, as an intersection of the run's
+ * real skill candidates with what the creator granted.
+ *
+ * Default-closed: a share with no `skillGrants` (or an empty one) grants no
+ * skill at all. `toolGrants` is NEVER consulted — skills are not picked in the
+ * tool picker, and tool and skill identifiers share ONE namespace, so reading a
+ * tool grant as a skill grant could only ever widen access by accident.
+ *
+ * Takes `candidateIds` rather than returning the raw grant list so a grant
+ * naming a skill this run does not actually have (deleted since, or belonging
+ * to another build) cannot leak into the pool.
+ *
+ * This is the single source of truth for "which skills is this visitor allowed
+ * to see and load", shared by the operation's skill-pool assembly and the skill
+ * runtime's load-time enforcement so the two cannot drift.
+ */
+export const resolveShareAllowedSkillIds = (
+  candidateIds: string[],
+  grants: { skillGrants?: string[] },
+): string[] => {
+  const granted = new Set(grants.skillGrants ?? []);
+
+  return candidateIds.filter((id) => granted.has(id));
+};
+
+/** Whether `identifier`'s specific `apiName` is granted — toolset-level grants every API. */
+export const isShareToolApiGranted = (
+  grants: Map<string, ShareToolGrant>,
+  identifier: string,
+  apiName: string,
+): boolean => {
+  const grant = grants.get(identifier);
+  if (!grant) return false;
+  return grant === 'all' || grant.has(apiName);
+};
+
+/**
+ * Upper bound on `AgentShareConfig.deviceAllowUserIds`. Device access hands
+ * over the creator's machine, so it is meant for a handful of trusted people.
+ */
+export const AGENT_SHARE_DEVICE_ALLOW_USERS_LIMIT = 100;
+
+/**
+ * Whether a share visitor may run this heterogeneous runtime type, on a device
+ * the share grants them: every runtime that executes on the creator's machine
+ * (descriptor-backed CLIs such as Claude Code / Codex / OpenCode, plus
+ * protocol-driven ones such as DeepSeek Harness). They share one device
+ * dispatch, so the device grant covers them alike. Platform agents (OpenClaw /
+ * Hermes) run as remote tasks with no visitor-scoped dispatch and stay excluded.
+ *
+ * The schema is read on call, not at module load: `@lobechat/const` is imported
+ * almost everywhere, and a module-level read would crash every test that
+ * replaces `@lobechat/types` with a partial `vi.mock` factory.
+ */
+export const isAgentShareVisitorHeteroType = (type?: string | null): boolean =>
+  !!type &&
+  (LocalExecutionHeterogeneousAgentTypeSchema.options as readonly string[]).includes(type);
+
+/**
+ * Whether an agent's effective config is exempt from the shared-agent model
+ * provider restriction (`AGENT_SHARE_ALLOWED_PROVIDERS`).
+ *
+ * The restriction keeps visitors from spending the creator's third-party model
+ * quota. An agent on a locally executed runtime (Claude Code, Codex, OpenCode, …)
+ * runs its own CLI on the creator's device and calls none of `provider`'s models — `provider` only stamps the runtime type — so
+ * it is exempt. Every other driver, including heterogeneous runtimes a visitor
+ * cannot run, stays restricted. Server save/publish checks and every client hint
+ * must use this one predicate so they never disagree.
+ *
+ * `provider` must still be a runtime stamp: a real provider saved next to the driver
+ * would become the agent's native model the moment the driver is cleared, so it is
+ * checked like any other selection.
+ */
+export const isAgentShareModelRestrictionExempt = (config?: {
+  agencyConfig?: { heterogeneousProvider?: { type?: string } | null } | null;
+  provider?: string | null;
+}): boolean =>
+  isAgentShareVisitorHeteroType(config?.agencyConfig?.heterogeneousProvider?.type) &&
+  isAgentShareVisitorHeteroType(config?.provider);

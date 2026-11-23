@@ -1,4 +1,3 @@
-import { DEFAULT_FILE_EMBEDDING_MODEL_ITEM } from '@lobechat/const';
 import { RequestTrigger, SemanticSearchSchema } from '@lobechat/types';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
@@ -11,14 +10,15 @@ import { DocumentModel } from '@/database/models/document';
 import { EmbeddingModel } from '@/database/models/embedding';
 import { FileModel } from '@/database/models/file';
 import { MessageModel } from '@/database/models/message';
-import { SearchRepo } from '@/database/repositories/search';
 import { router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
-import { getServerDefaultFilesConfig } from '@/server/globalConfig';
 import { initModelRuntimeFromDB } from '@/server/modules/ModelRuntime';
 import { ChunkService } from '@/server/services/chunk';
 import { DocumentService } from '@/server/services/document';
 import { KnowledgeBaseSearchService } from '@/server/services/knowledgeBase';
+import { resolveFileEmbeddingModel } from '@/server/services/knowledgeBase/fileEmbeddingModel';
+
+import { assertFileNotInRestrictedKnowledgeBase } from './_helpers/knowledgeBaseAccess';
 
 const chunkProcedure = wsCompatProcedure.use(serverDatabase).use(async (opts) => {
   const { ctx } = opts;
@@ -33,9 +33,14 @@ const chunkProcedure = wsCompatProcedure.use(serverDatabase).use(async (opts) =>
       documentService: new DocumentService(ctx.serverDB, ctx.userId, wsId),
       embeddingModel: new EmbeddingModel(ctx.serverDB, ctx.userId, wsId),
       fileModel: new FileModel(ctx.serverDB, ctx.userId, wsId),
-      knowledgeBaseSearchService: new KnowledgeBaseSearchService(ctx.serverDB, ctx.userId, wsId),
+      knowledgeBaseSearchService: new KnowledgeBaseSearchService(
+        ctx.serverDB,
+        ctx.userId,
+        wsId,
+        undefined,
+        ctx.userId,
+      ),
       messageModel: new MessageModel(ctx.serverDB, ctx.userId, wsId),
-      searchRepo: new SearchRepo(ctx.serverDB, ctx.userId, wsId),
     },
   });
 });
@@ -76,6 +81,8 @@ export const chunkRouter = router({
       }),
     )
     .query(async ({ ctx, input }) => {
+      await assertFileNotInRestrictedKnowledgeBase(ctx, input.id);
+
       return {
         items: await ctx.chunkModel.findByFileId(input.id, input.cursor || 0),
         nextCursor: input.cursor ? input.cursor + 1 : 1,
@@ -125,14 +132,18 @@ export const chunkRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { model, provider } =
-        getServerDefaultFilesConfig().embeddingModel || DEFAULT_FILE_EMBEDDING_MODEL_ITEM;
+      const workspaceId = ctx.workspaceId ?? undefined;
+      const { model, provider } = await resolveFileEmbeddingModel(
+        ctx.serverDB,
+        ctx.userId,
+        workspaceId,
+      );
       // Read user's provider config from database
       const agentRuntime = await initModelRuntimeFromDB(
         ctx.serverDB,
         ctx.userId,
         provider,
-        ctx.workspaceId ?? undefined,
+        workspaceId,
       );
 
       const embeddings = await agentRuntime.embeddings(

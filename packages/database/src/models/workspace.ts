@@ -1,14 +1,23 @@
-import { and, count, desc, eq, isNull } from 'drizzle-orm';
+import type {
+  WorkspaceApiKeyMemberCreation,
+  WorkspaceConnectorMemberManage,
+} from '@lobechat/types';
+import { and, count, desc, eq, getTableColumns, isNull, sql } from 'drizzle-orm';
 
 import {
   type NewWorkspace,
   type WorkspaceItem,
   workspaceMembers,
   workspaces,
+  workspaceTeamMembers,
+  workspaceTeams,
 } from '../schemas/workspace';
 import type { LobeChatDatabase } from '../type';
+import { AGENT_TRANSFER_PENDING_OWNER_DELETE, AgentTransferJobModel } from './agentTransferJob';
+import { countOf } from './utils/rows';
+import { DEFAULT_TEAM_IDENTIFIER, deriveTeamIdentifier } from './workspaceTeam';
 
-const getActiveMembershipRole = async (
+export const getActiveWorkspaceMembershipRole = async (
   db: LobeChatDatabase,
   params: { userId: string; workspaceId: string },
 ): Promise<string | null> => {
@@ -41,7 +50,7 @@ export const hasWorkspaceOwnerAccess = async (
   db: LobeChatDatabase,
   params: { userId: string; workspaceId: string },
 ): Promise<boolean> => {
-  return (await getActiveMembershipRole(db, params)) === 'owner';
+  return (await getActiveWorkspaceMembershipRole(db, params)) === 'owner';
 };
 
 /**
@@ -52,8 +61,41 @@ export const hasWorkspaceAdminAccess = async (
   db: LobeChatDatabase,
   params: { userId: string; workspaceId: string },
 ): Promise<boolean> => {
-  const role = await getActiveMembershipRole(db, params);
+  const role = await getActiveWorkspaceMembershipRole(db, params);
   return role === 'owner' || role === 'admin';
+};
+
+export const hasActiveWorkspaceMembership = async (
+  db: LobeChatDatabase,
+  params: { userId: string; workspaceId: string },
+): Promise<boolean> => {
+  return (await getActiveWorkspaceMembershipRole(db, params)) !== null;
+};
+
+export const getWorkspaceApiKeyMemberCreation = (
+  settings: unknown,
+): WorkspaceApiKeyMemberCreation => {
+  if (!settings || typeof settings !== 'object') return 'all_members';
+
+  const apiKey = (settings as { apiKey?: unknown }).apiKey;
+  if (!apiKey || typeof apiKey !== 'object') return 'all_members';
+
+  return (apiKey as { memberCreation?: unknown }).memberCreation === 'admins_only'
+    ? 'admins_only'
+    : 'all_members';
+};
+
+export const getWorkspaceConnectorMemberManage = (
+  settings: unknown,
+): WorkspaceConnectorMemberManage => {
+  if (!settings || typeof settings !== 'object') return 'all_members';
+
+  const connector = (settings as { connector?: unknown }).connector;
+  if (!connector || typeof connector !== 'object') return 'all_members';
+
+  return (connector as { memberManage?: unknown }).memberManage === 'admins_only'
+    ? 'admins_only'
+    : 'all_members';
 };
 
 export class WorkspaceModel {
@@ -91,11 +133,36 @@ export class WorkspaceModel {
         workspaceId: workspace.id,
       });
 
+      // Every new workspace starts with a team of the same name holding its
+      // creator. Workspaces created before teams existed are left without one.
+      const [team] = await tx
+        .insert(workspaceTeams)
+        .values({
+          createdBy: this.userId,
+          identifier: deriveTeamIdentifier(params.name) || DEFAULT_TEAM_IDENTIFIER,
+          name: params.name,
+          workspaceId: workspace.id,
+        })
+        .returning({ id: workspaceTeams.id });
+      await tx.insert(workspaceTeamMembers).values({
+        teamId: team.id,
+        userId: this.userId,
+        workspaceId: workspace.id,
+      });
+
       return workspace;
     });
   };
 
   delete = async (id: string) => {
+    // See UserModel.deleteUser: while an agent-TRANSFER backfill still points
+    // at this workspace (as source or target), unmigrated message snapshots
+    // would be cascade-deleted with it. Reject and let the caller retry after
+    // the job drains. Pending `copy` jobs do not block — see
+    // `isPendingTransfer` in agentTransferJob.ts.
+    if (await AgentTransferJobModel.hasPendingJobTouchingWorkspace(this.db, id)) {
+      throw new Error(AGENT_TRANSFER_PENDING_OWNER_DELETE);
+    }
     return this.db
       .delete(workspaces)
       .where(and(eq(workspaces.id, id), eq(workspaces.primaryOwnerId, this.userId)));
@@ -134,6 +201,14 @@ export class WorkspaceModel {
     return workspace?.settings ?? {};
   };
 
+  getApiKeyMemberCreation = async (id: string): Promise<WorkspaceApiKeyMemberCreation> => {
+    return getWorkspaceApiKeyMemberCreation(await this.getSettings(id));
+  };
+
+  getConnectorMemberManage = async (id: string): Promise<WorkspaceConnectorMemberManage> => {
+    return getWorkspaceConnectorMemberManage(await this.getSettings(id));
+  };
+
   /**
    * Count every workspace this user belongs to — owned + joined. Reads the
    * membership table directly because owners are always inserted as members on
@@ -144,27 +219,17 @@ export class WorkspaceModel {
       .select({ count: count() })
       .from(workspaceMembers)
       .where(and(eq(workspaceMembers.userId, this.userId), isNull(workspaceMembers.deletedAt)));
-    return result[0]?.count ?? 0;
+    return countOf(result, 'the workspace membership count');
   };
 
   listUserWorkspaces = async () => {
-    const memberships = await this.db.query.workspaceMembers.findMany({
-      where: and(eq(workspaceMembers.userId, this.userId), isNull(workspaceMembers.deletedAt)),
-    });
-
-    if (memberships.length === 0) return [];
-
-    const workspaceIds = memberships.map((m) => m.workspaceId);
-
-    const results = await this.db.query.workspaces.findMany({
-      orderBy: [desc(workspaces.updatedAt)],
-      where: (ws, { inArray }) => inArray(ws.id, workspaceIds),
-    });
-
-    return results.map((ws) => ({
-      ...ws,
-      role: memberships.find((m) => m.workspaceId === ws.id)?.role ?? 'viewer',
-    }));
+    // The inner join pairs each workspace with the caller's (unique) membership row.
+    return this.db
+      .select({ ...getTableColumns(workspaces), role: workspaceMembers.role })
+      .from(workspaceMembers)
+      .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
+      .where(and(eq(workspaceMembers.userId, this.userId), isNull(workspaceMembers.deletedAt)))
+      .orderBy(desc(workspaces.updatedAt));
   };
 
   update = async (
@@ -181,6 +246,38 @@ export class WorkspaceModel {
     return this.db
       .update(workspaces)
       .set({ settings, updatedAt: new Date() })
+      .where(eq(workspaces.id, id));
+  };
+
+  updateApiKeyMemberCreation = async (
+    id: string,
+    memberCreation: WorkspaceApiKeyMemberCreation,
+  ) => {
+    return this.db
+      .update(workspaces)
+      .set({
+        settings: sql`coalesce(${workspaces.settings}, '{}'::jsonb) || jsonb_build_object(
+          'apiKey',
+          coalesce(${workspaces.settings}->'apiKey', '{}'::jsonb) || jsonb_build_object('memberCreation', ${memberCreation}::text)
+        )`,
+        updatedAt: new Date(),
+      })
+      .where(eq(workspaces.id, id));
+  };
+
+  updateConnectorMemberManage = async (
+    id: string,
+    memberManage: WorkspaceConnectorMemberManage,
+  ) => {
+    return this.db
+      .update(workspaces)
+      .set({
+        settings: sql`coalesce(${workspaces.settings}, '{}'::jsonb) || jsonb_build_object(
+          'connector',
+          coalesce(${workspaces.settings}->'connector', '{}'::jsonb) || jsonb_build_object('memberManage', ${memberManage}::text)
+        )`,
+        updatedAt: new Date(),
+      })
       .where(eq(workspaces.id, id));
   };
 

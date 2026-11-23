@@ -22,9 +22,17 @@ import {
   getVerificationEmailTemplate,
   getVerificationOTPEmailTemplate,
 } from '@/libs/better-auth/email-templates';
+import { changeEmailUniqueness } from '@/libs/better-auth/plugins/change-email-uniqueness';
+import { deferredSessionRefresh } from '@/libs/better-auth/plugins/deferred-session-refresh';
 import { emailWhitelist } from '@/libs/better-auth/plugins/email-whitelist';
+import { sessionOptions } from '@/libs/better-auth/session-options';
 import { initBetterAuthSSOProviders } from '@/libs/better-auth/sso';
-import { createSecondaryStorage, getTrustedOrigins } from '@/libs/better-auth/utils/config';
+import {
+  createSecondaryStorage,
+  getPasskeyOrigins,
+  getTrustedOrigins,
+} from '@/libs/better-auth/utils/config';
+import { expireLegacyHostOnlyCookies } from '@/libs/better-auth/utils/host-only-cookies';
 import { parseSSOProviders } from '@/libs/better-auth/utils/server';
 import { clearMismatchedOIDCSession } from '@/libs/oidc-provider/session-cleanup';
 import { EmailService } from '@/server/services/email';
@@ -91,17 +99,24 @@ const getPasskeyRpID = (): string | undefined => {
 };
 
 /**
- * Get passkey origins array.
- * Returns undefined if APP_URL is not set (e.g., in e2e tests).
+ * Browsers silently drop a cookie whose `Domain` the current host is not a member of.
+ * Applying a production domain on a preview deployment (`*.vercel.app`) or localhost would
+ * therefore erase every auth cookie instead of widening it, so fall back to host-only there.
  */
-const getPasskeyOrigins = (): string[] | undefined => {
-  if (!appEnv.APP_URL) return undefined;
+const resolveCookieDomain = (cookieDomain?: string): string | undefined => {
+  if (!cookieDomain) return undefined;
+
+  const base = cookieDomain.replace(/^\./, '');
   try {
-    return [new URL(appEnv.APP_URL).origin];
+    const { hostname } = new URL(appEnv.APP_URL);
+    if (hostname !== base && !hostname.endsWith(`.${base}`)) return undefined;
   } catch {
     return undefined;
   }
+
+  return cookieDomain;
 };
+
 const MAGIC_LINK_EXPIRES_IN = 900;
 // OTP expiration time (in seconds) - 5 minutes for mobile OTP verification
 const OTP_EXPIRES_IN = 300;
@@ -111,10 +126,19 @@ const enabledSSOProviders = parseSSOProviders(authEnv.AUTH_SSO_PROVIDERS);
 const { socialProviders, genericOAuthProviders } = initBetterAuthSSOProviders();
 
 interface CustomBetterAuthOptions {
+  /**
+   * Share auth cookies across every subdomain of this domain (e.g. `.example.com`).
+   * Omit to keep cookies host-only.
+   */
+  cookieDomain?: string;
+  /** Namespace every Better Auth cookie so colocated deployments cannot overwrite each other. */
+  cookiePrefix?: string;
   plugins: BetterAuthPlugin[];
 }
 
 export function defineConfig(customOptions: CustomBetterAuthOptions) {
+  const cookieDomain = resolveCookieDomain(customOptions.cookieDomain);
+
   const options = {
     account: {
       accountLinking: {
@@ -199,14 +223,7 @@ export function defineConfig(customOptions: CustomBetterAuthOptions) {
     onAPIError: {
       errorURL: '/auth-error',
     },
-    session: {
-      cookieCache: {
-        enabled: true,
-        maxAge: 2 * 60, // Cache duration in seconds
-      },
-      // Keep a DB-backed fallback when Redis secondary storage entries are unexpectedly missing.
-      storeSessionInDatabase: true,
-    },
+    session: sessionOptions,
     database: drizzleAdapter(serverDB, {
       provider: 'pg',
       // experimental joins feature needs schema to pass full relation
@@ -279,6 +296,10 @@ export function defineConfig(customOptions: CustomBetterAuthOptions) {
 
     socialProviders,
     advanced: {
+      ...(cookieDomain && {
+        crossSubDomainCookies: { domain: cookieDomain, enabled: true },
+      }),
+      ...(customOptions.cookiePrefix && { cookiePrefix: customOptions.cookiePrefix }),
       database: {
         /**
          * Align Better Auth user IDs with our shared idGenerator for consistency.
@@ -305,6 +326,8 @@ export function defineConfig(customOptions: CustomBetterAuthOptions) {
     },
     plugins: [
       ...customOptions.plugins,
+      deferredSessionRefresh(),
+      changeEmailUniqueness(),
       emailWhitelist(),
       expo(),
       admin(),
@@ -355,23 +378,32 @@ export function defineConfig(customOptions: CustomBetterAuthOptions) {
           } catch (error) {
             if (error instanceof SmsRateLimitError) {
               throw APIError.from('TOO_MANY_REQUESTS', {
+                code: 'SMS_RATE_LIMITED',
                 message: 'Too many verification code requests. Please try again later.',
               });
             }
             if (error instanceof Error) {
               if (error.message === 'SMS_DISABLED') {
-                throw APIError.from('BAD_REQUEST', { message: 'SMS verification is disabled' });
+                throw APIError.from('BAD_REQUEST', {
+                  code: 'SMS_DISABLED',
+                  message: 'SMS verification is disabled',
+                });
               }
               if (error.message === 'SMS_NOT_CONFIGURED') {
                 throw APIError.from('INTERNAL_SERVER_ERROR', {
+                  code: 'SMS_NOT_CONFIGURED',
                   message: 'SMS service is not configured',
                 });
               }
               if (error.message === 'INVALID_PHONE_NUMBER') {
-                throw APIError.from('BAD_REQUEST', { message: 'Invalid phone number' });
+                throw APIError.from('BAD_REQUEST', {
+                  code: 'INVALID_PHONE_NUMBER',
+                  message: 'Invalid phone number',
+                });
               }
               if (error.message === 'SMS_SEND_FAILED') {
                 throw APIError.from('INTERNAL_SERVER_ERROR', {
+                  code: 'SMS_SEND_FAILED',
                   message: 'Failed to send verification code',
                 });
               }
@@ -423,5 +455,12 @@ export function defineConfig(customOptions: CustomBetterAuthOptions) {
     ],
   } satisfies BetterAuthOptions;
 
-  return betterAuth(options);
+  const instance = betterAuth(options);
+  if (!cookieDomain) return instance;
+
+  const handleRequest = instance.handler;
+  instance.handler = async (request) =>
+    expireLegacyHostOnlyCookies(request, await handleRequest(request), cookieDomain);
+
+  return instance;
 }

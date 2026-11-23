@@ -1,8 +1,9 @@
 import { z } from 'zod';
 
-import type { ConversationContext } from '../../conversation';
 import type { UploadFileItem } from '../../files';
 import type { MessageSemanticSearchChunk } from '../../rag';
+import type { FirstSendWorktree } from '../../topic';
+import type { WorkingDirConfig } from '../../workingDir';
 import type { ChatMessageError } from '../common/base';
 import { ChatMessageErrorSchema } from '../common/base';
 import type {
@@ -135,6 +136,10 @@ export interface SendMessageParams {
   editorData?: Record<string, any>;
   files?: UploadFileItem[];
   /**
+   * Create this worktree on the device after the server has accepted the first send.
+   */
+  firstSendWorktree?: FirstSendWorktree;
+  /**
    * Force the agent runtime regardless of the agent's local/cloud/hetero
    * config. Injected straight into `selectRuntimeType` as `parentRuntime`,
    * so it wins over every other signal. Used by task topics (which were
@@ -159,7 +164,26 @@ export interface SendMessageParams {
    * Additional metadata for the message (e.g., mentioned users)
    */
   metadata?: Record<string, any>;
+  /** A checkout already prepared for this new topic by the Desktop client. */
+  newTopicWorkingDirectory?: WorkingDirConfig;
   onlyAddUserMessage?: boolean;
+  /**
+   * Called once the send lifecycle owns the turn, either by persisting the user message or by
+   * placing it in the current conversation queue. Transient UI can release local resources after
+   * this acknowledgement because queued turns retain their uploaded file metadata.
+   */
+  onMessageAccepted?: () => void;
+  /**
+   * Called once the user message has been persisted, before the assistant run completes.
+   * UI flows that own separate transient content use this acknowledgement to release it
+   * without waiting for the full generation.
+   */
+  onMessagePersisted?: () => void;
+  /**
+   * ID of a pre-created local user message that the formal send lifecycle should adopt in place.
+   * This keeps an optimistic row stable while replacing its local preview with uploaded media.
+   */
+  optimisticUserMessageId?: string;
   /**
    * Page selections attached to the message (for Ask AI functionality)
    * These will be persisted to the database and injected via context-engine
@@ -170,20 +194,23 @@ export interface SendMessageParams {
    * If not provided, will be calculated from messages list.
    */
   parentId?: string;
-}
-
-export interface SendGroupMessageParams {
-  context: ConversationContext;
-  files?: UploadFileItem[];
-  message: string;
   /**
-   * Additional metadata for the message (e.g., mentioned users)
+   * Send a separate turn without consuming or clearing the active composer.
+   * Voice messages use this so the current text draft and pending attachments
+   * remain available after the audio-only turn is dispatched.
    */
-  metadata?: Record<string, any>;
+  preserveComposer?: boolean;
   /**
-   * for group chat
+   * The head of a queue sent one message per turn (Follow-up behavior: Queue).
+   * The rest of that queue waits behind this send instead of joining it.
    */
-  targetMemberId?: string | null;
+  queueHead?: boolean;
+  /**
+   * Cancels the send before the conversation lifecycle accepts ownership of the turn.
+   * Once `onMessageAccepted` fires, later aborts are ignored and the existing runtime Stop flow
+   * owns any subsequent model execution.
+   */
+  signal?: AbortSignal;
 }
 
 // ========== Zod Schemas ========== //

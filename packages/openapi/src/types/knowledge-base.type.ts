@@ -1,9 +1,9 @@
 import { z } from 'zod';
 
-import type { KnowledgeBaseItem } from '@/database/schemas';
-
+import { pageInfoShape, totalShape } from '../helpers/pagination';
+import type { PUBLIC_KNOWLEDGE_BASE_FIELDS, PublicKnowledgeBase } from '../helpers/public-fields';
 import type { IPaginationQuery, PaginationQueryResponse } from './common.type';
-import { PaginationQuerySchema } from './common.type';
+import { dateTimeSchema, jsonObjectSchema, PaginationQuerySchema } from './common.type';
 
 // ==================== Knowledge Base Query Types ====================
 
@@ -37,7 +37,9 @@ export interface KnowledgeBaseFileBatchRequest {
 }
 
 export const KnowledgeBaseFileBatchSchema = z.object({
-  fileIds: z.array(z.string().min(1, 'File ID cannot be empty')).min(1, 'File ID list cannot be empty'),
+  fileIds: z
+    .array(z.string().min(1, 'File ID cannot be empty'))
+    .min(1, 'File ID list cannot be empty'),
 });
 
 /**
@@ -83,7 +85,7 @@ export interface MoveKnowledgeBaseFilesResponse {
  */
 export type KnowledgeBaseAccessType = 'owner' | 'userGrant' | 'roleGrant' | 'public';
 
-export interface KnowledgeBaseListItem extends KnowledgeBaseItem {
+export interface KnowledgeBaseListItem extends PublicKnowledgeBase {
   /** The access source type for the current user on this knowledge base */
   accessType?: KnowledgeBaseAccessType;
 }
@@ -117,7 +119,10 @@ export interface CreateKnowledgeBaseRequest {
 export const CreateKnowledgeBaseSchema = z.object({
   avatar: z.string().url('Avatar must be a valid URL').optional(),
   description: z.string().max(1000, 'Knowledge base description is too long').optional(),
-  name: z.string().min(1, 'Knowledge base name cannot be empty').max(255, 'Knowledge base name is too long'),
+  name: z
+    .string()
+    .min(1, 'Knowledge base name cannot be empty')
+    .max(255, 'Knowledge base name is too long'),
 });
 
 /**
@@ -125,7 +130,7 @@ export const CreateKnowledgeBaseSchema = z.object({
  */
 export interface CreateKnowledgeBaseResponse {
   /** Knowledge base info */
-  knowledgeBase: KnowledgeBaseItem;
+  knowledgeBase: PublicKnowledgeBase;
 }
 
 /**
@@ -143,7 +148,11 @@ export interface UpdateKnowledgeBaseRequest {
 export const UpdateKnowledgeBaseSchema = z.object({
   avatar: z.string().url('Avatar must be a valid URL').optional(),
   description: z.string().max(1000, 'Knowledge base description is too long').optional(),
-  name: z.string().min(1, 'Knowledge base name cannot be empty').max(255, 'Knowledge base name is too long').optional(),
+  name: z
+    .string()
+    .min(1, 'Knowledge base name cannot be empty')
+    .max(255, 'Knowledge base name is too long')
+    .optional(),
 });
 
 /**
@@ -151,15 +160,62 @@ export const UpdateKnowledgeBaseSchema = z.object({
  */
 export interface KnowledgeBaseDetailResponse {
   /** Knowledge base info */
-  knowledgeBase: KnowledgeBaseItem;
+  knowledgeBase: PublicKnowledgeBase;
 }
 
+// ==================== Response Schemas ====================
+
+/** Every column `projectPublicKnowledgeBase` copies, so a new public field fails to compile here. */
+const knowledgeBaseShape = {
+  avatar: z.string().nullable(),
+  createdAt: dateTimeSchema,
+  description: z.string().nullable(),
+  id: z.string(),
+  isPublic: z.boolean().nullable(),
+  name: z.string(),
+  settings: jsonObjectSchema.nullable(),
+  /** `agent` / `project` for a dedicated library; null for an ordinary one. */
+  type: z.string().nullable(),
+  updatedAt: dateTimeSchema,
+  visibility: z.enum(['private', 'public']),
+} satisfies Record<(typeof PUBLIC_KNOWLEDGE_BASE_FIELDS)[number], z.ZodType>;
+
+export const KnowledgeBaseSchema = z
+  .object(knowledgeBaseShape)
+  .strict()
+  .meta({ id: 'KnowledgeBase' });
+
+export const KnowledgeBaseListItemSchema = KnowledgeBaseSchema.extend({
+  /** How the caller reaches this knowledge base. */
+  accessType: z.enum(['owner', 'userGrant', 'roleGrant', 'public']),
+})
+  .strict()
+  .meta({ id: 'KnowledgeBaseListItem' });
+
+export const KnowledgeBaseListResponseSchema = z
+  .object({
+    ...pageInfoShape,
+    knowledgeBases: z.array(KnowledgeBaseListItemSchema),
+    ...totalShape,
+  })
+  .strict()
+  .meta({ id: 'KnowledgeBaseList' });
+
+/** Detail, create and update all wrap the knowledge base under `knowledgeBase`. */
+export const KnowledgeBaseDetailResponseSchema = z
+  .object({ knowledgeBase: KnowledgeBaseSchema })
+  .strict()
+  .meta({ id: 'KnowledgeBaseDetail' });
+
 /**
- * Delete knowledge base response type
+ * Outcome of adding, removing or moving file associations. Files the caller
+ * cannot reach are reported in `failed` instead of failing the whole call.
  */
-export interface DeleteKnowledgeBaseResponse {
-  /** Response message */
-  message?: string;
-  /** Whether the deletion was successful */
-  success: boolean;
-}
+export const KnowledgeBaseFileOperationResultSchema = z
+  .object({
+    failed: z.array(z.object({ fileId: z.string(), reason: z.string() }).strict()),
+    /** Ids of the files the operation applied to (spelling kept for compatibility). */
+    successed: z.array(z.string()),
+  })
+  .strict()
+  .meta({ id: 'KnowledgeBaseFileOperationResult' });

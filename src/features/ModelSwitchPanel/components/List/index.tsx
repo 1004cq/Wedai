@@ -4,8 +4,12 @@ import { useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useBusinessModelListGuard } from '@/business/client/hooks/useBusinessModelListGuard';
+import { useBusinessModelPricing } from '@/business/client/hooks/useBusinessModelPricing';
+import { useBusinessModelRating } from '@/business/client/hooks/useBusinessModelRating';
 import { useEnabledChatModels } from '@/hooks/useEnabledChatModels';
+import { useSingleton } from '@/hooks/useSingleton';
 import type { EnabledProviderWithModels } from '@/types/aiProvider';
+import { filterHiddenModels } from '@/utils/filterHiddenModels';
 
 import { FOOTER_HEIGHT, ITEM_HEIGHT, MAX_PANEL_HEIGHT, TOOLBAR_HEIGHT } from '../../const';
 import { useBuildListItems } from '../../hooks/useBuildListItems';
@@ -17,8 +21,11 @@ import { menuKey } from '../../utils';
 import type { PricingMode } from '../ModelDetailPanel';
 import GenerationListItemRenderer from './GenerationListItemRenderer';
 import { ListItemRenderer } from './ListItemRenderer';
+import { MetaColumnsContext, resolveMetaColumns } from './metaColumns';
 
 interface ListProps {
+  /** Muted text shown after the active model's name, e.g. its reasoning effort */
+  activeSecondaryText?: string;
   enabledList?: EnabledProviderWithModels[];
   groupMode: GroupMode;
   model?: string;
@@ -32,6 +39,7 @@ interface ListProps {
 
 export const List: FC<ListProps> = ({
   ModelItemComponent,
+  activeSecondaryText,
   enabledList: enabledListProp,
   groupMode,
   model: modelProp,
@@ -43,18 +51,39 @@ export const List: FC<ListProps> = ({
 }) => {
   const { t: tCommon } = useTranslation('common');
   const newLabel = tCommon('new');
-  const { isModelRestricted, onBeforeModelSelect, onRestrictedModelClick, sortModelLast } =
-    useBusinessModelListGuard();
-  const proLabel = isModelRestricted ? tCommon('pro') : undefined;
+  const {
+    isModelHidden,
+    isModelRestricted,
+    onBeforeModelSelect,
+    onRestrictedModelClick,
+    restrictedBadgeLabel,
+    sortModelLast,
+  } = useBusinessModelListGuard();
+  const proLabel = tCommon('pro');
+  const getRestrictedLabel = useCallback(
+    (modelId: string, providerId: string) =>
+      restrictedBadgeLabel?.(modelId, providerId) ?? proLabel,
+    [proLabel, restrictedBadgeLabel],
+  );
 
   const chatEnabledList = useEnabledChatModels();
-  const enabledList = enabledListProp ?? chatEnabledList;
+  const enabledList = useMemo(
+    () => filterHiddenModels(enabledListProp ?? chatEnabledList, isModelHidden),
+    [chatEnabledList, enabledListProp, isModelHidden],
+  );
   const { model, provider } = useModelAndProvider(modelProp, providerProp);
   const { handleModelChange, handleClose } = usePanelHandlers({
     onModelChange: onModelChangeProp,
     onOpenChange,
   });
   const listItems = useBuildListItems(enabledList, groupMode, searchKeyword, sortModelLast);
+
+  const resolvePricing = useBusinessModelPricing();
+  const resolveRating = useBusinessModelRating();
+  const metaColumns = useMemo(
+    () => resolveMetaColumns(listItems, resolvePricing, resolveRating),
+    [listItems, resolvePricing, resolveRating],
+  );
 
   const panelHeight = useMemo(
     () =>
@@ -77,16 +106,19 @@ export const List: FC<ListProps> = ({
 
   const listHeight = panelHeight - TOOLBAR_HEIGHT - FOOTER_HEIGHT;
 
-  const scrollListenersRef = useRef(new Set<() => void>());
-  const subscribeScroll = useCallback((cb: () => void) => {
-    scrollListenersRef.current.add(cb);
-    return () => {
-      scrollListenersRef.current.delete(cb);
-    };
-  }, []);
+  const scrollListeners = useSingleton(() => new Set<() => void>());
+  const subscribeScroll = useCallback(
+    (cb: () => void) => {
+      scrollListeners.add(cb);
+      return () => {
+        scrollListeners.delete(cb);
+      };
+    },
+    [scrollListeners],
+  );
   const handleListScroll = useCallback(() => {
-    scrollListenersRef.current.forEach((cb) => cb());
-  }, []);
+    scrollListeners.forEach((cb) => cb());
+  }, [scrollListeners]);
 
   useLayoutEffect(() => {
     if (hasInitializedPositionRef.current) return;
@@ -111,59 +143,62 @@ export const List: FC<ListProps> = ({
       style={{ minHeight: 0 }}
       onScroll={handleListScroll}
     >
-      {listItems.map((item, index) => {
-        const itemKey = menuKey(
-          'provider' in item && item.provider ? item.provider.id : '',
-          'model' in item && item.model
-            ? item.model.id
-            : 'data' in item && item.data
-              ? item.data.displayName
-              : `${item.type}-${index}`,
-        );
-        const isActive =
-          (item.type === 'provider-model-item' &&
-            menuKey(item.provider.id, item.model.id) === activeKey) ||
-          (item.type === 'model-item-single' &&
-            menuKey(item.data.providers[0].id, item.data.model.id) === activeKey) ||
-          (item.type === 'model-item-multiple' &&
-            item.data.providers.some((p) => menuKey(p.id, item.data.model.id) === activeKey));
-
-        const renderItem = (key?: string) =>
-          ModelItemComponent ? (
-            <GenerationListItemRenderer
-              ModelItemComponent={ModelItemComponent}
-              activeKey={activeKey}
-              enabledList={enabledList}
-              item={item}
-              key={key}
-              pricingMode={pricingMode}
-              onClose={handleClose}
-              onModelChange={handleModelChange}
-            />
-          ) : (
-            <ListItemRenderer
-              activeKey={activeKey}
-              isModelRestricted={isModelRestricted}
-              item={item}
-              key={key}
-              newLabel={newLabel}
-              proLabel={proLabel}
-              subscribeScroll={subscribeScroll}
-              onBeforeModelSelect={onBeforeModelSelect}
-              onClose={handleClose}
-              onModelChange={handleModelChange}
-              onRestrictedModelClick={onRestrictedModelClick}
-            />
+      <MetaColumnsContext value={metaColumns}>
+        {listItems.map((item, index) => {
+          const itemKey = menuKey(
+            'provider' in item && item.provider ? item.provider.id : '',
+            'model' in item && item.model
+              ? item.model.id
+              : 'data' in item && item.data
+                ? item.data.displayName
+                : `${item.type}-${index}`,
           );
+          const isActive =
+            (item.type === 'provider-model-item' &&
+              menuKey(item.provider.id, item.model.id) === activeKey) ||
+            (item.type === 'model-item-single' &&
+              menuKey(item.data.providers[0].id, item.data.model.id) === activeKey) ||
+            (item.type === 'model-item-multiple' &&
+              item.data.providers.some((p) => menuKey(p.id, item.data.model.id) === activeKey));
 
-        return isActive ? (
-          <div key={itemKey} ref={activeItemRef}>
-            {renderItem()}
-          </div>
-        ) : (
-          renderItem(itemKey)
-        );
-      })}
+          const renderItem = (key?: string) =>
+            ModelItemComponent ? (
+              <GenerationListItemRenderer
+                ModelItemComponent={ModelItemComponent}
+                activeKey={activeKey}
+                enabledList={enabledList}
+                item={item}
+                key={key}
+                pricingMode={pricingMode}
+                onClose={handleClose}
+                onModelChange={handleModelChange}
+              />
+            ) : (
+              <ListItemRenderer
+                activeKey={activeKey}
+                activeSecondaryText={activeSecondaryText}
+                getRestrictedLabel={getRestrictedLabel}
+                isModelRestricted={isModelRestricted}
+                item={item}
+                key={key}
+                newLabel={newLabel}
+                subscribeScroll={subscribeScroll}
+                onBeforeModelSelect={onBeforeModelSelect}
+                onClose={handleClose}
+                onModelChange={handleModelChange}
+                onRestrictedModelClick={onRestrictedModelClick}
+              />
+            );
+
+          return isActive ? (
+            <div key={itemKey} ref={activeItemRef}>
+              {renderItem()}
+            </div>
+          ) : (
+            renderItem(itemKey)
+          );
+        })}
+      </MetaColumnsContext>
     </Flexbox>
   );
 };

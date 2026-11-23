@@ -16,6 +16,9 @@ export interface ApiKeyItem {
   keyDecryptionFailed?: boolean;
   lastUsedAt?: Date | null;
   name: string;
+  // Capability scopes. `null`/absent = full access (legacy keys), `['*']` =
+  // explicit full access, otherwise a restricted scope list.
+  scopes?: string[] | null;
   updatedAt: Date;
   userId: string;
 }
@@ -23,10 +26,35 @@ export interface ApiKeyItem {
 export interface CreateApiKeyParams {
   expiresAt?: Date | null;
   name: string;
+  scopes?: string[] | null;
 }
 
 export interface UpdateApiKeyParams {
   enabled?: boolean;
   expiresAt?: Date | null;
   name?: string;
+  scopes?: string[] | null;
 }
+
+export type WorkspaceApiKeyMemberCreation = 'admins_only' | 'all_members';
+
+/**
+ * Who may connect, re-authorize, sync or remove the workspace's shared
+ * connectors. Workspace owners and admins always can; `all_members` (the
+ * default) lets every member co-maintain them. Reading or rewriting another
+ * member's stored credentials stays with that creator and the workspace owner.
+ */
+export type WorkspaceConnectorMemberManage = 'admins_only' | 'all_members';
+
+/**
+ * Who may see and use a workspace connector (`user_connectors.visibility`),
+ * mirroring devices / agents:
+ * - `public` — shared with the workspace: every member sees it and every agent
+ *   in the workspace may load it.
+ * - `private` — the creator's own (私人): only the creator sees it, and only the
+ *   creator's private agents load it.
+ * Ignored for personal connectors (`workspace_id IS NULL`), which are
+ * implicitly private to their owner.
+ */
+export const CONNECTOR_VISIBILITIES = ['private', 'public'] as const;
+export type ConnectorVisibility = (typeof CONNECTOR_VISIBILITIES)[number];

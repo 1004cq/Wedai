@@ -67,8 +67,10 @@ COPY package.json pnpm-workspace.yaml ./
 COPY .npmrc ./
 COPY packages ./packages
 COPY patches ./patches
-# bring in desktop workspace manifest so pnpm can resolve it
+# workspace manifests must exist before pnpm i so --filter can resolve them
 COPY apps/desktop/src/main/package.json ./apps/desktop/src/main/package.json
+COPY apps/share/package.json ./apps/share/package.json
+COPY apps/workbench/package.json ./apps/workbench/package.json
 
 # BuildKit cache mounts keep pnpm/npm downloads across rebuilds without copying credentials into layers.
 RUN --mount=type=cache,id=wedai-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
@@ -87,7 +89,7 @@ RUN --mount=type=cache,id=wedai-pnpm-store,target=/root/.local/share/pnpm/store,
     mkdir -p /deps && \
     cd /deps && \
     echo '{"name":"deps","private":true}' > package.json && \
-    pnpm add pg drizzle-orm
+    pnpm add pg drizzle-orm @neondatabase/serverless
 
 COPY . .
 
@@ -134,14 +136,19 @@ COPY --from=builder /app/scripts/migrateServerDB/errorHint.js /app/errorHint.js
 COPY --from=builder /deps/node_modules/.pnpm /app/node_modules/.pnpm
 COPY --from=builder /deps/node_modules/pg /app/node_modules/pg
 COPY --from=builder /deps/node_modules/drizzle-orm /app/node_modules/drizzle-orm
+COPY --from=builder /deps/node_modules/@neondatabase /app/node_modules/@neondatabase
 
 # Copy server launcher and shared scripts
 COPY --from=builder /app/scripts/serverLauncher/startServer.js /app/startServer.js
 COPY --from=builder /app/scripts/_shared /app/scripts/_shared
 
+# /app/.elasticsearch-reindex is the default checkpoint directory of the Elasticsearch reindex
+# command. Creating it here lets a Docker named volume mounted on it inherit nextjs ownership so
+# the one-off Compose service can write checkpoints without running as root.
 RUN set -e && \
     addgroup -S -g 1001 nodejs && \
     adduser -D -G nodejs -H -S -h /app -u 1001 nextjs && \
+    mkdir -p /app/.elasticsearch-reindex && \
     chown -R nextjs:nodejs /app /etc/proxychains4.conf
 
 ## Production image, copy all the files and run next

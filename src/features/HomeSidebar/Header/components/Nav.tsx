@@ -1,0 +1,72 @@
+'use client';
+
+import { Flexbox, Tag } from '@lobehub/ui';
+import { memo } from 'react';
+import { useTranslation } from 'react-i18next';
+
+import NavItem from '@/features/NavPanel/components/NavItem';
+import { type NavItemProps } from '@/features/NavPanel/components/NavItem';
+import { useNavItemMetrics } from '@/features/NavPanel/density';
+import { useWorkspaceAwareNavigate } from '@/features/Workspace/useWorkspaceAwareNavigate';
+import WorkspaceLink from '@/features/Workspace/WorkspaceLink';
+import { useActiveTabKey } from '@/hooks/useActiveTabKey';
+import { useNavLayout } from '@/hooks/useNavLayout';
+import { isModifierClick } from '@/utils/navigation';
+
+import { resolveHeaderItems } from '../headerItems';
+import InboxRow from './InboxRow';
+
+const Nav = memo(() => {
+  const tab = useActiveTabKey();
+  const navigate = useWorkspaceAwareNavigate();
+  const { t } = useTranslation('common');
+  const { topNavItems: items } = useNavLayout();
+  const { panelPaddingInline } = useNavItemMetrics();
+
+  const newBadge = (
+    <Tag color="blue" size="small">
+      {t('new')}
+    </Tag>
+  );
+
+  return (
+    <Flexbox gap={1} paddingInline={panelPaddingInline}>
+      <InboxRow />
+      {resolveHeaderItems(items).rows.map((item) => {
+        const extra = item.isNew ? newBadge : undefined;
+
+        const navItem = (
+          <NavItem
+            active={tab === item.key}
+            extra={extra}
+            hidden={item.hidden}
+            icon={item.icon as NavItemProps['icon']}
+            title={item.title}
+            onClick={item.onClick}
+          />
+        );
+
+        if (!item.url) return <div key={item.key}>{navItem}</div>;
+
+        return (
+          <WorkspaceLink
+            key={item.key}
+            to={item.url}
+            onClick={(e) => {
+              if (isModifierClick(e)) return;
+              e.preventDefault();
+              item?.onClick?.();
+              if (item.url) {
+                navigate(item.url);
+              }
+            }}
+          >
+            {navItem}
+          </WorkspaceLink>
+        );
+      })}
+    </Flexbox>
+  );
+});
+
+export default Nav;

@@ -1,0 +1,71 @@
+import Billing from '@/business/client/BusinessSettingPages/Billing';
+import Credits from '@/business/client/BusinessSettingPages/Credits';
+import Plans from '@/business/client/BusinessSettingPages/Plans';
+import Referral from '@/business/client/BusinessSettingPages/Referral';
+import Usage from '@/business/client/BusinessSettingPages/Usage';
+import { SettingsTabs } from '@/store/global/initialState';
+
+import About from '../about';
+import Advanced from '../advanced';
+import APIKey from '../apikey';
+import Appearance from '../appearance';
+import Automations from '../automations';
+import Conversation from '../conversation';
+import Creds from '../creds';
+import Devices from '../devices';
+import Environments from '../environments';
+import Hotkey from '../hotkey';
+import Labels from '../labels';
+import Labs from '../labs';
+import Memory from '../memory';
+import { DesktopNotificationSettings } from '../notification';
+import OAuthApps from '../oauth-apps';
+import Profile from '../profile';
+import Provider from '../provider';
+import Proxy from '../proxy';
+import Security from '../security';
+import ServiceModel from '../service-model';
+import Stats from '../stats';
+import Storage from '../storage';
+import SubscriptionAccounts from '../subscription-accounts';
+import SystemTools from '../system-tools';
+import Tools from '../tools';
+import Trash from '../trash';
+import Webhooks from '../webhooks';
+
+export const componentMap = {
+  [SettingsTabs.Advanced]: Advanced,
+  [SettingsTabs.Labs]: Labs,
+  [SettingsTabs.Appearance]: Appearance,
+  [SettingsTabs.Conversation]: Conversation,
+  [SettingsTabs.Provider]: Provider,
+  [SettingsTabs.ServiceModel]: ServiceModel,
+  [SettingsTabs.Memory]: Memory,
+  [SettingsTabs.Notification]: DesktopNotificationSettings,
+  [SettingsTabs.About]: About,
+  [SettingsTabs.Hotkey]: Hotkey,
+  [SettingsTabs.Proxy]: Proxy,
+  [SettingsTabs.SystemTools]: SystemTools,
+  [SettingsTabs.Storage]: Storage,
+  [SettingsTabs.Trash]: Trash,
+  [SettingsTabs.Devices]: Devices,
+  [SettingsTabs.Environments]: Environments,
+  [SettingsTabs.SubscriptionAccounts]: SubscriptionAccounts,
+  [SettingsTabs.Labels]: Labels,
+  // Profile related tabs
+  [SettingsTabs.Profile]: Profile,
+  [SettingsTabs.Stats]: Stats,
+  [SettingsTabs.Usage]: Usage,
+  [SettingsTabs.APIKey]: APIKey,
+  [SettingsTabs.OAuthApps]: OAuthApps,
+  [SettingsTabs.Creds]: Creds,
+  [SettingsTabs.Security]: Security,
+  [SettingsTabs.Automations]: Automations,
+  [SettingsTabs.Webhooks]: Webhooks,
+  [SettingsTabs.Tools]: Tools,
+
+  [SettingsTabs.Plans]: Plans,
+  [SettingsTabs.Credits]: Credits,
+  [SettingsTabs.Billing]: Billing,
+  [SettingsTabs.Referral]: Referral,
+};

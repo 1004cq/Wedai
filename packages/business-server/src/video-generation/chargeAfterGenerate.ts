@@ -2,10 +2,12 @@
  * chargeAfterGenerate (video) — settle or release video generation credits.
  */
 import { BillingCommandService } from '@lobechat/billing';
+import type { VideoGenerationRoute } from '@lobechat/types';
+
 import { getServerDB } from '@/database/core/db-adaptor';
 
 interface ChargeParams {
-  computePriceParams?: { generateAudio?: boolean; resolution?: string };
+  computePriceParams?: { duration?: number; generateAudio?: boolean; resolution?: string };
   isError?: boolean;
   latency?: number;
   metadata: {
@@ -17,13 +19,23 @@ interface ChargeParams {
   model: string;
   prechargeResult?: Record<string, unknown>;
   provider: string;
+  /** Provider route used for the generation (optional attribution). */
+  route?: VideoGenerationRoute;
   usage?: { completionTokens: number; totalTokens: number };
   userId: string;
   workspaceId?: string;
 }
 
-function isVideoPrechargeResult(v: unknown): v is { billingAccountId: string; creditsHeld: string; requestId: string } {
-  return !!v && typeof v === 'object' && 'billingAccountId' in v && 'creditsHeld' in v && 'requestId' in v;
+function isVideoPrechargeResult(
+  v: unknown,
+): v is { billingAccountId: string; creditsHeld: string; requestId: string } {
+  return (
+    !!v &&
+    typeof v === 'object' &&
+    'billingAccountId' in v &&
+    'creditsHeld' in v &&
+    'requestId' in v
+  );
 }
 
 export async function chargeAfterGenerate(params: ChargeParams): Promise<void> {

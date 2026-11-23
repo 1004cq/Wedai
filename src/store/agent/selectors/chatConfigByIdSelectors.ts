@@ -3,9 +3,17 @@ import {
   DEFAULT_AGENT_SEARCH_FC_MODEL,
   isDesktop,
 } from '@lobechat/const';
-import { type LobeAgentChatConfig, type RuntimeEnvMode } from '@lobechat/types';
+import {
+  type DeviceExecutionTarget,
+  type LobeAgentChatConfig,
+  type RuntimeEnvMode,
+} from '@lobechat/types';
 
-import { resolveRuntimeMode, resolveToolMode } from '@/helpers/executionTarget';
+import {
+  executionTargetToRuntimeMode,
+  resolveExecutionTarget,
+  resolveToolMode,
+} from '@/helpers/executionTarget';
 import { resolveGatewayModeEnabled } from '@/helpers/gatewayMode';
 import { type AgentStoreState } from '@/store/agent/initialState';
 
@@ -69,29 +77,27 @@ const isLocalSystemEnabledById = (agentId: string) => (s: AgentStoreState) =>
  * `agencyConfig.executionTarget` (sandbox → cloud, local → local, device →
  * none).
  */
+/**
+ * The agent's effective execution target. On web a bound `local` target only
+ * surfaces as `device` (not `sandbox`) when Gateway mode is effectively
+ * enabled and can route to the device; the gate derives from this selector's
+ * own state so it re-evaluates on `disableGatewayMode` changes. Workspace
+ * agents never execute on the current member's own client — their stored
+ * `local` coerces away (see `workspaceScoped`).
+ */
+const getExecutionTargetById =
+  (agentId: string) =>
+  (s: AgentStoreState): DeviceExecutionTarget =>
+    resolveExecutionTarget(agentSelectors.getAgentConfigById(agentId)(s)?.agencyConfig, {
+      clientExecutionAvailable: isDesktop,
+      deviceRoutingAvailable: resolveGatewayModeEnabled(s, agentId),
+      workspaceScoped: !!s.agentMap[agentId]?.workspaceId,
+    });
+
 const getRuntimeModeById =
   (agentId: string) =>
-  (s: AgentStoreState): RuntimeEnvMode => {
-    const config = agentSelectors.getAgentConfigById(agentId)(s);
-
-    // On web a bound `local` target only surfaces as `device` (not `sandbox`)
-    // when Gateway mode is effectively enabled and can route to the device
-    //. Derive the gate from this selector's own state `s` so it
-    // re-evaluates on `disableGatewayMode` changes without a second global read.
-    // Workspace agents never execute on the current member's own client —
-    // their default/stored `local` coerces away (see `workspaceScoped`).
-    return resolveRuntimeMode(
-      config?.agencyConfig,
-      isDesktop,
-      resolveGatewayModeEnabled(s, agentId),
-      !!s.agentMap[agentId]?.workspaceId,
-    );
-  };
-
-const getSkillActivateModeById =
-  (agentId: string) =>
-  (s: AgentStoreState): 'auto' | 'manual' =>
-    getChatConfigById(agentId)(s).skillActivateMode ?? 'auto';
+  (s: AgentStoreState): RuntimeEnvMode =>
+    executionTargetToRuntimeMode(getExecutionTargetById(agentId)(s));
 
 /**
  * Resolve the agent's tool mode via the shared `resolveToolMode` helper, so
@@ -115,11 +121,11 @@ export const chatConfigByIdSelectors = {
   getRuntimeModeById,
   getSearchFCModelById,
   getSearchModeById,
-  getSkillActivateModeById,
   getToolModeById,
   getUseModelBuiltinSearchById,
   isChatModeById,
   isEnableSearchById,
+  getExecutionTargetById,
   isLocalSystemEnabledById,
   isMemoryToolEnabledById,
 };

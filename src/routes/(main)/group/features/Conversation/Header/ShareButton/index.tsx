@@ -5,13 +5,15 @@ import { Share2 } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { DESKTOP_HEADER_ICON_SIZE, MOBILE_HEADER_ICON_SIZE } from '@/const/layoutTokens';
+import { MOBILE_HEADER_ICON_SIZE } from '@/const/layoutTokens';
 import { useShareModal } from '@/features/ShareModal';
 import { LazySharePopover as SharePopover } from '@/features/SharePopover/lazy';
 import { usePermission } from '@/hooks/usePermission';
-import { useChatStore } from '@/store/chat';
 import { useServerConfigStore } from '@/store/serverConfig';
 import { serverConfigSelectors } from '@/store/serverConfig/selectors';
+import { useHeaderActionSize } from '@/styles/density';
+
+import { useGroupContext } from '../../useGroupContext';
 
 interface ShareButtonProps {
   mobile?: boolean;
@@ -22,9 +24,13 @@ interface ShareButtonProps {
 const ShareButton = memo<ShareButtonProps>(({ mobile, setOpen, open }) => {
   const { openShareModal } = useShareModal({ open, setOpen });
   const { t } = useTranslation('common');
-  const activeTopicId = useChatStore((s) => s.activeTopicId);
+  // A group conversation *is* a conversation with its supervisor agent, so the
+  // topic-share policy is read off that agent — same resolution the group's
+  // messages and topics are written with.
+  const { agentId, topicId: activeTopicId } = useGroupContext();
   const enableTopicLinkShare = useServerConfigStore(serverConfigSelectors.enableBusinessFeatures);
   const { allowed: canShare, reason } = usePermission('edit_own_content');
+  const headerActionSize = useHeaderActionSize();
 
   // Hide share button when no topic exists (no messages sent yet)
   if (!activeTopicId) return null;
@@ -33,7 +39,7 @@ const ShareButton = memo<ShareButtonProps>(({ mobile, setOpen, open }) => {
     <ActionIcon
       disabled={!canShare}
       icon={Share2}
-      size={mobile ? MOBILE_HEADER_ICON_SIZE : DESKTOP_HEADER_ICON_SIZE}
+      size={mobile ? MOBILE_HEADER_ICON_SIZE : headerActionSize}
       title={canShare ? t('share') : reason}
       tooltipProps={{
         placement: 'bottom',
@@ -47,7 +53,9 @@ const ShareButton = memo<ShareButtonProps>(({ mobile, setOpen, open }) => {
   return (
     <>
       {enableTopicLinkShare ? (
-        <SharePopover onOpenModal={openShareModal}>{iconButton}</SharePopover>
+        <SharePopover agentId={agentId} onOpenModal={openShareModal}>
+          {iconButton}
+        </SharePopover>
       ) : (
         iconButton
       )}

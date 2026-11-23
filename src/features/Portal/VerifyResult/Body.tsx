@@ -1,7 +1,6 @@
 import type { VerifierType } from '@lobechat/types';
-import { Flexbox, Markdown, Text } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
-import { createStaticStyles, cssVar } from 'antd-style';
+import { formatDuration as formatDurationMs } from '@lobechat/utils';
+import { Button, createStaticStyles, cssVar, Flexbox, Markdown, Text } from '@lobehub/ui';
 import { ListTree } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { memo } from 'react';
@@ -12,14 +11,15 @@ import {
   useVerifyInstruction,
   useVerifyResults,
   useVerifyState,
-} from '@/features/Verify/hooks';
+} from '@/features/Acceptance/hooks';
 import { verifyService } from '@/services/verify';
 import { useChatStore } from '@/store/chat';
 import { chatPortalSelectors, threadSelectors } from '@/store/chat/selectors';
+import { densityVars } from '@/styles/densityVars';
 
 const styles = createStaticStyles(({ css, cssVar }) => ({
   confidenceCard: css`
-    padding: 12px;
+    padding: ${densityVars.contentGap};
     border: 1px solid ${cssVar.colorBorderSecondary};
     border-radius: ${cssVar.borderRadiusLG};
     background: ${cssVar.colorFillQuaternary};
@@ -45,7 +45,7 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
   `,
   metaRow: css`
     display: flex;
-    gap: 12px;
+    gap: ${densityVars.contentGap};
     align-items: center;
     justify-content: space-between;
 
@@ -87,7 +87,8 @@ const formatDuration = (started?: Date | string | null, completed?: Date | strin
   if (!started || !completed) return null;
   const ms = +new Date(completed) - +new Date(started);
   if (!Number.isFinite(ms) || ms <= 0) return null;
-  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+  if (ms < 1000) return `${ms}ms`;
+  return ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : formatDurationMs(ms);
 };
 
 const Field = memo<{ children: ReactNode; label: string }>(({ label, children }) => {

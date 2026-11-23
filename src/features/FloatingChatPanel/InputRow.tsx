@@ -1,6 +1,6 @@
 'use client';
 
-import { createGlobalStyle, createStaticStyles } from 'antd-style';
+import { createGlobalStyle, createStaticStyles } from '@lobehub/ui';
 import { type FocusEvent, memo, useCallback, useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 
@@ -56,7 +56,7 @@ const commitWithViewTransition = (commit: () => void) => {
   const previousViewTransitionName = root.style.viewTransitionName;
   root.style.viewTransitionName = 'none';
   const transition = (document as DocumentWithVT).startViewTransition!(() => {
-    // eslint-disable-next-line @eslint-react/dom/no-flush-sync
+    // eslint-disable-next-line @eslint-react/dom-no-flush-sync
     flushSync(commit);
   });
   const restore = () => {
@@ -72,9 +72,10 @@ const EXPANDED_RIGHT_ACTIONS: 'contextWindow'[] = ['contextWindow'];
 export interface InputRowProps {
   isCollapsed: boolean;
   onExpand: () => void;
+  showExpandBar?: boolean;
 }
 
-const InputRow = memo<InputRowProps>(({ isCollapsed, onExpand }) => {
+const InputRow = memo<InputRowProps>(({ isCollapsed, onExpand, showExpandBar = true }) => {
   const s = styles;
   const [renderedCollapsed, setRenderedCollapsed] = useState(isCollapsed);
   const [focused, setFocused] = useState(false);
@@ -115,11 +116,13 @@ const InputRow = memo<InputRowProps>(({ isCollapsed, onExpand }) => {
         onBlur={handleBlur}
         onFocus={handleFocus}
       >
-        <HoverExpandBar
-          bottomOffset={overlayHeight}
-          visible={isCollapsed && focused}
-          onExpand={onExpand}
-        />
+        {showExpandBar && (
+          <HoverExpandBar
+            bottomOffset={overlayHeight}
+            visible={isCollapsed && focused}
+            onExpand={onExpand}
+          />
+        )}
         <div className={s.surface}>
           <ChatInput
             allowExpand={false}

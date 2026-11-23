@@ -1,22 +1,40 @@
 import { LexicalRenderer } from '@lobehub/editor/renderer';
+import { PreviewGroup } from '@lobehub/ui';
 import type { SerializedEditorState } from 'lexical';
 import type { CSSProperties } from 'react';
 import { memo, useMemo } from 'react';
 
 import { ActionTagNode } from '@/features/ChatInput/InputEditor/ActionTag/ActionTagNode';
+import { ImageRefTagNode } from '@/features/ChatInput/InputEditor/ImageRefTag/ImageRefTagNode';
 import { LocalFileTagNode } from '@/features/ChatInput/InputEditor/LocalFileTag';
-import { mentionFilledClassName } from '@/features/ChatInput/InputEditor/mentionStyle';
+import { mentionPlainClassName } from '@/features/ChatInput/InputEditor/mentionStyle';
+import { ReferArtboardNode } from '@/features/ChatInput/InputEditor/ReferArtboard/ReferArtboardNode';
+import { ReferDocumentNode } from '@/features/ChatInput/InputEditor/ReferDocument/ReferDocumentNode';
 import { ReferTopicNode } from '@/features/ChatInput/InputEditor/ReferTopic/ReferTopicNode';
+
+import { downloadPreviewImage } from '../../components/downloadPreviewImage';
+import { richTextImageRenderers } from './richTextImageRenderers';
+import { richTextMentionRenderers } from './richTextMentionRenderers';
 
 interface RichTextMessageProps {
   editorState: unknown;
+  variant?: 'chat' | 'default';
 }
 
 const LINE_HEIGHT = 1.6;
 const style: CSSProperties = { '--common-line-height': LINE_HEIGHT } as CSSProperties;
-const EXTRA_NODES = [ActionTagNode, ReferTopicNode, LocalFileTagNode];
+const EXTRA_NODES = [
+  ActionTagNode,
+  ReferTopicNode,
+  ReferDocumentNode,
+  ReferArtboardNode,
+  LocalFileTagNode,
+  ImageRefTagNode,
+];
+const PREVIEW_OPTIONS = { onDownload: downloadPreviewImage };
+const RENDERERS = { ...richTextImageRenderers, ...richTextMentionRenderers };
 
-const RichTextMessage = memo<RichTextMessageProps>(({ editorState }) => {
+const RichTextMessage = memo<RichTextMessageProps>(({ editorState, variant = 'chat' }) => {
   const value = useMemo(() => {
     if (!editorState || typeof editorState !== 'object') return null;
     if (Object.keys(editorState as Record<string, unknown>).length === 0) return null;
@@ -26,13 +44,16 @@ const RichTextMessage = memo<RichTextMessageProps>(({ editorState }) => {
   if (!value) return null;
 
   return (
-    <LexicalRenderer
-      className={mentionFilledClassName}
-      extraNodes={EXTRA_NODES}
-      style={style}
-      value={value}
-      variant="chat"
-    />
+    <PreviewGroup preview={PREVIEW_OPTIONS}>
+      <LexicalRenderer
+        className={mentionPlainClassName}
+        extraNodes={EXTRA_NODES}
+        overrides={RENDERERS}
+        style={style}
+        value={value}
+        variant={variant}
+      />
+    </PreviewGroup>
   );
 });
 

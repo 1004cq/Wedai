@@ -33,21 +33,13 @@
  */
 import crypto from 'node:crypto';
 
-import { TRPCError } from '@trpc/server';
-import { and, desc, eq, sql } from 'drizzle-orm';
-import debug from 'debug';
-import Stripe from 'stripe';
-
 import { BillingCommandService } from '@lobechat/billing';
 import type { LobeChatDatabase } from '@lobechat/database';
-import {
-  BillingAccountModel,
-  OrderModel,
-  WebhookEventModel,
-  billingAccounts,
-  orders,
-  webhookEvents,
-} from '@lobechat/database';
+import { billingAccounts, orders, WebhookEventModel, webhookEvents } from '@lobechat/database';
+import { TRPCError } from '@trpc/server';
+import debug from 'debug';
+import { and, eq, sql } from 'drizzle-orm';
+import type Stripe from 'stripe';
 
 const log = debug('lobe-server:stripe-webhook');
 
@@ -55,10 +47,7 @@ const log = debug('lobe-server:stripe-webhook');
 // Supported event types
 // ─────────────────────────────────────────────────────────────────────────────
 
-const PAYMENT_SUCCESS_EVENTS = new Set([
-  'checkout.session.completed',
-  'payment_intent.succeeded',
-]);
+const PAYMENT_SUCCESS_EVENTS = new Set(['checkout.session.completed', 'payment_intent.succeeded']);
 
 const PAYMENT_FAILURE_EVENTS = new Set([
   'checkout.session.expired',
@@ -243,7 +232,10 @@ export class StripeWebhookService {
           const reason = `amount_mismatch`;
           await tx
             .update(webhookEvents)
-            .set({ failureReason: `amount_mismatch: expected=${order.amountMinor} got=${stripeAmount}`, status: 'failed' })
+            .set({
+              failureReason: `amount_mismatch: expected=${order.amountMinor} got=${stripeAmount}`,
+              status: 'failed',
+            })
             .where(eq(webhookEvents.id, webhookRow.id));
           // Log amounts for reconciliation; NOT card or customer data.
           console.error('[stripe-webhook] ALERT: amount_mismatch', {
@@ -265,7 +257,10 @@ export class StripeWebhookService {
           const reason = `currency_mismatch`;
           await tx
             .update(webhookEvents)
-            .set({ failureReason: `currency_mismatch: expected=${order.currency} got=${stripeCurrency}`, status: 'failed' })
+            .set({
+              failureReason: `currency_mismatch: expected=${order.currency} got=${stripeCurrency}`,
+              status: 'failed',
+            })
             .where(eq(webhookEvents.id, webhookRow.id));
           console.error('[stripe-webhook] ALERT: currency_mismatch', {
             attemptCount,
@@ -310,7 +305,10 @@ export class StripeWebhookService {
           const reason = `order_in_${order.status}_state`;
           await tx
             .update(webhookEvents)
-            .set({ failureReason: `unexpected_success_for_${order.status}_order`, status: 'failed' })
+            .set({
+              failureReason: `unexpected_success_for_${order.status}_order`,
+              status: 'failed',
+            })
             .where(eq(webhookEvents.id, webhookRow.id));
           console.error('[stripe-webhook] ALERT: unexpected_success_for_non_pending_order', {
             attemptCount,
@@ -345,7 +343,8 @@ export class StripeWebhookService {
           .where(eq(billingAccounts.id, order.billingAccountId))
           .limit(1);
 
-        if (!billingAcc) throw new TRPCError({ code: 'NOT_FOUND', message: 'billing account not found' });
+        if (!billingAcc)
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'billing account not found' });
 
         const priceSnap = order.priceSnapshot as { creditGrant?: string };
         const creditGrant = priceSnap?.creditGrant ? BigInt(priceSnap.creditGrant) : BigInt(0);

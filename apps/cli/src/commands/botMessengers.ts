@@ -20,7 +20,7 @@ import pc from 'picocolors';
 import { getTrpcClient } from '../api/client';
 import { confirm, outputJson, printTable } from '../utils/format';
 
-const PLATFORMS = ['telegram', 'slack', 'discord', 'wechat'] as const;
+const PLATFORMS = ['telegram', 'slack', 'discord', 'wechat', 'linq'] as const;
 type MessengerPlatform = (typeof PLATFORMS)[number];
 
 const validatePlatform = (value: string): MessengerPlatform => {
@@ -57,7 +57,7 @@ export function registerBotMessengersCommands(bot: Command) {
         console.log('No System Bot installations connected.');
         console.log(
           `\nRun ${pc.dim('lh bot messengers platforms')} to see what's available, then install via ` +
-            `${pc.dim('Settings → Messenger')} (OAuth requires a browser).`,
+            `${pc.dim('Marketplace → Apps')} (OAuth requires a browser).`,
         );
         return;
       }
@@ -178,7 +178,7 @@ export function registerBotMessengersCommands(bot: Command) {
       ]);
       printTable(rows, ['ID', 'NAME', 'APP ID', 'BOT USERNAME']);
       console.log(
-        `\nInstalls are initiated via ${pc.dim('Settings → Messenger')} in the web UI ` +
+        `\nInstalls are initiated via ${pc.dim('Marketplace → Apps')} in the web UI ` +
           '(OAuth needs a browser).',
       );
     });

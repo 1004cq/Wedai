@@ -1,29 +1,67 @@
-import { Flexbox } from '@lobehub/ui';
-import { type FC } from 'react';
+import { ScrollArea } from '@lobehub/ui';
+import { type FC, lazy, Suspense } from 'react';
 
 import HomePageTracker from '@/components/Analytics/HomePageTracker';
 import HomeContent from '@/features/Home';
+import { useHomeMinimalLayout } from '@/features/Home/CustomizeModal/useHomeCustomization';
 import HomeNavHeader from '@/features/Home/HomeNavHeader';
+import HomeViewTabs from '@/features/Home/HomeViewTabs';
+import { useHomeView } from '@/features/Home/useHomeView';
 import WideScreenContainer from '@/features/WideScreenContainer';
+import { useDensityTokens } from '@/styles/density';
+
+const HomeTeamBoard = lazy(() => import('@/features/HomeTeamBoard'));
 
 const Home: FC = () => {
+  // Auto margins are what center a flex item inside the scroll lane, and they
+  // have to sit on the item itself — the dashboard never wants them.
+  const minimal = useHomeMinimalLayout();
+  const { isWorkspace, setView, view } = useHomeView();
+  const density = useDensityTokens();
+  const teamBoard = view === 'team';
+
   return (
     <>
       <HomePageTracker />
-      <HomeNavHeader />
-      <Flexbox
-        height={'100%'}
-        style={{ overflow: 'hidden', paddingBlockStart: 32, paddingInline: 24 }}
-        width={'100%'}
+      <HomeNavHeader
+        showControls={!teamBoard}
+        tabs={isWorkspace ? <HomeViewTabs value={view} onChange={setView} /> : undefined}
+      />
+      <ScrollArea
+        disableContentFit
+        scrollFade
+        // Keep in sync with NavHeader's height so the track starts at its bottom edge.
+        scrollbarProps={{ style: { marginBlockStart: density.headerHeight } }}
+        style={{ height: '100%', overflow: 'hidden', width: '100%' }}
+        viewportProps={{ tabIndex: -1 }}
+        contentProps={{
+          style: {
+            boxSizing: 'border-box',
+            display: 'flex',
+            flexDirection: 'column',
+            minHeight: '100%',
+            paddingBlock: `${density.pagePaddingBlockStart}px ${density.pagePaddingBlockEnd}px`,
+            paddingInline: density.pagePaddingInline,
+          },
+        }}
       >
         <WideScreenContainer
           fullWidth
-          style={{ marginInline: 'auto', maxWidth: 1240, minHeight: 0 }}
-          wrapperStyle={{ flex: 1, minHeight: 0 }}
+          style={{ marginInline: 'auto', maxWidth: 1240 }}
+          wrapperStyle={{ flex: 'none', marginBlock: minimal && !teamBoard ? 'auto' : undefined }}
         >
-          <HomeContent />
+          {/* CSS only: Activity tears down effects, which resets the composer's editor
+              and loses a draft on a look at the board. */}
+          <div style={{ display: teamBoard ? 'none' : undefined }}>
+            <HomeContent />
+          </div>
+          {teamBoard && (
+            <Suspense fallback={null}>
+              <HomeTeamBoard />
+            </Suspense>
+          )}
         </WideScreenContainer>
-      </Flexbox>
+      </ScrollArea>
     </>
   );
 };

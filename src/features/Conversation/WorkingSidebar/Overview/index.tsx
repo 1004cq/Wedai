@@ -1,138 +1,162 @@
 'use client';
 
-import { Center, Empty, Flexbox, Icon, type IconProps, Skeleton, Tag, Text } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
+import type { DeviceGitLinkedPullRequest } from '@lobechat/types';
+import { Button, Center, Empty, Flexbox, toast } from '@lobehub/ui';
 import { SkillsIcon } from '@lobehub/ui/icons';
-import { createStaticStyles, cssVar, cx } from 'antd-style';
+import { cssVar } from '@lobehub/ui/stylex/cssVar.stylex';
+import * as stylex from '@stylexjs/stylex';
 import {
+  ArrowDownIcon,
+  ArrowUpIcon,
   BoxesIcon,
   ClipboardListIcon,
+  FilesIcon,
   FileTextIcon,
-  FolderGit2Icon,
   GitBranchIcon,
+  GitForkIcon,
   LaptopIcon,
-  RefreshCwIcon,
 } from 'lucide-react';
-import { memo, type ReactNode, useMemo } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import AsyncError from '@/components/AsyncError';
+import RingLoadingIcon from '@/components/RingLoading';
+import ThreadListSection from '@/features/AgentSidebar/Topic/TopicListContent/ThreadList/ThreadListSection';
+import { TopicBackgroundActivity } from '@/features/BackgroundActivity/TopicSection';
+import BranchSwitcher from '@/features/ChatInput/ControlBar/BranchSwitcher';
+import WorktreeSwitcher from '@/features/ChatInput/ControlBar/WorktreeSwitcher';
 import { getAllWorkSummaries } from '@/features/Conversation/store/slices/data/workSummaries';
+import type { TopicPullRequestView } from '@/features/TopicPullRequests/pullRequestView';
 import WorkSummaryCard from '@/features/Work/WorkSummaryCard';
+import { gitService } from '@/services/git';
 import { useAgentStore } from '@/store/agent';
 import { agentSelectors } from '@/store/agent/selectors';
 import { useChatStore } from '@/store/chat';
-import { dbMessageSelectors } from '@/store/chat/selectors';
-import { useFetchGitAheadBehind, useFetchGitBranch, useReviewPatches } from '@/store/device';
+import { dbMessageSelectors, topicSelectors } from '@/store/chat/selectors';
+import {
+  useFetchGitAheadBehind,
+  useFetchGitBranch,
+  useFetchGitWorktrees,
+  useReviewPatches,
+} from '@/store/device';
+import { useUserStore } from '@/store/user';
+import { labPreferSelectors } from '@/store/user/selectors';
+import { sidebarRow } from '@/styles/density.stylex';
 
+import { SidebarRowSkeleton } from '../DeferredSkeleton';
+import GoalSection from '../GoalSection';
 import ProgressSection from '../ProgressSection';
+import { toLinkedPullRequest } from '../PullRequest/useSidebarPullRequests';
+import { BackgroundTasksSection } from './BackgroundTasks';
+import DeviceStatusSection from './DeviceStatusSection';
+import KeptWorktreeRows, { RemovedWorktreeRow, useTopicWorktrees } from './KeptWorktreeRows';
+import { LinkPullRequestRow } from './LinkPullRequestRow';
+import {
+  collectChangeStats,
+  isLinkedWorktreeCheckout,
+  shouldShowGitSkeleton,
+} from './overviewData';
+import OverviewHeader from './OverviewHeader';
+import { ChevronRight, OverviewRow, PickerGlyph, rowStyles } from './OverviewRow';
+import PortSwitcher from './PortSwitcher';
+import PullRequestRow from './PullRequestRow';
+import PullRequestRowMenu from './PullRequestRowMenu';
+import { SectionHeader } from './SectionHeader';
+import { sectionProps } from './sectionStyles';
+import { TerminalRow } from './TerminalRow';
 
-const styles = createStaticStyles(({ css, cssVar }) => ({
-  body: css`
-    overflow-y: auto;
-    padding-block: 8px 12px;
-    padding-inline: 8px 12px;
-  `,
-  changeAdditions: css`
-    font-family: ${cssVar.fontFamilyCode};
-    font-size: 12px;
-    color: ${cssVar.colorSuccess};
-  `,
-  changeDeletions: css`
-    font-family: ${cssVar.fontFamilyCode};
-    font-size: 12px;
-    color: ${cssVar.colorError};
-  `,
-  error: css`
-    min-height: 112px;
-  `,
-  icon: css`
-    flex-shrink: 0;
-    margin-block-start: 1px;
-    color: ${cssVar.colorTextSecondary};
-  `,
-  row: css`
-    cursor: pointer;
-
-    min-height: 40px;
-    padding-block: 8px;
-    padding-inline: 8px;
-    border-radius: 6px;
-
-    transition: background-color 0.12s ease;
-
-    &:hover {
-      background: ${cssVar.colorFillTertiary};
-    }
-  `,
-  rowStatus: css`
-    cursor: default;
-
-    &:hover {
-      background: transparent;
-    }
-  `,
-  rowStatusPrimary: css`
-    font-weight: 400 !important;
-    color: ${cssVar.colorTextSecondary} !important;
-  `,
-  sectionHeader: css`
-    padding-block: 4px 6px;
-    padding-inline: 10px;
-  `,
-  sectionTitle: css`
-    font-size: 10.5px;
-    font-weight: 600;
-    color: ${cssVar.colorTextSecondary};
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-  `,
-  skeleton: css`
-    padding-block: 4px;
-    padding-inline: 10px;
-  `,
-  stats: css`
-    flex-shrink: 0;
-  `,
-}));
+const styles = stylex.create({
+  body: {
+    overflowY: 'auto',
+    paddingBlockStart: sidebarRow.paneBlockStart,
+    paddingBlockEnd: sidebarRow.paneBlockEnd,
+    paddingInline: sidebarRow.paneInline,
+  },
+});
 
 interface OverviewProps {
   active: boolean;
+  agentId?: string;
+  /** Routes file / git RPCs; empty for "This device", which reads over IPC. */
   deviceId?: string;
   environmentAvailable: boolean;
+  /** Remove one of {@link pullRequests} from the topic. */
+  onDismissPullRequest?: (pullRequest: TopicPullRequestView) => Promise<void>;
+  /** Link a PR by URL; resolves to its `owner/repo#n`. */
+  onLinkPullRequest?: (url: string) => Promise<string | undefined>;
+  /** Open one of {@link pullRequests}. */
+  onOpenPullRequest?: (pullRequest: TopicPullRequestView) => void;
   onOpenTab: (tab: string) => void;
+  onRefreshPullRequest: () => Promise<unknown>;
+  /** Parent-owned so the Overview row and the on-demand PR tab cannot disagree. */
+  pullRequest?: DeviceGitLinkedPullRequest | null;
+  /**
+   * Every PR the topic's Work rows link, listed
+   * under Changes in place of the single branch PR.
+   */
+  pullRequests?: TopicPullRequestView[];
   repoType?: string;
+  sourcePath?: string;
+  /** The bound machine whose live status to show, local desktop included. */
+  statusDeviceId?: string;
   workingDirectory?: string;
 }
 
 const pathBasename = (path: string) => path.replaceAll('\\', '/').split('/').findLast(Boolean);
 
-const OverviewRowLead = ({ children, icon }: { children: ReactNode; icon: IconProps['icon'] }) => (
-  <Flexbox horizontal align={'flex-start'} flex={1} gap={10} style={{ minWidth: 0 }}>
-    <Icon className={styles.icon} icon={icon} size={17} />
-    {children}
-  </Flexbox>
-);
-
 const Overview = memo<OverviewProps>(
-  ({ active, deviceId, environmentAvailable, onOpenTab, repoType, workingDirectory }) => {
+  ({
+    active,
+    agentId,
+    deviceId,
+    environmentAvailable,
+    onDismissPullRequest,
+    onLinkPullRequest,
+    onOpenPullRequest,
+    onOpenTab,
+    onRefreshPullRequest,
+    pullRequest,
+    pullRequests,
+    repoType,
+    sourcePath,
+    statusDeviceId,
+    workingDirectory,
+  }) => {
     const { t } = useTranslation('chat');
+    const { t: tDevice } = useTranslation('device');
     const isHetero = useAgentStore(agentSelectors.isCurrentAgentHeterogeneous);
+    const tunnelsEnabled = useUserStore(labPreferSelectors.enableDeviceTunnel);
     const topicId = useChatStore((s) => s.activeTopicId);
+    const topicStatus = useChatStore((s) => topicSelectors.currentActiveTopic(s)?.status);
+    const topicMetadata = useChatStore((s) => topicSelectors.currentActiveTopic(s)?.metadata);
     const threadId = useChatStore((s) => s.activeThreadId);
     const works = useChatStore((s) =>
       getAllWorkSummaries(dbMessageSelectors.activeDbMessages(s), threadId),
     );
 
-    const gitPath = active && repoType ? workingDirectory : undefined;
+    const topicWorktrees = useTopicWorktrees({
+      metadata: topicMetadata,
+      status: topicStatus,
+      topicId: topicId ?? undefined,
+      workingDirectory,
+    });
+    // A worktree the cleanup removed has no folder left to read git from.
+    const worktreeRemoved = !!topicWorktrees.removed;
+    const gitPath = active && repoType && !worktreeRemoved ? workingDirectory : undefined;
+    const isGithub = repoType === 'github';
     const {
       data: branchData,
       error: branchError,
+      isConfirmed: branchConfirmed,
       isLoading: branchLoading,
       mutate: mutateBranch,
     } = useFetchGitBranch(deviceId, gitPath);
+    const branch = branchData?.branch;
+    const detached = branchData?.detached;
     const {
       data: aheadBehind,
       error: aheadBehindError,
+      isConfirmed: aheadBehindConfirmed,
       mutate: mutateAheadBehind,
     } = useFetchGitAheadBehind(deviceId, gitPath);
     const {
@@ -141,207 +165,420 @@ const Overview = memo<OverviewProps>(
       isLoading: reviewLoading,
       mutate: mutateReview,
     } = useReviewPatches(gitPath, 'unstaged', undefined, deviceId, active);
+    const {
+      data: worktreesData,
+      isConfirmed: worktreesConfirmed,
+      isLoading: worktreesLoading,
+      mutate: mutateWorktrees,
+    } = useFetchGitWorktrees(deviceId, gitPath);
+    const worktrees = worktreesData ?? [];
+    const [switcherOpen, setSwitcherOpen] = useState(false);
+    const [pulling, setPulling] = useState(false);
+    const [pushing, setPushing] = useState(false);
 
-    const changeStats = useMemo(() => {
-      const patches = [
-        ...(reviewData?.patches ?? []),
-        ...(reviewData?.submodules ?? []).flatMap((submodule) => submodule.patches),
-      ];
-
-      return patches.reduce(
-        (stats, patch) => ({
-          additions: stats.additions + (patch.additions ?? 0),
-          deletions: stats.deletions + (patch.deletions ?? 0),
-          files: stats.files + 1,
-        }),
-        { additions: 0, deletions: 0, files: 0 },
-      );
-    }, [reviewData]);
+    const changeStats = useMemo(() => collectChangeStats(reviewData), [reviewData]);
 
     const gitError = branchError || aheadBehindError || reviewError;
-    const isGitLoading = branchLoading || reviewLoading;
+    // Stale-first: the small git reads are replicas (`@/store/device/gitStatus`),
+    // so after a reload they paint from the persisted copy while the rest (e.g.
+    // the diff patches) are still in flight. Only fall back to the skeleton when
+    // nothing at all is there yet; rows whose own read is pending render a
+    // placeholder instead.
+    const isGitLoading = shouldShowGitSkeleton({
+      hasData:
+        branchData !== undefined ||
+        aheadBehind !== undefined ||
+        reviewData !== undefined ||
+        worktreesData !== undefined,
+      loading: branchLoading || reviewLoading || worktreesLoading,
+    });
+    const changesPending = reviewData === undefined && reviewLoading;
     const visibleWorks = works.slice(0, 3);
     const directoryName = workingDirectory ? pathBasename(workingDirectory) : undefined;
+    const hasWorkspace = environmentAvailable && !!workingDirectory;
+    const showEmptyWorkspace = environmentAvailable && !workingDirectory;
 
-    const retryGit = async () => {
-      await Promise.all([mutateBranch(), mutateAheadBehind(), mutateReview()]);
-    };
+    const isLinkedWorktree = isLinkedWorktreeCheckout(workingDirectory, worktrees);
 
-    return (
-      <Flexbox className={styles.body} gap={14}>
-        {environmentAvailable && (
-          <Flexbox>
-            <Flexbox
-              horizontal
-              align={'center'}
-              className={styles.sectionHeader}
-              justify={'space-between'}
+    const refreshGit = useCallback(async () => {
+      await Promise.all([
+        mutateBranch(),
+        mutateAheadBehind(),
+        mutateReview(),
+        mutateWorktrees(),
+        onRefreshPullRequest(),
+      ]);
+    }, [mutateBranch, mutateAheadBehind, mutateReview, mutateWorktrees, onRefreshPullRequest]);
+
+    // Flip the displayed branch instantly on checkout; the switcher's
+    // onAfterCheckout reconciles once the checkout lands (same as GitStatus).
+    const handleOptimisticCheckout = useCallback(
+      (nextBranch: string) => {
+        void mutateBranch({ branch: nextBranch, detached: false }, { revalidate: false });
+      },
+      [mutateBranch],
+    );
+
+    const syncBusy = pulling || pushing;
+    // The branch and its counts may be stale-first paints from the last
+    // session. Checkout, pull and push assume both still describe the live
+    // branch, so they stay inert until this session confirms both reads — a
+    // faster branch probe must not enable sync against the previous branch's
+    // ahead/behind snapshot.
+    const actionsBlocked = syncBusy || !branchConfirmed || !aheadBehindConfirmed;
+
+    const handlePull = useCallback(async () => {
+      if (syncBusy || !workingDirectory) return;
+      setPulling(true);
+      try {
+        const result = await gitService.pullGitBranch({ deviceId, path: workingDirectory });
+        if (result.success) {
+          if (result.noop) {
+            toast.info(tDevice('workingDirectory.pullNoop'));
+          } else {
+            toast.success(tDevice('workingDirectory.pullSuccess'));
+          }
+          await refreshGit();
+        } else {
+          toast.error(result.error || tDevice('workingDirectory.pullFailed'));
+        }
+      } finally {
+        setPulling(false);
+      }
+    }, [deviceId, refreshGit, syncBusy, tDevice, workingDirectory]);
+
+    const handlePush = useCallback(async () => {
+      if (syncBusy || !workingDirectory) return;
+      setPushing(true);
+      try {
+        const result = await gitService.pushGitBranch({ deviceId, path: workingDirectory });
+        if (result.success) {
+          if (result.noop) {
+            toast.info(tDevice('workingDirectory.pushNoop'));
+          } else {
+            toast.success(tDevice('workingDirectory.pushSuccess'));
+          }
+          await refreshGit();
+        } else {
+          toast.error(result.error || tDevice('workingDirectory.pushFailed'));
+        }
+      } finally {
+        setPushing(false);
+      }
+    }, [deviceId, refreshGit, syncBusy, tDevice, workingDirectory]);
+
+    const showAhead = !!aheadBehind?.hasUpstream && aheadBehind.ahead > 0;
+    const showBehind = !!aheadBehind?.hasUpstream && aheadBehind.behind > 0;
+
+    // The branch picker routes through the worktree list, so both reads must be
+    // confirmed before either picker may act on them.
+    const pickersReady = branchConfirmed && worktreesConfirmed;
+    const canSwitchBranch = !detached && !!agentId && !!workingDirectory && pickersReady;
+    const branchRow = (
+      <OverviewRow
+        icon={GitBranchIcon}
+        interactive={canSwitchBranch}
+        title={detached ? tDevice('workingDirectory.detachedHead', { sha: branch ?? '' }) : branch}
+        trailing={canSwitchBranch ? <PickerGlyph /> : undefined}
+        value={
+          detached ? (
+            <>
+              <span {...stylex.props(rowStyles.num)}>{branch}</span>
+              {t('workingPanel.overview.branch.detached')}
+            </>
+          ) : (
+            branch
+          )
+        }
+      />
+    );
+
+    // A topic's PRs are server records: they stay listed with
+    // their last known state even when the working directory cannot be read.
+    const topicPullRequestRows = pullRequests && (
+      <>
+        {pullRequests.map((view) => (
+          <PullRequestRow
+            key={view.identifier}
+            pullRequest={toLinkedPullRequest(view)}
+            tooltip={`${view.repoFullName}#${view.number} ${view.title}`}
+            unvouched={!view.vouched}
+            actions={
+              <PullRequestRowMenu
+                topicId={topicId}
+                view={view}
+                onDismiss={
+                  onDismissPullRequest &&
+                  (() =>
+                    void onDismissPullRequest(view).then(
+                      () =>
+                        toast.info(
+                          t('workingPanel.overview.pr.dismissed', { name: `#${view.number}` }),
+                        ),
+                      () =>
+                        toast.error(
+                          t('workingPanel.overview.pr.dismissFailed', { name: `#${view.number}` }),
+                        ),
+                    ))
+                }
+              />
+            }
+            onClick={() => onOpenPullRequest?.(view)}
+          />
+        ))}
+        {onLinkPullRequest && <LinkPullRequestRow onLink={onLinkPullRequest} />}
+      </>
+    );
+
+    const gitRows = (
+      <>
+        {branch &&
+          (canSwitchBranch ? (
+            <BranchSwitcher
+              agentId={agentId}
+              currentBranch={branch}
+              deviceId={deviceId}
+              isGithub={isGithub}
+              open={switcherOpen}
+              path={workingDirectory}
+              placement={'bottomLeft'}
+              sourcePath={sourcePath ?? workingDirectory}
+              worktrees={worktrees}
+              onAfterCheckout={() => void refreshGit()}
+              onExternalRefresh={refreshGit}
+              onOpenChange={setSwitcherOpen}
+              onOptimisticCheckout={handleOptimisticCheckout}
             >
-              <span className={styles.sectionTitle}>{t('workingPanel.overview.environment')}</span>
-              {workingDirectory && (
-                <Tag size={'small'}>
-                  {deviceId
-                    ? t('workingPanel.overview.execution.device')
-                    : t('workingPanel.overview.execution.local')}
-                </Tag>
-              )}
-            </Flexbox>
+              {branchRow}
+            </BranchSwitcher>
+          ) : (
+            branchRow
+          ))}
 
-            <Flexbox
-              horizontal
-              align={'flex-start'}
-              className={styles.row}
-              gap={10}
-              onClick={workingDirectory ? () => onOpenTab('files') : undefined}
-            >
-              <OverviewRowLead icon={workingDirectory ? FolderGit2Icon : LaptopIcon}>
-                <Flexbox flex={1} style={{ minWidth: 0 }}>
-                  <Text ellipsis weight={500}>
-                    {directoryName || t('workingPanel.overview.workspace.empty')}
-                  </Text>
-                  <Text ellipsis color={cssVar.colorTextTertiary} fontSize={12}>
-                    {workingDirectory || t('workingPanel.overview.workspace.emptyDesc')}
-                  </Text>
-                </Flexbox>
-              </OverviewRowLead>
-            </Flexbox>
-
-            {repoType && workingDirectory && isGitLoading ? (
-              <div className={styles.skeleton}>
-                <Skeleton active paragraph={{ rows: 2 }} title={false} />
-              </div>
-            ) : gitError ? (
-              <Center className={styles.error} gap={8}>
-                <Text type={'danger'}>{t('workingPanel.overview.environmentError')}</Text>
-                <Button icon={RefreshCwIcon} size={'small'} onClick={retryGit}>
-                  {t('retry', { ns: 'common' })}
-                </Button>
-              </Center>
-            ) : repoType && workingDirectory ? (
-              <>
-                <Flexbox
-                  horizontal
-                  align={'flex-start'}
-                  className={cx(styles.row, styles.rowStatus)}
-                  gap={10}
-                >
-                  <OverviewRowLead icon={GitBranchIcon}>
-                    <Flexbox flex={1}>
-                      <Text className={styles.rowStatusPrimary}>
-                        {t('workingPanel.overview.branch')}
-                      </Text>
-                    </Flexbox>
-                  </OverviewRowLead>
-                  <Flexbox horizontal align={'center'} className={styles.stats} gap={6}>
-                    <Text ellipsis fontSize={12} style={{ maxWidth: 128 }}>
-                      {branchData?.branch || t('workingPanel.overview.branch.detached')}
-                    </Text>
-                    {!!aheadBehind?.ahead && <Tag size={'small'}>↑{aheadBehind.ahead}</Tag>}
-                    {!!aheadBehind?.behind && <Tag size={'small'}>↓{aheadBehind.behind}</Tag>}
-                  </Flexbox>
-                </Flexbox>
-                <Flexbox
-                  horizontal
-                  align={'flex-start'}
-                  className={styles.row}
-                  gap={10}
-                  onClick={() => onOpenTab('review')}
-                >
-                  <OverviewRowLead icon={ClipboardListIcon}>
-                    <Flexbox flex={1} style={{ minWidth: 0 }}>
-                      <Text weight={500}>{t('workingPanel.overview.changes')}</Text>
-                      <Text color={cssVar.colorTextTertiary} fontSize={12}>
-                        {changeStats.files
-                          ? t('workingPanel.overview.changes.files', { count: changeStats.files })
-                          : t('workingPanel.overview.changes.clean')}
-                      </Text>
-                    </Flexbox>
-                  </OverviewRowLead>
-                  {changeStats.files > 0 && (
-                    <Flexbox horizontal className={styles.stats} gap={8}>
-                      <span className={styles.changeAdditions}>+{changeStats.additions}</span>
-                      <span className={styles.changeDeletions}>−{changeStats.deletions}</span>
-                    </Flexbox>
-                  )}
-                </Flexbox>
-              </>
-            ) : null}
-          </Flexbox>
+        {showBehind && (
+          <OverviewRow
+            icon={ArrowDownIcon}
+            iconColor={cssVar.colorError}
+            value={t('workingPanel.overview.sync.behind', { count: aheadBehind!.behind })}
+            trailing={
+              pulling ? (
+                <RingLoadingIcon size={12} />
+              ) : (
+                <span {...stylex.props(rowStyles.rowAction)}>
+                  {t('workingPanel.overview.sync.pull')}
+                </span>
+              )
+            }
+            onClick={actionsBlocked ? undefined : handlePull}
+          />
+        )}
+        {showAhead && (
+          <OverviewRow
+            icon={ArrowUpIcon}
+            iconColor={cssVar.colorInfo}
+            value={t('workingPanel.overview.sync.ahead', { count: aheadBehind!.ahead })}
+            trailing={
+              pushing ? (
+                <RingLoadingIcon size={12} />
+              ) : (
+                <span {...stylex.props(rowStyles.rowAction)}>
+                  {t('workingPanel.overview.sync.push')}
+                </span>
+              )
+            }
+            onClick={actionsBlocked ? undefined : handlePush}
+          />
         )}
 
-        <ProgressSection />
+        {isLinkedWorktree && branch && workingDirectory && agentId && (
+          <WorktreeSwitcher
+            agentId={agentId}
+            currentBranch={branch}
+            detached={detached}
+            deviceId={deviceId}
+            disabled={!pickersReady}
+            isGithub={isGithub}
+            path={workingDirectory}
+            placement={'bottomLeft'}
+            sourcePath={sourcePath ?? workingDirectory}
+            worktrees={worktrees}
+            onWorktreesChange={mutateWorktrees}
+          >
+            <OverviewRow
+              icon={GitForkIcon}
+              interactive={pickersReady}
+              title={sourcePath ?? workingDirectory}
+              trailing={pickersReady ? <PickerGlyph /> : undefined}
+              value={t('workingPanel.overview.worktree.of', {
+                name: pathBasename(sourcePath ?? workingDirectory),
+              })}
+            />
+          </WorktreeSwitcher>
+        )}
+
+        <OverviewRow
+          icon={ClipboardListIcon}
+          trailing={
+            changesPending ? (
+              <RingLoadingIcon size={12} />
+            ) : changeStats.files > 0 ? (
+              <>
+                <span {...stylex.props(rowStyles.changeAdditions)}>+{changeStats.additions}</span>
+                <span {...stylex.props(rowStyles.changeDeletions)}>−{changeStats.deletions}</span>
+              </>
+            ) : (
+              t('workingPanel.overview.changes.none')
+            )
+          }
+          value={
+            changeStats.files > 0
+              ? t('workingPanel.pr.reason.localDirty', { count: changeStats.files })
+              : t('workingPanel.overview.changes')
+          }
+          onClick={() => onOpenTab('review')}
+        />
+
+        {!pullRequests && pullRequest && (
+          <PullRequestRow pullRequest={pullRequest} onClick={() => onOpenTab('pr')} />
+        )}
+      </>
+    );
+
+    const workspaceSection = repoType ? (
+      isGitLoading ? (
+        <SidebarRowSkeleton rows={3} />
+      ) : gitError ? (
+        <AsyncError
+          align={'start'}
+          error={gitError}
+          title={t('workingPanel.overview.environmentError')}
+          variant={'inline'}
+          onRetry={() => void refreshGit()}
+        />
+      ) : (
+        gitRows
+      )
+    ) : null;
+
+    return (
+      <Flexbox className={stylex.props(styles.body).className}>
+        {hasWorkspace && (
+          <>
+            <OverviewHeader
+              deviceId={deviceId}
+              error={!!gitError}
+              name={directoryName!}
+              path={workingDirectory}
+              repoType={repoType}
+              onClick={() => onOpenTab('files')}
+            />
+            <Flexbox {...sectionProps()}>
+              {/* A worktree the archive cleanup kept for its uncommitted work. */}
+              <KeptWorktreeRows
+                entries={topicWorktrees.entries}
+                topicId={topicId ?? undefined}
+                onChange={topicWorktrees.mutate}
+              />
+              {topicWorktrees.removed ? (
+                <RemovedWorktreeRow entry={topicWorktrees.removed} />
+              ) : (
+                workspaceSection
+              )}
+              {(repoType || !!pullRequests?.length) && topicPullRequestRows}
+              {/* Outside the git rows: a dev server runs in plain folders too. */}
+              {tunnelsEnabled && deviceId && (
+                <PortSwitcher
+                  active={active}
+                  deviceId={deviceId}
+                  workingDirectory={workingDirectory}
+                />
+              )}
+            </Flexbox>
+          </>
+        )}
+        {!hasWorkspace && !!pullRequests?.length && (
+          <Flexbox {...sectionProps()}>{topicPullRequestRows}</Flexbox>
+        )}
+
+        {/* The bound machine's live state, as its device card shows it. */}
+        {statusDeviceId && <DeviceStatusSection active={active} deviceId={statusDeviceId} />}
+
+        <TopicBackgroundActivity topicId={topicId} />
+        {showEmptyWorkspace && (
+          <Center paddingBlock={24}>
+            <Empty
+              description={t('workingPanel.overview.workspace.emptyDesc')}
+              icon={LaptopIcon}
+              title={t('workingPanel.overview.workspace.empty')}
+            />
+          </Center>
+        )}
+
+        <GoalSection className={sectionProps(showEmptyWorkspace).className} />
+        <ProgressSection className={sectionProps(showEmptyWorkspace).className} />
 
         {visibleWorks.length > 0 && (
-          <Flexbox>
-            <Flexbox
-              horizontal
-              align={'center'}
-              className={styles.sectionHeader}
-              justify={'space-between'}
-            >
-              <span className={styles.sectionTitle}>{t('workingPanel.overview.outputs')}</span>
-              <Button size={'small'} type={'text'} onClick={() => onOpenTab('works')}>
-                {t('workingPanel.overview.viewAll')}
-              </Button>
-            </Flexbox>
+          <Flexbox {...sectionProps(showEmptyWorkspace)}>
+            <SectionHeader
+              title={t('workingPanel.overview.outputs')}
+              actions={
+                <Button size={'small'} type={'text'} onClick={() => onOpenTab('works')}>
+                  {t('workingPanel.overview.viewAll')}
+                </Button>
+              }
+            />
             {visibleWorks.map((work) => (
               <WorkSummaryCard item={work} key={work.id} variant={'inline'} />
             ))}
           </Flexbox>
         )}
 
-        <Flexbox>
-          <Flexbox
-            horizontal
-            align={'center'}
-            className={styles.sectionHeader}
-            justify={'space-between'}
-          >
-            <span className={styles.sectionTitle}>{t('workingPanel.overview.resources')}</span>
-          </Flexbox>
-          <Flexbox
-            horizontal
-            align={'flex-start'}
-            className={styles.row}
-            gap={10}
-            onClick={() => onOpenTab('skills')}
-          >
-            <OverviewRowLead icon={SkillsIcon}>
-              <Flexbox flex={1}>
-                <Text weight={500}>{t('workingPanel.resources.filter.skills')}</Text>
-                <Text color={cssVar.colorTextTertiary} fontSize={12}>
-                  {t('workingPanel.overview.skills.desc')}
-                </Text>
-              </Flexbox>
-            </OverviewRowLead>
-          </Flexbox>
-          {!isHetero && (
-            <Flexbox
-              horizontal
-              align={'flex-start'}
-              className={styles.row}
-              gap={10}
-              onClick={() => onOpenTab('documents')}
-            >
-              <OverviewRowLead icon={FileTextIcon}>
-                <Flexbox flex={1}>
-                  <Text weight={500}>{t('workingPanel.resources.filter.documents')}</Text>
-                  <Text color={cssVar.colorTextTertiary} fontSize={12}>
-                    {t('workingPanel.overview.documents.desc')}
-                  </Text>
-                </Flexbox>
-              </OverviewRowLead>
-            </Flexbox>
-          )}
-        </Flexbox>
-
-        {!topicId && visibleWorks.length === 0 && !workingDirectory && (
-          <Empty
-            description={t('workingPanel.overview.empty')}
-            icon={BoxesIcon}
-            title={t('workingPanel.overview.emptyTitle')}
-          />
+        {!environmentAvailable && !topicId && visibleWorks.length === 0 && (
+          <Center {...sectionProps()} paddingBlock={24}>
+            <Empty
+              description={t('workingPanel.overview.empty')}
+              icon={BoxesIcon}
+              title={t('workingPanel.overview.emptyTitle')}
+            />
+          </Center>
         )}
+
+        {/* Claude Code background tasks; async subagents stay in the thread list below. */}
+        <BackgroundTasksSection
+          afterBreak={showEmptyWorkspace}
+          deviceId={deviceId}
+          outputReadable={environmentAvailable}
+        />
+
+        {/* Thread rows open in the Portal; the list labels itself as subagents and
+            sits in its own section so the resource rows below aren't grouped under it. */}
+        {topicId && <ThreadListSection afterBreak={showEmptyWorkspace} topicId={topicId} />}
+
+        <Flexbox {...sectionProps(showEmptyWorkspace)}>
+          {hasWorkspace && (
+            <OverviewRow
+              icon={FilesIcon}
+              trailing={<ChevronRight />}
+              value={t('workingPanel.overview.files')}
+              onClick={() => onOpenTab('files')}
+            />
+          )}
+          <OverviewRow
+            icon={SkillsIcon}
+            trailing={<ChevronRight />}
+            value={t('workingPanel.resources.filter.skills')}
+            onClick={() => onOpenTab('skills')}
+          />
+          {!isHetero && (
+            <OverviewRow
+              icon={FileTextIcon}
+              trailing={<ChevronRight />}
+              value={t('workingPanel.resources.filter.documents')}
+              onClick={() => onOpenTab('documents')}
+            />
+          )}
+          <TerminalRow />
+        </Flexbox>
       </Flexbox>
     );
   },

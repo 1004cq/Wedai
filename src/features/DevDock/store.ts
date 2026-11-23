@@ -8,6 +8,7 @@ interface DevDockUIState {
   activePanelId: string | null;
   expanded: boolean;
   maximized: boolean;
+  mesurer: boolean;
   panelHeight: number;
   pinOverrides: Record<string, boolean>;
   reactScan: boolean;
@@ -20,6 +21,7 @@ const DEFAULT_UI: DevDockUIState = {
   activePanelId: null,
   expanded: true,
   maximized: false,
+  mesurer: false,
   panelHeight: 360,
   pinOverrides: {},
   reactScan: bootReactScan,
@@ -31,15 +33,30 @@ const readPersisted = (): DevDockUIState => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_UI;
-    return { ...DEFAULT_UI, ...(JSON.parse(raw) as Partial<DevDockUIState>) };
+
+    // The open panel is never restored: a panel that hangs while mounting (Local Database
+    // reads every entry of the local database) would come back before the user can close it.
+    return {
+      ...DEFAULT_UI,
+      ...(JSON.parse(raw) as Partial<DevDockUIState>),
+      activePanelId: null,
+    };
   } catch {
     return DEFAULT_UI;
   }
 };
 
+const persist = (state: DevDockUIState) => {
+  if (typeof localStorage === 'undefined') return;
+
+  const { activePanelId: _activePanelId, ...rest } = state;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(rest));
+};
+
 export interface DevDockStore extends DevDockUIState {
   setExpanded: (expanded: boolean) => void;
   setMaximized: (maximized: boolean) => void;
+  setMesurer: (mesurer: boolean) => void;
   setPanelHeight: (panelHeight: number) => void;
   setPinned: (id: string, pinned: boolean) => void;
   setReactScan: (reactScan: boolean) => void;
@@ -50,34 +67,14 @@ export interface DevDockStore extends DevDockUIState {
 export const useDevDockStore = create<DevDockStore>((set, get) => {
   const update = (patch: Partial<DevDockUIState>) => {
     set(patch);
-    if (typeof localStorage === 'undefined') return;
-    const {
-      activePanelId,
-      expanded,
-      maximized,
-      panelHeight,
-      pinOverrides,
-      reactScan,
-      scrollDebug,
-    } = get();
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        activePanelId,
-        expanded,
-        maximized,
-        panelHeight,
-        pinOverrides,
-        reactScan,
-        scrollDebug,
-      }),
-    );
+    persist(get());
   };
 
   return {
     ...readPersisted(),
     setExpanded: (expanded) => update({ expanded }),
     setMaximized: (maximized) => update({ maximized }),
+    setMesurer: (mesurer) => update({ mesurer }),
     setPanelHeight: (panelHeight) =>
       update({ panelHeight: Math.max(MIN_PANEL_HEIGHT, panelHeight) }),
     setPinned: (id, pinned) => update({ pinOverrides: { ...get().pinOverrides, [id]: pinned } }),

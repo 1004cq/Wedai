@@ -1,9 +1,8 @@
-import type { AgentState } from '@lobechat/agent-runtime';
-import { LocalSystemManifest } from '@lobechat/builtin-tool-local-system';
+import { type AgentState, selectOperationToolSet } from '@lobechat/agent-runtime';
+import { LobeActivatorIdentifier } from '@lobechat/builtin-tool-activator';
 import {
   buildStepSkillDelta,
   buildStepToolDelta,
-  type LobeToolManifest,
   type OperationToolSet,
   type ResolvedSkillSet,
   type ResolvedToolSet,
@@ -12,11 +11,33 @@ import {
   ToolResolver,
 } from '@lobechat/context-engine';
 
+import type { ExecutionPlan } from '@/helpers/executionTarget';
+
 import type { RuntimeExecutorContext } from '../context';
 import { buildToolDiscoveryConfig, log } from '../executorHelpers';
 import { resolveRunActiveDeviceId } from '../executors/resolveRunActiveDeviceId';
 
 export interface ServerCallLlmTooling {
+  /**
+   * The device actually routed for this run, if any (same single-track gate
+   * `buildStepToolDelta` uses below). Exposed so callers building prompt
+   * template variables can tell whether `runCommand`/`execScript` will
+   * execute on a device instead of falling back to the cloud sandbox —
+   * `resolved.enabledToolIds.includes('lobe-cloud-sandbox')` alone doesn't
+   * cover it, since Skills' sandbox fallback applies whenever no device is
+   * routed, independent of whether the dedicated Cloud Sandbox tool is
+   * offered.
+   */
+  activeDeviceId?: string;
+  /**
+   * The run's resolved execution target (`local`/`device`/`sandbox`/`auto`/
+   * `none`), straight from `state.plan.execution.target`. Exposed
+   * alongside `activeDeviceId` because `'auto'` is the one target where a
+   * device can be routed (`activeDeviceId` set) while the cloud sandbox is
+   * *also* reachable — see `AgentToolsEngine`'s `agentModeRules` gate for
+   * `lobe-cloud-sandbox`, which allows it for `'auto'` regardless of routing.
+   */
+  executionTarget?: ExecutionPlan['target'];
   resolved: ResolvedToolSet;
   resolvedSkills?: ResolvedSkillSet;
   toolDiscoveryConfig?: ToolDiscoveryConfig;
@@ -30,25 +51,22 @@ export const resolveServerCallLlmTooling = (
 ): ServerCallLlmTooling => {
   // Resolve tools via ToolResolver (unified tool injection).
   //
-  // Single-track device gate: `buildStepToolDelta` treats activeDeviceId as
-  // an independent activation signal (it only dedupes against already-
-  // enabled tools), so any id that reaches it WILL inject local-system.
-  // `resolveRunActiveDeviceId` swallows the id whenever the plan/policy
-  // forbids devices — the same filter the tool executors apply.
-  const activeDeviceId = resolveRunActiveDeviceId(state.metadata);
-  const operationToolSet: OperationToolSet = state.operationToolSet ?? {
-    enabledToolIds: [],
-    executorMap: state.toolExecutorMap ?? {},
-    manifestMap: state.toolManifestMap ?? {},
-    sourceMap: state.toolSourceMap ?? {},
-    tools: state.tools ?? [],
-  };
+  // Resolve device policy first, then activate only tools already allowed by
+  // the operation snapshot. Routing a device must not widen that tool pool.
+  const activeDeviceId = resolveRunActiveDeviceId(state);
+  const executionPlan = state.plan?.execution as ExecutionPlan | undefined;
+  const executionTarget = executionPlan?.target;
+  const operationToolSet: OperationToolSet = selectOperationToolSet(state);
 
   const stepDelta = buildStepToolDelta({
-    activeDeviceId,
+    // A pre-bound device makes local-system discoverable. Only a device selected
+    // mid-run (or a legacy operation without a plan) activates its functions.
+    activeDeviceId:
+      !executionPlan || executionPlan.kind === 'device-unrouted' ? activeDeviceId : undefined,
     enabledToolIds: operationToolSet.enabledToolIds,
     forceFinish: state.forceFinish,
-    localSystemManifest: LocalSystemManifest as unknown as LobeToolManifest,
+    // Device activation cannot widen the operation's allowed tool pool.
+    localSystemManifest: operationToolSet.manifestMap['lobe-local-system'],
     operationManifestMap: operationToolSet.manifestMap,
   });
 
@@ -61,7 +79,14 @@ export const resolveServerCallLlmTooling = (
   );
 
   const tools = resolved.tools.length > 0 ? resolved.tools : undefined;
-  const toolDiscoveryConfig = buildToolDiscoveryConfig(operationToolSet, resolved.enabledToolIds);
+  // Keep <available_tools> anchored to the operation's starting enabledToolIds
+  // as long as the activator remains active this step (e.g. not stripped by
+  // forceFinish). Dropping newly activated tools mid-operation mutates the
+  // before-first-user context message and invalidates the prompt-cache prefix;
+  // the next operation starts with them already in `operationToolSet.enabledToolIds`.
+  const toolDiscoveryConfig = resolved.enabledToolIds.includes(LobeActivatorIdentifier)
+    ? buildToolDiscoveryConfig(operationToolSet, operationToolSet.enabledToolIds)
+    : undefined;
 
   if (stepDelta.activatedTools.length > 0) {
     log(
@@ -74,15 +99,13 @@ export const resolveServerCallLlmTooling = (
   // Resolve skills via SkillResolver (unified skill injection).
   const skillResolver = new SkillResolver();
   const stepSkillDelta = buildStepSkillDelta();
-  const resolvedSkills = state.metadata?.operationSkillSet
-    ? skillResolver.resolve(
-        state.metadata.operationSkillSet,
-        stepSkillDelta,
-        state.activatedStepSkills ?? [],
-      )
+  const resolvedSkills = state.plan?.skills
+    ? skillResolver.resolve(state.plan?.skills, stepSkillDelta, state.activatedStepSkills ?? [])
     : undefined;
 
   return {
+    activeDeviceId,
+    executionTarget,
     resolved,
     resolvedSkills,
     toolDiscoveryConfig,

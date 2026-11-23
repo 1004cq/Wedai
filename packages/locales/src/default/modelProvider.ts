@@ -62,6 +62,18 @@ export default {
   'cloudflare.baseURLOrAccountID.desc': 'Enter your Cloudflare account ID or custom API address',
   'cloudflare.baseURLOrAccountID.placeholder': 'Cloudflare Account ID / custom API URL',
   'cloudflare.baseURLOrAccountID.title': 'Cloudflare Account ID / API Address',
+  'doubaospeech.accessToken.desc':
+    'Legacy speech console only: the Access Token paired with the App ID. Leave empty when using an API Key',
+  'doubaospeech.accessToken.placeholder': 'Access Token',
+  'doubaospeech.accessToken.title': 'Access Token (legacy console)',
+  'doubaospeech.apiKey.desc':
+    'API Key from the new Volcengine speech console (API Key management). Recommended; it takes precedence over App ID + Access Token',
+  'doubaospeech.apiKey.placeholder': 'Doubao Speech API Key',
+  'doubaospeech.apiKey.title': 'API Key',
+  'doubaospeech.appId.desc':
+    'Legacy speech console only: the App ID of your application, used together with the Access Token',
+  'doubaospeech.appId.placeholder': 'App ID',
+  'doubaospeech.appId.title': 'App ID (legacy console)',
   'comfyui.apiKey.desc': 'API key for Bearer Token authentication',
   'comfyui.apiKey.placeholder': 'Enter API key',
   'comfyui.apiKey.required': 'Please enter the API key',
@@ -276,20 +288,32 @@ export default {
     'For GPT-5.2 series; controls reasoning intensity.',
   'providerModels.item.modelConfig.extendParams.options.gpt5_6ReasoningEffort.hint':
     'For GPT-5.6 series; controls reasoning intensity from None through Max.',
+  'providerModels.item.modelConfig.extendParams.options.gpt6ReasoningEffort.hint':
+    'For GPT-6 series; controls reasoning intensity from Low through Max. Reasoning cannot be disabled.',
   'providerModels.item.modelConfig.extendParams.options.glm5_2ReasoningEffort.hint':
     'For GLM-5.2; controls reasoning effort with High and Max levels.',
+  'providerModels.item.modelConfig.extendParams.options.glm5_3ReasoningEffort.hint':
+    'For GLM-5.3; controls reasoning effort with Low, High, and Max levels. Thinking cannot be disabled.',
   'providerModels.item.modelConfig.extendParams.options.grok4_20ReasoningEffort.hint':
     'For Grok 4.20 series; controls reasoning intensity. Low/Medium uses 4 agents, High/XHigh uses 16 agents.',
   'providerModels.item.modelConfig.extendParams.options.grok4_3ReasoningEffort.hint':
     'For Grok 4.3 series; controls reasoning intensity.',
   'providerModels.item.modelConfig.extendParams.options.grok4_5ReasoningEffort.hint':
     'For Grok 4.5 series; controls reasoning intensity (low/medium/high, default high).',
+  'providerModels.item.modelConfig.extendParams.options.grok4_6ReasoningEffort.hint':
+    'For Grok 4.6 series; controls reasoning intensity (low/medium/high/xhigh, default high). Reasoning cannot be disabled.',
+  'providerModels.item.modelConfig.extendParams.options.grok4_7ReasoningEffort.hint':
+    'For Grok 4.7; controls reasoning intensity (low/medium/high/xhigh, default high). Reasoning cannot be disabled.',
   'providerModels.item.modelConfig.extendParams.options.hy3ReasoningEffort.hint':
     'For Hy3 models; controls reasoning intensity. no_think (ultra-fast response), low (quick reasoning), and high (deep reasoning)—to accommodate varying latency and depth requirements, from high-frequency interactions to complex engineering tasks.',
   'providerModels.item.modelConfig.extendParams.options.ring2_6ReasoningEffort.hint':
     'For Ring 2.6 series; controls reasoning intensity.',
+  'providerModels.item.modelConfig.extendParams.options.deepseekV4GAReasoningEffort.hint':
+    'For DeepSeek V4 GA thinking mode; controls reasoning intensity. Adds a `low` tier on top of the original V4 levels. `high` is the default, `max` unlocks the deepest reasoning used by complex agent workflows.',
   'providerModels.item.modelConfig.extendParams.options.deepseekV4ReasoningEffort.hint':
     'For DeepSeek V4 thinking mode; controls reasoning intensity. `high` is the default, `max` unlocks the deepest reasoning used by complex agent workflows.',
+  'providerModels.item.modelConfig.extendParams.options.qwen38ReasoningEffort.hint':
+    'For Qwen3.8 Max hybrid thinking; controls reasoning intensity. `none` disables thinking; `low`/`medium` trade depth for speed and cost; `xhigh` is the API default for complex analysis.',
   'providerModels.item.modelConfig.extendParams.options.imageAspectRatio.hint':
     'For Gemini image generation models; controls aspect ratio of generated images.',
   'providerModels.item.modelConfig.extendParams.options.imageAspectRatio2.hint':
@@ -328,6 +352,8 @@ export default {
     'For Gemini 3.1 Pro Preview models; controls thinking depth with low/medium/high levels.',
   'providerModels.item.modelConfig.extendParams.options.thinkingLevel4.hint':
     'For Gemini 3.1 Flash Image models; toggle thinking on/off.',
+  'providerModels.item.modelConfig.extendParams.options.thinkingLevel5.hint':
+    'For Gemini 4 Hydrogen models; controls thinking depth with low/medium/high/xhigh levels.',
   'providerModels.item.modelConfig.extendParams.options.urlContext.hint':
     'For Gemini series; supports providing URL context.',
   'providerModels.item.modelConfig.extendParams.placeholder':
@@ -361,10 +387,16 @@ export default {
     'Set the maximum number of tokens supported by the model',
   'providerModels.item.modelConfig.tokens.title': 'Maximum Context Window',
   'providerModels.item.modelConfig.tokens.unlimited': 'Unlimited',
+  'providerModels.item.modelConfig.ttsVoice.extra':
+    'Used when a speech request does not name a voice. Leave empty to use the model default.',
+  'providerModels.item.modelConfig.ttsVoice.placeholder': 'Model default ({{voice}})',
+  'providerModels.item.modelConfig.ttsVoice.placeholderCustom': 'Enter a voice ID',
+  'providerModels.item.modelConfig.ttsVoice.title': 'Default Voice',
   'providerModels.item.modelConfig.type.extra':
     'Different model types have distinct use cases and capabilities',
   'providerModels.item.modelConfig.type.options.asr': 'Speech-to-Text',
   'providerModels.item.modelConfig.type.options.chat': 'Chat',
+  'providerModels.item.modelConfig.type.options.decision': 'Decision',
   'providerModels.item.modelConfig.type.options.embedding': 'Embedding',
   'providerModels.item.modelConfig.type.options.image': 'Image Generation',
   'providerModels.item.modelConfig.type.options.realtime': 'Real-time Chat',
@@ -379,11 +411,14 @@ export default {
   'providerModels.item.modelConfig.vision.extra':
     'This configuration will only enable image upload capabilities in the application. Whether recognition is supported depends entirely on the model itself. Please test the visual recognition capabilities of the model yourself.',
   'providerModels.item.modelConfig.vision.title': 'Support Vision',
+  'providerModels.item.pricing.audioOutputTokens': 'Audio output ${{amount}}/M',
   'providerModels.item.pricing.image': '${{amount}}/Image',
   'providerModels.item.pricing.inputCharts': '${{amount}}/M Characters',
   'providerModels.item.pricing.inputMinutes': '${{amount}}/Minutes',
   'providerModels.item.pricing.inputTokens': 'Input ${{amount}}/M',
   'providerModels.item.pricing.outputTokens': 'Output ${{amount}}/M',
+  'providerModels.item.pricing.second': '${{amount}}/Second',
+  'providerModels.item.pricing.song': '${{amount}}/Song',
   'providerModels.item.releasedAt': 'Released at {{releasedAt}}',
   'providerModels.list.addNew': 'Add Model',
   'providerModels.list.disabled': 'Disabled',
@@ -424,13 +459,18 @@ export default {
   'providerModels.tabs.all': 'All',
   'providerModels.tabs.asr': 'ASR',
   'providerModels.tabs.chat': 'Chat',
+  'providerModels.tabs.decision': 'Decision',
   'providerModels.tabs.embedding': 'Embedding',
   'providerModels.tabs.image': 'Image',
+  'providerModels.tabs.text2music': 'Music',
   'providerModels.tabs.tts': 'TTS',
   'providerModels.tabs.video': 'Video',
   'sortModal.success': 'Sort update successful',
   'sortModal.title': 'Custom Order',
   'sortModal.update': 'Update',
+  'unsloth.checker.guidance':
+    'For browser network errors, check that Studio allows this page through CORS. For authentication errors, enter a real Studio API key; keyless terminal access does not grant browser access.',
+  'unsloth.checker.setupGuide': 'Unsloth connection setup guide',
   'updateAiProvider.confirmDelete': 'Delete this AI provider?',
   'updateAiProvider.confirmDeleteDescription':
     'Once deleted, this AI provider cannot be recovered.',

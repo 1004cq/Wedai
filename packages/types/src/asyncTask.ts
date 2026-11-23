@@ -1,7 +1,14 @@
+import type { SpendOrigin } from './agentRuntime';
+
 export enum AsyncTaskType {
   Chunking = 'chunk',
+  /** Full account or workspace data export built in the background (`data_export`). */
+  DataExport = 'data_export',
   Embedding = 'embedding',
   ImageGeneration = 'image_generation',
+  /** One-way Linear issue → task sync run in the background (`linear_issue_sync`). */
+  LinearIssueSync = 'linear_issue_sync',
+  MusicGeneration = 'music_generation',
   UserMemoryExtractionHourly = 'user_memory_extraction:hourly',
   UserMemoryExtractionWithChatTopic = 'user_memory_extraction:chat_topic',
   VideoGeneration = 'video_generation',
@@ -16,6 +23,16 @@ export enum AsyncTaskStatus {
 
 export enum AsyncTaskErrorType {
   EmbeddingError = 'EmbeddingError',
+
+  /**
+   * The plan's vector storage cannot hold this file's vectors; nothing was embedded.
+   */
+  EmbeddingQuotaExceeded = 'EmbeddingQuotaExceeded',
+
+  /**
+   * File exceeds the in-memory parser limit and cannot be chunked.
+   */
+  FileTooLargeToParse = 'FileTooLargeToParse',
 
   /* ↓ cloud slot | free plan limit error type ↓ */
   /**
@@ -91,6 +108,8 @@ export interface AsyncTaskErrorBody {
   persistErrors?: AsyncTaskStructuredErrorItem[];
   progressErrors?: AsyncTaskStructuredErrorItem[];
   retrievalErrors?: AsyncTaskStructuredErrorItem[];
+  /** Earliest retry time for this failure, as an ISO timestamp. */
+  retryAt?: string;
 }
 
 export interface IAsyncTaskError {
@@ -192,7 +211,52 @@ export interface HourlyUserMemoryExtractionMetadata {
   startedAt: string;
 }
 
+export type VideoGenerationCompletionMode = 'polling' | 'webhook';
+
 export interface VideoGenerationTaskMetadata {
-  precharge?: Record<string, unknown>;
+  completionClaimedAt?: string;
+  completionEventId?: string;
+  completionMode?: VideoGenerationCompletionMode;
+  precharge?: unknown;
+  previousGenerationId?: string;
+  route?: VideoGenerationRoute;
+  /**
+   * Origin of the submitting request, carried across the async boundary so the
+   * completion charge (webhook / polling) can keep the spend attributed.
+   *
+   * Persisted on the async task row under this exact key. It was named
+   * `spendAttribution` before Agent Share v2; no double-read is needed because
+   * the feature had not shipped, so no stored row carries the old key.
+   */
+  spendOrigin?: SpendOrigin;
   webhookToken?: string;
+}
+
+/** Metadata stored on each `music_generation` async task of one batch. */
+export interface MusicGenerationTaskMetadata {
+  /** Position of this generation in the batch; the provider's n-th track lands here. */
+  index?: number;
+  precharge?: unknown;
+  /** Channel that accepted an asynchronous task, so polling reaches the same channel. */
+  route?: {
+    channelId?: string;
+    channelIndex?: number;
+    model?: string;
+    routerId?: string;
+  };
+  /** Origin of the submitting request, kept for the completion charge. */
+  spendOrigin?: SpendOrigin;
+  /** One-time token the provider callback URL carries. */
+  webhookToken?: string;
+}
+
+export interface VideoGenerationRoute {
+  apiType: string;
+  /**
+   * Router attempt that created the video, so the completion charge can be attributed to it.
+   * Routing ignores it: only `routerId` and `channelId` pin later polls.
+   */
+  attemptId?: string;
+  channelId?: string;
+  routerId?: string;
 }

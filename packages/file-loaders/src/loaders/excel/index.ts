@@ -3,8 +3,11 @@ import { readFile } from 'node:fs/promises';
 import debug from 'debug';
 import * as xlsx from 'xlsx';
 
+import { isFileParseBudgetError } from '../../fileParseBudget';
 import type { DocumentPage, FileLoaderInterface } from '../../types';
 import { promptTemplate } from './prompt';
+import { clampSheetRefToData } from './sheetBounds';
+import { preflightXlsxZip } from './zipBudget';
 
 const log = debug('file-loaders:excel');
 
@@ -19,8 +22,19 @@ function sheetToMarkdownTable(jsonData: Record<string, any>[]): string {
     return '*Sheet is empty or contains no data.*';
   }
 
-  // Ensure all rows have the same keys based on the first row, handle potentially sparse data
-  const headers = Object.keys(jsonData[0] || {});
+  const toCell = (value: unknown) =>
+    // Handle null/undefined and escape pipe characters within cells
+    value === null || value === undefined ? '' : String(value).replaceAll('|', '\\|').trim();
+
+  /**
+   * Keep only columns that hold a value in some row, and rows with at least one value.
+   * Formatting or stray edits can stretch a sheet's used range across thousands of blank columns
+   * and rows (the headers show up as `__EMPTY_n`); rendering every blank cell turned a 200 KB
+   * workbook into 60+ MB of `|  |  |` text.
+   */
+  const headers = Object.keys(jsonData[0] || {}).filter(
+    (header) => !header.startsWith('__EMPTY') || jsonData.some((row) => toCell(row[header]) !== ''),
+  );
   log('Sheet headers:', headers);
   if (headers.length === 0) {
     log('Sheet has no headers, returning placeholder message');
@@ -32,16 +46,9 @@ function sheetToMarkdownTable(jsonData: Record<string, any>[]): string {
 
   log('Building data rows for Markdown table');
   const dataRows = jsonData
-    .map((row) => {
-      const cells = headers.map((header) => {
-        const value = row[header];
-        // Handle null/undefined and escape pipe characters within cells
-        const cellContent =
-          value === null || value === undefined ? '' : String(value).replaceAll('|', '\\|');
-        return cellContent.trim(); // Trim whitespace from cells
-      });
-      return `| ${cells.join(' | ')} |`;
-    })
+    .map((row) => headers.map((header) => toCell(row[header])))
+    .filter((cells) => cells.some((cell) => cell !== ''))
+    .map((cells) => `| ${cells.join(' | ')} |`)
     .join('\n');
 
   const result = `${headerRow}\n${separatorRow}\n${dataRows}`;
@@ -63,6 +70,9 @@ export class ExcelLoader implements FileLoaderInterface {
       const dataBuffer = await readFile(filePath);
       log('Excel file read successfully, size:', dataBuffer.length, 'bytes');
 
+      // Refuse oversized ZIP structures before SheetJS inflates them
+      await preflightXlsxZip(dataBuffer);
+
       log('Parsing Excel workbook');
       const workbook = xlsx.read(dataBuffer, { type: 'buffer' });
       log('Excel workbook parsed successfully, sheets:', workbook.SheetNames.length);
@@ -70,6 +80,8 @@ export class ExcelLoader implements FileLoaderInterface {
       for (const sheetName of workbook.SheetNames) {
         log(`Processing sheet: ${sheetName}`);
         const worksheet = workbook.Sheets[sheetName];
+        // A declared used range can span a million styled-but-empty rows: clamp it to the real data
+        clampSheetRefToData(worksheet);
         // Use sheet_to_json to get array of objects for our custom markdown function
         const jsonData = xlsx.utils.sheet_to_json<Record<string, any>>(worksheet, {
           // Get formatted strings, not raw values
@@ -113,6 +125,8 @@ export class ExcelLoader implements FileLoaderInterface {
       log('Excel loading completed, total pages:', pages.length);
       return pages;
     } catch (e) {
+      // A budget refusal is not a corrupt file: let callers tell the user the file is too large
+      if (isFileParseBudgetError(e)) throw e;
       const error = e as Error;
       log('Error encountered while loading Excel file');
       console.error(`Error loading Excel file ${filePath}: ${error.message}`);

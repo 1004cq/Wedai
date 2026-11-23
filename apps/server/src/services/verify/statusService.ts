@@ -1,3 +1,4 @@
+import { isCheckWaivedByDispute } from '@lobechat/const/verify';
 import type { VerifyCheckItem, VerifyRunStatus } from '@lobechat/types';
 import debug from 'debug';
 
@@ -38,7 +39,8 @@ export class VerifyStatusService {
    * - else any required result errored (verifier couldn't run) → `errored`
    * - otherwise → `passed`
    * A genuine `failed` dominates an `errored` (the delivery has a real problem to
-   * fix, so it should still gate + repair). A required `skipped` result is an
+   * fix, so it should still gate + repair). A check waived by an upheld dispute
+   * is skipped entirely. A required `skipped` result is an
    * execution gap and rolls up as `errored`; only optional checks may skip.
    */
   async recompute(operationId: string): Promise<VerifyRunStatus | null> {
@@ -62,6 +64,9 @@ export class VerifyStatusService {
     let anyErrored = false;
     for (const item of requiredItems) {
       const result = byItem.get(item.id);
+      // A panel upheld the builder's dispute that this check is invalid: it no
+      // longer gates the round, whatever the verifier said about it.
+      if (result && isCheckWaivedByDispute(result.metadata)) continue;
       // A required item without a result yet is still pending.
       if (!result || result.status === 'pending' || result.status === 'running') {
         anyPending = true;
@@ -90,6 +95,29 @@ export class VerifyStatusService {
     }
 
     return status;
+  }
+
+  /**
+   * Claim the verification of an Agent Run and enter `verifying`, exactly once.
+   *
+   * This is the re-entrant form of {@link markVerifying}: the completion-time
+   * gate uses it so a redelivered completion cannot start a second judge pass,
+   * while an attempt that entered `verifying` and then died (its post-response
+   * work stopped being scheduled) can still be picked up by a later one.
+   *
+   * @returns false when someone else holds the verification.
+   */
+  async claimVerifying(operationId: string, staleBefore: Date): Promise<boolean> {
+    const run = await this.runModel.findByOperation(operationId);
+    if (!run) return false;
+
+    const claimed = await this.runModel.claimVerifying(run.id, staleBefore);
+    if (claimed && run.acceptanceId) {
+      await new AcceptanceService(this.db, this.userId, this.workspaceId).recomputeStatus(
+        run.acceptanceId,
+      );
+    }
+    return claimed;
   }
 
   /** Explicit transitions that aren't derivable from results alone. */

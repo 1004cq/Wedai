@@ -1,5 +1,11 @@
-import { Checkbox, Flexbox, Icon, stopPropagation } from '@lobehub/ui';
-import { Loader2, SquareArrowOutUpRight } from 'lucide-react';
+import {
+  getConnectorMode,
+  shouldEnableConnectorOnConnect,
+  upsertConnectorEnabled,
+} from '@lobechat/types';
+import { Checkbox, Flexbox, Icon, Spin, stopPropagation } from '@lobehub/ui';
+import { SquareArrowOutUpRight } from 'lucide-react';
+import type { ReactNode } from 'react';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -11,6 +17,8 @@ import { type ComposioServer } from '@/store/tool/slices/composioStore';
 import { ComposioServerStatus } from '@/store/tool/slices/composioStore';
 import { useUserStore } from '@/store/user';
 import { userProfileSelectors } from '@/store/user/selectors';
+
+import { SKILL_ICON_GAP } from './constants';
 
 // Polling configuration
 const POLL_INTERVAL_MS = 1000; // Poll once per second
@@ -35,13 +43,19 @@ interface ComposioServerItemProps {
    * Composio toolkit slug used to call the Composio API (e.g., 'GOOGLECALENDAR')
    */
   appSlug: string;
+  /**
+   * Rendered inside the label so the row lines up with the managed skill rows;
+   * passing it through the menu's own icon slot would size and space it
+   * differently.
+   */
+  icon?: ReactNode;
   identifier: string;
   label: string;
   server?: ComposioServer;
 }
 
 const ComposioServerItem = memo<ComposioServerItemProps>(
-  ({ appSlug, identifier, label, server, agentId, agentScoped = false }) => {
+  ({ appSlug, icon, identifier, label, server, agentId, agentScoped = false }) => {
     const { t } = useTranslation('setting');
     const [isConnecting, setIsConnecting] = useState(false);
     const [isToggling, setIsToggling] = useState(false);
@@ -182,23 +196,22 @@ const ComposioServerItem = memo<ComposioServerItemProps>(
 
     // Get plugin ID for this server (use identifier as pluginId)
     const pluginId = server ? server.identifier : '';
-    const plugins =
-      useAgentStore(agentSelectors.getAgentConfigById(effectiveAgentId))?.plugins || [];
-    const checked = plugins.includes(pluginId);
+    const config = useAgentStore(agentSelectors.getAgentConfigById(effectiveAgentId));
+    const plugins = config?.plugins;
+    const checked = getConnectorMode(plugins, pluginId, config?.chatConfig) === 'auto';
     const updateAgentConfigById = useAgentStore((s) => s.updateAgentConfigById);
 
     // Toggle plugin for the effective agent
     const togglePlugin = useCallback(
-      async (pluginIdToToggle: string) => {
+      async (pluginIdToToggle: string, enabled: boolean) => {
         if (!effectiveAgentId) return;
-        const currentPlugins = plugins;
-        const hasPlugin = currentPlugins.includes(pluginIdToToggle);
-        const newPlugins = hasPlugin
-          ? currentPlugins.filter((id) => id !== pluginIdToToggle)
-          : [...currentPlugins, pluginIdToToggle];
+        const current = agentSelectors.getAgentConfigById(effectiveAgentId)(
+          useAgentStore.getState(),
+        );
+        const newPlugins = upsertConnectorEnabled(current?.plugins, pluginIdToToggle, enabled);
         await updateAgentConfigById(effectiveAgentId, { plugins: newPlugins });
       },
-      [effectiveAgentId, plugins, updateAgentConfigById],
+      [effectiveAgentId, updateAgentConfigById],
     );
 
     const handleConnect = async () => {
@@ -224,7 +237,11 @@ const ComposioServerItem = memo<ComposioServerItemProps>(
         if (newServer) {
           // Auto-enable plugin after installation (using identifier)
           const newPluginId = newServer.identifier;
-          await togglePlugin(newPluginId);
+          const current = agentSelectors.getAgentConfigById(effectiveAgentId)(
+            useAgentStore.getState(),
+          );
+          if (shouldEnableConnectorOnConnect(current?.plugins, newPluginId, current?.chatConfig))
+            await togglePlugin(newPluginId, true);
 
           // If already authenticated, refresh tool list directly, skip OAuth
           if (newServer.status === ComposioServerStatus.ACTIVE) {
@@ -244,7 +261,7 @@ const ComposioServerItem = memo<ComposioServerItemProps>(
     const handleToggle = async () => {
       if (!canEdit || !server) return;
       setIsToggling(true);
-      await togglePlugin(pluginId);
+      await togglePlugin(pluginId, !checked);
       setIsToggling(false);
     };
 
@@ -269,7 +286,7 @@ const ComposioServerItem = memo<ComposioServerItemProps>(
       if (isConnecting) {
         return (
           <Flexbox horizontal align="center" gap={4} onClick={stopPropagation}>
-            <Icon spin icon={Loader2} />
+            <Spin size="small" />
           </Flexbox>
         );
       }
@@ -299,7 +316,7 @@ const ComposioServerItem = memo<ComposioServerItemProps>(
         case ComposioServerStatus.ACTIVE: {
           // Toggling state
           if (isToggling) {
-            return <Icon spin icon={Loader2} />;
+            return <Spin size="small" />;
           }
           return (
             <Checkbox
@@ -319,7 +336,7 @@ const ComposioServerItem = memo<ComposioServerItemProps>(
           if (isWaitingAuth) {
             return (
               <Flexbox horizontal align="center" gap={4} onClick={stopPropagation}>
-                <Icon spin icon={Loader2} />
+                <Spin size="small" />
               </Flexbox>
             );
           }
@@ -363,7 +380,8 @@ const ComposioServerItem = memo<ComposioServerItemProps>(
           }
         }}
       >
-        <Flexbox horizontal align={'center'} gap={8}>
+        <Flexbox horizontal align={'center'} gap={SKILL_ICON_GAP}>
+          {icon}
           {label}
         </Flexbox>
         {renderRightControl()}

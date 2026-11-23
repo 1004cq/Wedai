@@ -1,6 +1,6 @@
 'use client';
 
-import { Select } from '@lobehub/ui/base-ui';
+import { Select } from '@lobehub/ui';
 import type { TableColumnsType } from 'antd';
 import { Empty, Grid, Table, Tag } from 'antd';
 import { useCallback, useState } from 'react';

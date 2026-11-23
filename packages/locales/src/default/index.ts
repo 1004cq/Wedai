@@ -2,11 +2,14 @@ import agent from './agent';
 import agentGroup from './agentGroup';
 import auth from './auth';
 import authError from './authError';
+import billing from './billing';
 import changelog from './changelog';
+import channel from './channel';
 import chat from './chat';
 import color from './color';
 import common from './common';
 import components from './components';
+import dashboard from './dashboard';
 import desktopOnboarding from './desktop-onboarding';
 import device from './device';
 import discover from './discover';
@@ -15,9 +18,11 @@ import electron from './electron';
 import error from './error';
 import eval_ from './eval';
 import file from './file';
+import fileShare from './fileShare';
 import home from './home';
 import hotkey from './hotkey';
 import image from './image';
+import integration from './integration';
 import knowledgeBase from './knowledgeBase';
 import labs from './labs';
 import marketAuth from './marketAuth';
@@ -28,6 +33,7 @@ import migration from './migration';
 import modelProvider from './modelProvider';
 import modelRuntime from './modelRuntime';
 import models from './models';
+import music from './music';
 import notification from './notification';
 import oauth from './oauth';
 import onboarding from './onboarding';
@@ -36,8 +42,10 @@ import opStatusTray from './opStatusTray';
 import pageShare from './pageShare';
 import plugin from './plugin';
 import portal from './portal';
+import project from './project';
 import providers from './providers';
 import ragEval from './ragEval';
+import selfLearning from './selfLearning';
 import setting from './setting';
 import spend from './spend';
 import subscription from './subscription';
@@ -55,11 +63,14 @@ const resources = {
   agentGroup,
   auth,
   authError,
+  billing,
   changelog,
   chat,
+  channel,
   color,
   common,
   components,
+  dashboard,
   'desktop-onboarding': desktopOnboarding,
   device,
   discover,
@@ -68,9 +79,11 @@ const resources = {
   error,
   'eval': eval_,
   file,
+  fileShare,
   home,
   hotkey,
   image,
+  integration,
   knowledgeBase,
   labs,
   marketAuth,
@@ -81,6 +94,7 @@ const resources = {
   modelProvider,
   modelRuntime,
   models,
+  music,
   notification,
   oauth,
   onboarding,
@@ -90,7 +104,9 @@ const resources = {
   plugin,
   portal,
   providers,
+  project,
   ragEval,
+  selfLearning,
   setting,
   spend,
   subscription,

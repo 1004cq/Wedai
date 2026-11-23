@@ -2,16 +2,35 @@
 
 import { isDesktop } from '@lobechat/const';
 import type { DeviceExecutionTarget } from '@lobechat/types';
+import { toast } from '@lobehub/ui';
+import { t } from 'i18next';
 import { useCallback } from 'react';
 
 import { useAgentManagementAccess } from '@/features/ResourcePermission/useAgentManagementAccess';
+import { useLocalMachineDeviceIds } from '@/hooks/useLocalMachineDeviceIds';
 import { gatewayConnectionService } from '@/services/electron/gatewayConnection';
 import { useAgentStore } from '@/store/agent';
 import { agentByIdSelectors } from '@/store/agent/selectors';
+import { deviceSelectors, getDeviceStoreState } from '@/store/device';
 import { useElectronStore } from '@/store/electron';
 import { useUserStore } from '@/store/user';
 
 export interface SelectExecutionTargetOptions {
+  /**
+   * Confine this agent's shell commands to the device sandbox. Only meaningful
+   * alongside `target: 'local'`; the picker passes `false` for the plain local
+   * row so switching back off is an explicit write rather than a leftover.
+   *
+   * Omitted entirely for the other targets, which leaves any stored value
+   * dormant — flipping to Cloud Sandbox and back must not silently forget that
+   * the user had fenced their machine.
+   */
+  localSandbox?: boolean;
+  /**
+   * Let sandboxed commands reach the package-registry allowlist. Same
+   * omitted-means-untouched rule as {@link localSandbox}.
+   */
+  localSandboxNetwork?: boolean;
   /**
    * The call is an automatic default (agent has no target yet), not a user's
    * pick. Persistence failures stay silent — a generic "your change was not
@@ -43,6 +62,13 @@ export interface SelectExecutionTargetOptions {
  * - **Private Workspace agent** — like a personal agent, writes go directly to
  *   `agents.agencyConfig`; the member-selection policy takes effect only after
  *   the Agent is published.
+ * - **`local` on ANY workspace agent** — always the per-user override, even for
+ *   managers and private-agent owners who otherwise write the shared row: a
+ *   `local` pick binds this member's personal desktop device, and the server
+ *   rejects a workspace agent whose shared config references a device not
+ *   enrolled in the workspace (`WorkspaceAgentRequiresWorkspaceDevice`).
+ *   Conversely, a manager's shared-target pick clears their own override's
+ *   routing keys so a previous `local` pick cannot keep shadowing it.
  *
  * `local` is stored verbatim (`{ executionTarget: 'local', boundDeviceId: <me> }`)
  * so both desktop dispatch (in-process IPC — the fast path) and web dispatch
@@ -50,10 +76,14 @@ export interface SelectExecutionTargetOptions {
  * respective semantics. That's why the old
  * `if (target === 'local' && isWorkspaceAgent) return;` guard is gone: with
  * per-user overrides my choice can't hurt other members.
+ *
+ * Resolves `true` only when the pick was persisted, so a caller with follow-up
+ * writes (re-pinning a topic) can stop when the save was refused or failed.
  */
 export const useSelectExecutionTarget = (agentId: string) => {
   const agencyConfig = useAgentStore(agentByIdSelectors.getAgencyConfigById(agentId));
   const isHetero = useAgentStore(agentByIdSelectors.isAgentHeterogeneousById(agentId));
+  const isWorkspaceAgent = useAgentStore((s) => Boolean(s.agentMap[agentId]?.workspaceId));
   const isPublicWorkspaceAgent = useAgentStore((s) => {
     const agent = s.agentMap[agentId];
     return !!agent?.workspaceId && agent.visibility !== 'private';
@@ -72,20 +102,21 @@ export const useSelectExecutionTarget = (agentId: string) => {
   // `local` selection to this device.
   const gatewayDeviceInfo = useElectronStore((s) => s.gatewayDeviceInfo);
   const currentDeviceId = isDesktop ? gatewayDeviceInfo?.deviceId : undefined;
+  const localMachineDeviceIds = useLocalMachineDeviceIds();
 
   return useCallback(
     async (
       target: DeviceExecutionTarget,
       deviceId?: string,
       options?: SelectExecutionTargetOptions,
-    ) => {
-      if (isAccessLoading) return;
+    ): Promise<boolean> => {
+      if (isAccessLoading) return false;
 
       // Fixed workspace agents are author-controlled. Keep any existing member
       // override dormant (so switching back to member choice restores it), but
       // never let this picker create or update an override while fixed.
       if (usesWorkspaceMemberSelection && agencyConfig?.executionTargetSelectionPolicy === 'fixed')
-        return;
+        return false;
 
       const boundDeviceId = agencyConfig?.boundDeviceId;
       let nextBoundDeviceId = target === 'device' ? deviceId : boundDeviceId;
@@ -100,7 +131,7 @@ export const useSelectExecutionTarget = (agentId: string) => {
         }
         // Hetero agents must execute somewhere; without a resolvable local
         // device there is nothing to pin `local` to, so don't switch.
-        if (isHetero && !nextBoundDeviceId) return;
+        if (isHetero && !nextBoundDeviceId) return false;
       }
 
       // Store the intent verbatim (`local` stays `local`), not a
@@ -117,16 +148,47 @@ export const useSelectExecutionTarget = (agentId: string) => {
       //    `resolveExecutionTarget` already coerces a stored `local` +
       //    `boundDeviceId` to `device` when a gateway is available, so the
       //    server-side dispatch path Just Works — no need to pre-coerce here.
-      if (usesWorkspaceMemberSelection) {
+      // `undefined` leaves the stored value untouched; `false` actively clears
+      // it. Only the two local rows have an opinion, so a Cloud Sandbox pick
+      // never rewrites the fence the user set on their own machine.
+      const localSandboxPatch = {
+        ...(options?.localSandbox === undefined ? {} : { localSandbox: options.localSandbox }),
+        ...(options?.localSandboxNetwork === undefined
+          ? {}
+          : { localSandboxNetwork: options.localSandboxNetwork }),
+      };
+
+      // A `local` pick on a workspace agent is always this caller's own
+      // machine — a personal device the workspace-shared row must never
+      // reference (the server rejects it) — so it routes to the per-user
+      // override even for managers and private-agent owners. Picking this
+      // machine's own PRIVATE workspace row is the same choice made through
+      // the gateway: binding it on the shared row would point every other
+      // member at a device they cannot see. A row shared as public stays a
+      // shared pick, like any other workspace device.
+      const picksThisMachine =
+        target === 'local' ||
+        (target === 'device' &&
+          !!deviceId &&
+          localMachineDeviceIds.includes(deviceId) &&
+          deviceSelectors.getDeviceById(deviceId)(getDeviceStoreState())?.visibility === 'private');
+      if (usesWorkspaceMemberSelection || (isWorkspaceAgent && picksThisMachine)) {
         const nextOverrides = {
           ...workspaceUserPreference.agentDeviceOverrides,
           [agentId]: {
+            ...workspaceUserPreference.agentDeviceOverrides?.[agentId],
             executionTarget: target,
             ...(nextBoundDeviceId ? { boundDeviceId: nextBoundDeviceId } : {}),
+            ...localSandboxPatch,
           },
         };
-        await updateWorkspaceUserPreference({ agentDeviceOverrides: nextOverrides });
-        return;
+        try {
+          await updateWorkspaceUserPreference({ agentDeviceOverrides: nextOverrides });
+        } catch {
+          if (!options?.silent) toast.error(t('saveAgentConfigFail', { ns: 'common' }));
+          return false;
+        }
+        return true;
       }
 
       const nextConfig = {
@@ -134,18 +196,62 @@ export const useSelectExecutionTarget = (agentId: string) => {
           ...agencyConfig,
           executionTarget: target,
           ...(nextBoundDeviceId ? { boundDeviceId: nextBoundDeviceId } : {}),
+          ...localSandboxPatch,
         },
       };
 
       // A silent caller is defaulting the target on mount, not answering a
       // pick — telling the user "your change was not applied" would be
       // reporting a change they never made (automatic corrections must not trigger phantom save-error toasts).
-      if (options?.silent) {
-        await updateAgentConfigById(agentId, nextConfig, { showErrorMessage: false });
-        return;
+      //
+      // `rethrow` so a failed shared save (network error, server validation)
+      // stops here: the store already rolled the optimistic config back and
+      // toasted, and clearing the caller's override below would additionally
+      // destroy their previously valid personal target over a save that never
+      // happened.
+      try {
+        await updateAgentConfigById(agentId, nextConfig, {
+          rethrow: true,
+          ...(options?.silent ? { showErrorMessage: false } : {}),
+        });
+      } catch {
+        return false;
       }
 
-      await updateAgentConfigById(agentId, nextConfig);
+      // A manager's earlier `local` pick lives in their own override and would
+      // keep shadowing the shared target they just wrote — drop the override's
+      // routing keys. The sandbox fence stays: it qualifies their machine, not
+      // this pick.
+      const prevOverride = workspaceUserPreference.agentDeviceOverrides?.[agentId];
+      if (
+        isWorkspaceAgent &&
+        prevOverride &&
+        (prevOverride.executionTarget !== undefined || prevOverride.boundDeviceId !== undefined)
+      ) {
+        const { boundDeviceId: _device, executionTarget: _target, ...dormant } = prevOverride;
+        try {
+          await updateWorkspaceUserPreference({
+            agentDeviceOverrides: {
+              ...workspaceUserPreference.agentDeviceOverrides,
+              [agentId]: dormant,
+            },
+          });
+        } catch {
+          // The preference store rolled the override back, so the old `local`
+          // pick would keep shadowing the shared target that DID persist —
+          // split state. Compensate by restoring the previous shared config
+          // (best effort, no double toast) so the surviving override shadows
+          // the same target the user had before this pick.
+          await updateAgentConfigById(
+            agentId,
+            { agencyConfig: { ...agencyConfig } },
+            { showErrorMessage: false },
+          );
+          if (!options?.silent) toast.error(t('saveAgentConfigFail', { ns: 'common' }));
+          return false;
+        }
+      }
+      return true;
     },
     [
       agentId,
@@ -153,6 +259,8 @@ export const useSelectExecutionTarget = (agentId: string) => {
       currentDeviceId,
       isHetero,
       isAccessLoading,
+      isWorkspaceAgent,
+      localMachineDeviceIds,
       updateAgentConfigById,
       updateWorkspaceUserPreference,
       usesWorkspaceMemberSelection,

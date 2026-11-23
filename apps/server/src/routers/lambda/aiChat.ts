@@ -1,9 +1,15 @@
 import { randomUUID } from 'node:crypto';
 
 import { TRACING_SCENARIOS } from '@lobechat/const';
-import { getErrorCodeSpec } from '@lobechat/model-runtime';
+import type { DecisionPayload, DecisionQuestions } from '@lobechat/model-runtime';
+import { getErrorCodeSpec, StructuredOutputError } from '@lobechat/model-runtime';
 import type { CreateMessageParams, SendMessageServerResponse } from '@lobechat/types';
-import { AiSendMessageServerSchema, RequestTrigger, StructureOutputSchema } from '@lobechat/types';
+import {
+  AiSendMessageServerSchema,
+  DecisionOutputSchema,
+  RequestTrigger,
+  StructureOutputSchema,
+} from '@lobechat/types';
 import { createTimingHelpers, createTimingRequestId } from '@lobechat/utils';
 import { pickNonEmptyString, toRecord } from '@lobechat/utils/object';
 import { TRPCError } from '@trpc/server';
@@ -16,18 +22,45 @@ import { wsCompatProcedure } from '@/business/server/trpc-middlewares/workspaceA
 import { LOADING_FLAT } from '@/const/message';
 import { AgentModel } from '@/database/models/agent';
 import { MessageModel } from '@/database/models/message';
+import { ProjectModel } from '@/database/models/project';
 import { ThreadModel } from '@/database/models/thread';
-import { TopicModel } from '@/database/models/topic';
+import { TopicRepository } from '@/database/repositories/topic';
 import { router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
 import { markSilentTRPCErrorLog } from '@/libs/trpc/utils/errorLogger';
+import { unwrapPgError } from '@/server/modules/AgentRuntime/pgError';
+import { assertCanUseConversationTargets } from '@/server/routers/lambda/_helpers/conversationResourceGuard';
 import { resolveContext } from '@/server/routers/lambda/_helpers/resolveContext';
+import { toRuntimeErrorCause } from '@/server/routers/lambda/_helpers/runtimeErrorCause';
+import { resolveAgentReference } from '@/server/services/agent/resolveReference';
 import { AiChatService } from '@/server/services/aiChat';
 import { AiGenerationService } from '@/server/services/aiGeneration';
 import { FileService } from '@/server/services/file';
 import { archiveToolResultIfNeeded } from '@/server/services/toolExecution/archiveToolResult';
 
 const log = debug('lobe-lambda-router:ai-chat');
+
+const PG_UNIQUE_VIOLATION = '23505';
+
+/**
+ * Translate a primary-key collision on a client-supplied id into a CONFLICT.
+ *
+ * Only reachable once the client mints its own ids. The realistic trigger is a
+ * retried send replaying the same ids, not a nanoid collision — so it is a
+ * client-correctable condition and must not surface as a 500.
+ *
+ * The message is deliberately generic: echoing which id collided would let a
+ * caller probe for the existence of rows it cannot read.
+ */
+const rethrowIdConflict = (error: unknown): never => {
+  if (unwrapPgError(error)?.code === PG_UNIQUE_VIOLATION) {
+    throw new TRPCError({
+      code: 'CONFLICT',
+      message: 'This message has already been created.',
+    });
+  }
+  throw error;
+};
 const { createPrefixedTimingContext, logTiming, runTimedStage } = createTimingHelpers(
   'lobe-server:chat:lobehub:timing',
 );
@@ -74,7 +107,7 @@ const createRuntimeTRPCError = (
     if (options?.silentHandlerLog && runtimeStatus < 500) markSilentTRPCErrorLog(error);
 
     return new TRPCError({
-      cause: error,
+      cause: toRuntimeErrorCause(error),
       code: getTRPCErrorCodeFromStatus(runtimeStatus),
       message:
         typeof errorType === 'string'
@@ -109,12 +142,14 @@ const aiChatProcedure = wsCompatProcedure.use(serverDatabase).use(async (opts) =
   return opts.next({
     ctx: {
       agentModel: new AgentModel(ctx.serverDB, ctx.userId, wsId),
-      aiChatService: new AiChatService(ctx.serverDB, ctx.userId, wsId),
+      aiChatService: new AiChatService(ctx.serverDB, ctx.userId, wsId, {
+        workTypeOptIn: ctx.workTypeOptIn,
+      }),
       aiGenerationService: new AiGenerationService(ctx.serverDB, ctx.userId, wsId),
       fileService: new FileService(ctx.serverDB, ctx.userId, wsId),
       messageModel: new MessageModel(ctx.serverDB, ctx.userId, wsId),
       threadModel: new ThreadModel(ctx.serverDB, ctx.userId, wsId),
-      topicModel: new TopicModel(ctx.serverDB, ctx.userId, wsId),
+      topicRepo: new TopicRepository(ctx.serverDB, ctx.userId, wsId),
     },
   });
 });
@@ -122,6 +157,44 @@ const aiChatProcedure = wsCompatProcedure.use(serverDatabase).use(async (opts) =
 const aiChatWriteProcedure = aiChatProcedure.use(withScopedPermission('message:create'));
 
 export const aiChatRouter = router({
+  /**
+   * Asks a decision model (e.g. `lobehub/jev-1.14.0`) typed questions about one state and returns
+   * its answers with probabilities: `lh generate decide`. The same `runtime.decide` call bot wake
+   * and channel routing make, so a prompt can be replayed on the model production uses.
+   */
+  decide: aiChatWriteProcedure.input(DecisionOutputSchema).mutation(async ({ input, ctx }) => {
+    log('decide called with provider: %s, model: %s', input.provider, input.model);
+
+    const tracingId = input.tracing?.tracingId ?? randomUUID();
+
+    try {
+      const data = await ctx.aiGenerationService.decide(
+        {
+          model: input.model,
+          provider: input.provider,
+          // Validated by `DecisionOutputSchema`, which mirrors the runtime's decision types.
+          questions: input.questions as DecisionQuestions,
+          state: input.state as DecisionPayload['state'],
+        },
+        {
+          metadata: {
+            trigger: RequestTrigger.Chat,
+            ...input.metadata,
+            userAgent: ctx.userAgent,
+          },
+          tracing: { ...input.tracing, tracingId },
+        },
+      );
+
+      return { data, tracingId };
+    } catch (error) {
+      const runtimeTRPCError = createRuntimeTRPCError(error);
+      if (runtimeTRPCError) throw runtimeTRPCError;
+
+      throw error;
+    }
+  }),
+
   outputJSON: aiChatWriteProcedure.input(StructureOutputSchema).mutation(async ({ input, ctx }) => {
     log('outputJSON called with provider: %s, model: %s', input.provider, input.model);
     log('messages count: %d', input.messages.length);
@@ -149,11 +222,24 @@ export const aiChatRouter = router({
           tools: input.tools,
         },
         {
-          metadata: { trigger: RequestTrigger.Chat, ...input.metadata },
+          metadata: {
+            trigger: RequestTrigger.Chat,
+            ...input.metadata,
+            // Preserve extensible metadata while using the originating request's UA.
+            userAgent: ctx.userAgent,
+          },
           tracing: { ...input.tracing, tracingId },
         },
       );
     } catch (error) {
+      // Schema mode used to resolve unparsable model text (e.g. plain prose) as `undefined`.
+      // Keep that as "no result" so best-effort callers such as input completion stay silent;
+      // provider, auth and budget failures still map below. Tool mode keeps throwing.
+      if (error instanceof StructuredOutputError && !input.tools) {
+        log('outputJSON got unparsable structured output: %s', error.message);
+        return { data: undefined, tracingId };
+      }
+
       const runtimeTRPCError = createRuntimeTRPCError(error, {
         silentHandlerLog: input.tracing?.scenario === TRACING_SCENARIOS.InputCompletion,
       });
@@ -168,7 +254,34 @@ export const aiChatRouter = router({
 
   sendMessageInServer: aiChatWriteProcedure
     .input(AiSendMessageServerSchema)
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input: rawInput, ctx }) => {
+      const context = await resolveContext(
+        rawInput,
+        ctx.serverDB,
+        ctx.userId,
+        ctx.workspaceId ?? undefined,
+      );
+      await assertCanUseConversationTargets(
+        { db: ctx.serverDB, userId: ctx.userId, workspaceId: ctx.workspaceId },
+        [context],
+      );
+      const replyId = rawInput.newAssistantMessage.agentId;
+      const replyAgentId =
+        replyId && (replyId.startsWith('ssn_') || replyId === 'inbox')
+          ? (
+              await resolveAgentReference(
+                replyId,
+                ctx.serverDB,
+                ctx.userId,
+                ctx.workspaceId ?? undefined,
+              )
+            ).agentId
+          : replyId;
+      const input = {
+        ...rawInput,
+        agentId: context.agentId ?? undefined,
+        sessionId: context.sessionId ?? undefined,
+      };
       const timingContext =
         input.newAssistantMessage.provider === 'lobehub'
           ? { requestId: createTimingRequestId(), startedAt: Date.now() }
@@ -187,16 +300,7 @@ export const aiChatRouter = router({
         input.newTopic,
         input.newThread,
       );
-      let sessionId = input.sessionId;
-      if (!sessionId) {
-        const context = await runTimedStage(
-          timingContext,
-          'lambda.aiChat.resolveContext',
-          () => resolveContext(input, ctx.serverDB, ctx.userId, ctx.workspaceId ?? undefined),
-          { hasAgentId: !!input.agentId },
-        );
-        if (!!context.sessionId) sessionId = context.sessionId;
-      }
+      const sessionId = input.sessionId;
 
       let topicId = input.topicId!;
       let threadId = input.threadId;
@@ -208,6 +312,14 @@ export const aiChatRouter = router({
       // create topic if there should be a new topic
       if (input.newTopic) {
         log('creating new topic with title: %s', input.newTopic.title);
+        const { projectId } = input.newTopic;
+        if (
+          projectId &&
+          !(await new ProjectModel(ctx.serverDB, ctx.userId, ctx.workspaceId ?? undefined).findById(
+            projectId,
+          ))
+        )
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Project not found' });
         const topicItem = await runTimedStage(
           timingContext,
           'lambda.aiChat.topic.create',
@@ -218,6 +330,7 @@ export const aiChatRouter = router({
               messages: input.newTopic!.topicMessageIds,
               metadata: input.newTopic!.metadata,
               model: input.newTopic!.model,
+              projectId,
               provider: input.newTopic!.provider,
               sessionId,
               title: input.newTopic!.title,
@@ -227,15 +340,18 @@ export const aiChatRouter = router({
               timingContext,
               'lambda.aiChat.topic.create',
             );
+            // `newTopic.id` is the id the client already rendered this
+            // conversation under; honour it so the topic never changes id
+            // mid-flight. Absent (older client) → the model mints one.
             return modelTiming
-              ? ctx.topicModel.create(payload, undefined, modelTiming)
-              : ctx.topicModel.create(payload);
+              ? ctx.topicRepo.create(payload, input.newTopic!.id, modelTiming)
+              : ctx.topicRepo.create(payload, input.newTopic!.id);
           },
           {
             messageCount: input.newTopic.topicMessageIds?.length ?? 0,
             trigger: input.newTopic.trigger,
           },
-        );
+        ).catch(rethrowIdConflict);
         topicId = topicItem.id;
         isCreateNewTopic = true;
         log('new topic created with id: %s', topicId);
@@ -311,7 +427,27 @@ export const aiChatRouter = router({
           () => ctx.messageModel.getLatestSpineMessageId({ threadId, topicId }),
           { hasThreadId: !!threadId },
         );
-        parentId = resolvedParentId ?? parentId;
+        if (!parentId) {
+          parentId = resolvedParentId;
+        } else if (resolvedParentId && resolvedParentId !== parentId) {
+          // Advance a stale client tail only when the server head is on the
+          // SAME branch. A historical taskCallback fork may contain a newer
+          // assistant row on a sibling branch; blindly taking the newest row
+          // attaches the user's next turn there and the UI drops it after
+          // branch reconciliation.
+          const advancesClientBranch = await runTimedStage(
+            timingContext,
+            'lambda.aiChat.validateResolvedParentBranch',
+            () =>
+              ctx.messageModel.isMessageDescendantOf({
+                ancestorId: parentId!,
+                descendantId: resolvedParentId,
+                topicId,
+              }),
+            { hasThreadId: !!threadId },
+          );
+          if (advancesClientBranch) parentId = resolvedParentId;
+        }
       }
 
       if (input.preloadMessages?.length) {
@@ -390,7 +526,7 @@ export const aiChatRouter = router({
             topicId,
           } satisfies CreateMessageParams;
           const assistantMessage = {
-            agentId: input.agentId,
+            agentId: replyAgentId ?? input.agentId,
             content: LOADING_FLAT,
             groupId: input.groupId,
             metadata: input.newAssistantMessage.metadata,
@@ -408,6 +544,12 @@ export const aiChatRouter = router({
           return ctx.messageModel.createUserAndAssistantMessages(
             { assistantMessage, userMessage },
             {
+              // Ids the client already rendered the pair under. Omitted by an
+              // older client, in which case the model mints them as before.
+              ids: {
+                assistantMessageId: input.newAssistantMessage.id,
+                userMessageId: input.newUserMessage.id,
+              },
               ...(modelTiming ? { timing: modelTiming } : {}),
             },
           );
@@ -419,10 +561,11 @@ export const aiChatRouter = router({
           provider: input.newAssistantMessage.provider,
         },
       );
-      const { assistantMessage: assistantMessageItem, userMessage: userMessageItem } =
+      const { assistantMessage: assistantMessageItem, userMessage: userMessageItem } = await (
         agentTouchUpdatedAtTask
-          ? (await Promise.all([createMessagePairPromise, agentTouchUpdatedAtTask]))[0]
-          : await createMessagePairPromise;
+          ? Promise.all([createMessagePairPromise, agentTouchUpdatedAtTask]).then(([pair]) => pair)
+          : createMessagePairPromise
+      ).catch(rethrowIdConflict);
 
       const messageId = userMessageItem.id;
       log('user message created with id: %s', messageId);

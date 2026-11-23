@@ -1,0 +1,61 @@
+import type { WorkSummaryItem } from '@lobechat/types';
+import { useCallback } from 'react';
+
+import { taskDetailPath } from '@/features/AgentTasks/shared/taskDetailPath';
+import { openArtboard } from '@/features/Artboard/openArtboard';
+import { openCanvasModal } from '@/features/CanvasModal/loader';
+import { openCollectionModal } from '@/features/CollectionModal/loader';
+import { openDocumentModal } from '@/features/DocumentModal/loader';
+import { getWorkTypeDescriptor, isSafeExternalUrl } from '@/features/Work/descriptors';
+import { useWorkspaceAwareNavigate } from '@/features/Workspace/useWorkspaceAwareNavigate';
+
+/**
+ * Open a Work summary item at its canonical target (document modal, external
+ * url, file preview or task detail). Shared by the Work gallery and the
+ * resource home's recent-works section.
+ */
+export const useOpenWork = () => {
+  const navigate = useWorkspaceAwareNavigate();
+
+  return useCallback(
+    (item: WorkSummaryItem) => {
+      const openTarget = getWorkTypeDescriptor(item).getOpenTarget(item);
+      if (!openTarget) return;
+
+      switch (openTarget.kind) {
+        case 'artboard': {
+          void openArtboard(openTarget.artboardId);
+          return;
+        }
+        case 'canvas': {
+          void openCanvasModal(openTarget.canvasId, openTarget.version);
+          return;
+        }
+        case 'document': {
+          void openDocumentModal(openTarget.documentId);
+          return;
+        }
+        case 'external': {
+          if (isSafeExternalUrl(openTarget.url))
+            window.open(openTarget.url, '_blank', 'noopener,noreferrer');
+          return;
+        }
+        case 'filePreview': {
+          if (isSafeExternalUrl(openTarget.url))
+            window.open(openTarget.url, '_blank', 'noopener,noreferrer');
+          return;
+        }
+        case 'collection': {
+          void openCollectionModal(openTarget);
+          return;
+        }
+        case 'task': {
+          navigate(
+            taskDetailPath(openTarget.identifier ?? openTarget.taskId, undefined, openTarget.name),
+          );
+        }
+      }
+    },
+    [navigate],
+  );
+};

@@ -16,23 +16,27 @@
  * Paid models MUST have a non-zero price configured via admin.pricing.upsert
  * or pnpm db:seed:dev.  Without a price row the model is treated as free.
  */
+import { BillingCommandService } from '@lobechat/billing';
+import { BillingAccountModel } from '@lobechat/database';
+import type { SpendOrigin } from '@lobechat/types';
 import { and, eq, isNull } from 'drizzle-orm';
 
+import { getServerDB } from '@/database/core/db-adaptor';
 import { type NewGeneration, type NewGenerationBatch } from '@/database/schemas';
 import { modelPrices } from '@/database/schemas/billing';
-import { getServerDB } from '@/database/core/db-adaptor';
 import type { CreateImageServicePayload } from '@/server/routers/lambda/image';
-import { BillingAccountModel } from '@lobechat/database';
-import { BillingCommandService } from '@lobechat/billing';
 
 interface ChargeParams {
   clientIp?: string | null;
+  /** Optional pricing helpers passed through for flat/request credit models. */
+  computePriceParams?: Record<string, unknown>;
   configForDatabase: CreateImageServicePayload['params'];
   generationParams: CreateImageServicePayload['params'];
   generationTopicId: string;
   imageNum: number;
   model: string;
   provider: string;
+  spendOrigin?: SpendOrigin;
   userId: string;
   workspaceId?: string;
 }
@@ -107,13 +111,15 @@ export async function chargeBeforeGenerate(params: ChargeParams): Promise<Charge
       } catch (err: any) {
         // Release already-held items for this generation batch.
         for (const held of prechargeItems) {
-          await billingService.release({
-            billingAccountId: held.billingAccountId,
-            heldCredits: BigInt(held.creditsHeld),
-            holdLedgerEntryId: '',
-            reason: 'image_precharge_rollback',
-            requestId: held.requestId,
-          }).catch(() => {});
+          await billingService
+            .release({
+              billingAccountId: held.billingAccountId,
+              heldCredits: BigInt(held.creditsHeld),
+              holdLedgerEntryId: '',
+              reason: 'image_precharge_rollback',
+              requestId: held.requestId,
+            })
+            .catch(() => {});
         }
         if (err?.code === 'PRECONDITION_FAILED') {
           // Insufficient balance — return structured error for router to handle.

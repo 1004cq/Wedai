@@ -1,5 +1,4 @@
-import { toast } from '@lobehub/ui/base-ui';
-import { Form } from 'antd';
+import { useForm } from '@lobehub/ui/form';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useSearchParams } from 'react-router';
@@ -8,30 +7,35 @@ import type { BusinessSignupFomData } from '@/business/client/hooks/useBusinessS
 import { useBusinessSignup } from '@/business/client/hooks/useBusinessSignup';
 import type { AuthFetchOptions } from '@/features/Auth/utils/authFetchOptions';
 import { withCaptchaToken } from '@/features/Auth/utils/authFetchOptions';
-import { useAuthServerConfigStore } from '@/features/AuthShell';
+import { useAuthAgreement } from '@/features/AuthShell/AuthAgreement';
+import { useAuthServerConfigStore } from '@/features/AuthShell/AuthServerConfigProvider';
 import { trackLoginOrSignupClicked } from '@/features/User/UserLoginOrSignup/trackLoginOrSignupClicked';
 import { signUp } from '@/libs/better-auth/auth-client';
-import { buildOnboardingRedirectUrl } from '@/utils/onboardingRedirect';
+import { buildOnboardingRedirectUrl, toAbsoluteAuthCallbackUrl } from '@/utils/onboardingRedirect';
 
+import { resolveSignUpError, type SignUpErrorLike } from './resolveSignUpError';
 import type { BaseSignUpFormValues } from './types';
 
 export type SignUpFormValues = BaseSignUpFormValues & BusinessSignupFomData;
-
-interface SignUpErrorLike {
-  code?: string;
-  details?: {
-    cause?: {
-      code?: string;
-    };
-  };
-  message?: string;
-}
 
 export const useSignUp = () => {
   const { t } = useTranslation(['auth', 'authError']);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [form] = Form.useForm<SignUpFormValues>();
+  const { agreementChecked, continueWithAgreement, setAgreementChecked } = useAuthAgreement();
+  /**
+   * Sign-up failure that is not tied to one field. Rendered next to the submit button
+   * instead of a corner toast, and cleared as soon as the user changes any input.
+   */
+  const [formError, setFormError] = useState('');
+  const form = useForm<SignUpFormValues>({
+    initialValues: { confirmPassword: '', email: '', password: '' },
+    onValuesChange: () => setFormError(''),
+    onSubmit: (values) =>
+      continueWithAgreement(() => {
+        void handleSignUp(values);
+      }),
+  });
   const [loading, setLoading] = useState(false);
   const { getCaptchaTokenOnError, getFetchOptions, preSocialSignupCheck, businessElement } =
     useBusinessSignup(form);
@@ -44,6 +48,7 @@ export const useSignUp = () => {
 
   const handleSignUp = async (values: SignUpFormValues) => {
     setLoading(true);
+    setFormError('');
     await trackLoginOrSignupClicked({ spm: 'signup.submit.click' });
 
     try {
@@ -61,7 +66,7 @@ export const useSignUp = () => {
 
       const submit = async (nextFetchOptions?: AuthFetchOptions) =>
         signUp.email({
-          callbackURL: redirectUrl,
+          callbackURL: toAbsoluteAuthCallbackUrl(redirectUrl, window.location.origin),
           email: values.email,
           fetchOptions: nextFetchOptions,
           name: username,
@@ -79,25 +84,9 @@ export const useSignUp = () => {
       }
 
       if (error) {
-        const signUpError = error as SignUpErrorLike;
-        const isEmailDuplicate =
-          signUpError.code === 'FAILED_TO_CREATE_USER' &&
-          signUpError.details?.cause?.code === '23505';
-
-        if (isEmailDuplicate) {
-          toast.error(t('betterAuth.errors.emailExists'));
-          return;
-        }
-
-        if (signUpError.code === 'INVALID_EMAIL' || signUpError.message === 'Invalid email') {
-          toast.error(t('betterAuth.errors.emailInvalid'));
-          return;
-        }
-
-        const translated = signUpError.code
-          ? t(`authError:codes.${signUpError.code}`, { defaultValue: '' })
-          : '';
-        toast.error(translated || signUpError.message || t('betterAuth.signup.error'));
+        const { field, message } = resolveSignUpError(error as SignUpErrorLike, t);
+        if (field) form.setErrors({ [field]: message });
+        else setFormError(message);
         return;
       }
 
@@ -109,12 +98,21 @@ export const useSignUp = () => {
         // onboarding lives in the main app, outside this auth SPA — full page load required
         window.location.href = redirectUrl;
       }
-    } catch {
-      toast.error(t('betterAuth.signup.error'));
+    } catch (error) {
+      console.error('Sign up error:', error);
+      setFormError(t('betterAuth.errors.requestFailed'));
     } finally {
       setLoading(false);
     }
   };
 
-  return { businessElement, form, loading, onSubmit: handleSignUp };
+  return {
+    agreementChecked,
+    businessElement,
+    form,
+    formError,
+    loading,
+    onSubmit: handleSignUp,
+    setAgreementChecked,
+  };
 };

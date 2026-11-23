@@ -1,0 +1,412 @@
+/**
+ * @vitest-environment happy-dom
+ */
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import type { ReactNode } from 'react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import ConnectorGate from '@/features/Integrations/ConnectorGate';
+import { LobehubSkillStatus } from '@/store/tool/slices/lobehubSkillStore/types';
+
+import SkillDetail from './index';
+
+const mocks = vi.hoisted(() => {
+  const toolState = {
+    agentSkillListMap: {} as Record<
+      string,
+      Array<{ id: string; identifier: string; userId?: string }>
+    >,
+    builtinSkills: [],
+    checkLobehubSkillStatus: vi.fn(),
+    composioServers: [] as Array<{ identifier: string; status: string }>,
+    connectors: [] as Array<{ id: string; identifier: string }>,
+    createComposioConnection: vi.fn(),
+    deleteAgentSkill: vi.fn(),
+    useFetchAgentBoundConnectors: vi.fn(() => ({ isValidating: false })),
+    fetchConnectors: vi.fn(),
+    getLobehubSkillAuthorizeUrl: vi.fn(),
+    installBuiltinTool: vi.fn(),
+    installedBuiltinIds: [] as string[],
+    isAgentBoundInit: false,
+    installedPlugins: [] as Array<{
+      customParams?: { mcp?: Record<string, unknown> };
+      identifier: string;
+      type: string;
+    }>,
+    lobehubSkillServers: [] as Array<{
+      identifier: string;
+      isConnected: boolean;
+      name: string;
+      status: string;
+      tools?: Array<{
+        description?: string;
+        inputSchema: Record<string, unknown>;
+        name: string;
+      }>;
+    }>,
+    refreshComposioConnectionStatus: vi.fn(),
+    removeComposioConnection: vi.fn(),
+    revokeLobehubSkill: vi.fn(),
+    syncBuiltinTool: vi.fn(),
+    syncPluginTools: vi.fn(),
+    syncToolsFromClient: vi.fn(),
+    uninstallBuiltinTool: vi.fn(),
+  };
+
+  function selectToolStore<T>(selector: (state: typeof toolState) => T): T {
+    return selector(toolState);
+  }
+
+  const useToolStoreWithState = Object.assign(vi.fn(selectToolStore), {
+    getState: vi.fn(() => toolState),
+  });
+
+  return {
+    confirmModal: vi.fn(),
+    githubLocaleReady: true,
+    permissions: {
+      create_content: true,
+      edit_own_content: true,
+    },
+    toolState,
+    useToolStore: useToolStoreWithState,
+    userState: { userId: 'user-id' },
+  };
+});
+
+vi.mock('@lobechat/const', () => ({
+  COMPOSIO_APP_TYPES: [],
+  isDesktop: false,
+  getLobehubSkillProviderById: (identifier: string) =>
+    identifier === 'notion'
+      ? {
+          label: 'Notion',
+        }
+      : undefined,
+}));
+
+vi.mock('@lobehub/ui', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  confirmModal: mocks.confirmModal,
+}));
+
+vi.mock('react-i18next', () => ({
+  useTranslation: (namespace: string) => ({
+    ready: namespace !== 'integration' || mocks.githubLocaleReady,
+    t: (key: string, options?: { defaultValue?: string; name?: string } | string) => {
+      const translations: Record<string, string> = {
+        'tools.lobehubSkill.connect': 'Connect',
+        'tools.lobehubSkill.disconnect': 'Disconnect',
+        'tools.lobehubSkill.disconnectConfirm.desc': `Disconnect ${(options as { name?: string })?.name}?`,
+        'tools.lobehubSkill.disconnectConfirm.title': `Disconnect ${(options as { name?: string })?.name}`,
+        'tools.legacyConnector.configure': 'Configure',
+        'tools.legacyConnector.upgradeDesc':
+          'This connector still uses the legacy plugin format. Configure it to finish upgrading, then manage its tool permissions here.',
+        'tools.noConfigurablePermissions':
+          'This skill does not expose configurable tool permissions.',
+      };
+
+      if (translations[key]) return translations[key];
+      if (typeof options === 'object' && options?.defaultValue) return options.defaultValue;
+
+      return key;
+    },
+  }),
+}));
+
+vi.mock('@/features/Integrations/useConnectorConnection', () => ({
+  useConnectorConnection: () => ({ available: false }),
+}));
+vi.mock('@/features/Integrations/Github/RepositoryAccess', () => ({
+  default: () => <div>Repository access</div>,
+}));
+vi.mock('@/features/Settings/skill/features/LobehubSkillItem', () => ({ default: () => null }));
+
+vi.mock('@/features/AgentSkillDetail', () => ({
+  default: () => <div data-testid="agent-skill-detail" />,
+}));
+
+vi.mock('@/features/Connectors', () => ({
+  ConnectorDetail: ({
+    connectorId,
+    lifecycleActions,
+  }: {
+    connectorId: string;
+    lifecycleActions?: ReactNode;
+  }) => (
+    <div data-testid="connector-detail">
+      <span>{connectorId}</span>
+      {lifecycleActions}
+    </div>
+  ),
+  CustomConnectorModal: ({ open }: { open?: boolean }) =>
+    open ? <div data-testid="migration-modal" /> : null,
+}));
+
+vi.mock('@/hooks/usePermission', () => ({
+  usePermission: (action: 'create_content' | 'edit_own_content') => ({
+    allowed: mocks.permissions[action],
+    reason: '',
+  }),
+}));
+
+vi.mock('@/store/tool', () => ({
+  useToolStore: mocks.useToolStore,
+}));
+
+vi.mock('@/store/tool/selectors', () => ({
+  agentSkillsSelectors: {
+    getAgentSkills: (state: typeof mocks.toolState) => state.agentSkillListMap.all || [],
+  },
+  builtinToolSelectors: {
+    isBuiltinToolInstalled:
+      (identifier: string) =>
+      (state: typeof mocks.toolState): boolean =>
+        state.installedBuiltinIds.includes(identifier),
+  },
+  composioStoreSelectors: {
+    getServerByIdentifier:
+      (identifier: string) =>
+      (
+        state: typeof mocks.toolState,
+      ): (typeof mocks.toolState.composioServers)[number] | undefined =>
+        state.composioServers.find((server) => server.identifier === identifier),
+  },
+  lobehubSkillStoreSelectors: {
+    getServerByIdentifier:
+      (identifier: string) =>
+      (
+        state: typeof mocks.toolState,
+      ): (typeof mocks.toolState.lobehubSkillServers)[number] | undefined =>
+        state.lobehubSkillServers.find((server) => server.identifier === identifier),
+  },
+}));
+
+vi.mock('@/store/tool/slices/connector', () => ({
+  connectorSelectors: {
+    connectorByIdentifier:
+      (identifier: string) =>
+      (state: typeof mocks.toolState): (typeof mocks.toolState.connectors)[number] | undefined =>
+        state.connectors.find((connector) => connector.identifier === identifier),
+  },
+}));
+
+// Mock the real selector to avoid pulling its `toolAvailability` → `skillFilters`
+// → `@lobechat/const` (isDesktop) transitive imports into the unit env; mirror
+// the real `getCustomPluginById` behaviour against the mocked tool state.
+vi.mock('@/store/tool/slices/plugin/selectors', () => ({
+  pluginSelectors: {
+    getCustomPluginById:
+      (identifier: string) =>
+      (
+        state: typeof mocks.toolState,
+      ): (typeof mocks.toolState.installedPlugins)[number] | undefined =>
+        state.installedPlugins.find(
+          (plugin) => plugin.identifier === identifier && plugin.type === 'customPlugin',
+        ),
+  },
+}));
+
+vi.mock('@/store/user', () => ({
+  useUserStore<T>(selector: (state: typeof mocks.userState) => T): T {
+    return selector(mocks.userState);
+  },
+}));
+
+vi.mock('@/store/user/selectors', () => ({
+  userProfileSelectors: {
+    userId: (state: typeof mocks.userState) => state.userId,
+  },
+}));
+
+const connectedNotionServer = () => ({
+  identifier: 'notion',
+  isConnected: true,
+  name: 'Notion',
+  status: LobehubSkillStatus.CONNECTED,
+});
+
+describe('SkillDetail', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.permissions.create_content = true;
+    mocks.permissions.edit_own_content = true;
+    mocks.toolState.composioServers = [];
+    mocks.toolState.connectors = [];
+    mocks.toolState.installedBuiltinIds = [];
+    mocks.toolState.installedPlugins = [];
+    mocks.toolState.lobehubSkillServers = [];
+  });
+
+  it.each([true, false])(
+    'shows no library install action on a bundled skill detail (previously installed: %s)',
+    (installed) => {
+      const identifier = 'lobe-artifacts';
+      mocks.toolState.installedBuiltinIds = installed ? [identifier] : [];
+      render(<SkillDetail identifier={identifier} type="builtin-skill" />);
+      expect(screen.getByText(identifier)).toBeInTheDocument();
+      expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    },
+  );
+
+  it('waits for translations before showing GitHub repository access on a cold load', () => {
+    mocks.githubLocaleReady = false;
+    const cold = render(<ConnectorGate identifier="github">{null}</ConnectorGate>);
+    expect(screen.queryByText('Repository access')).toBeNull();
+    cold.unmount();
+
+    mocks.githubLocaleReady = true;
+    render(<ConnectorGate identifier="github">{null}</ConnectorGate>);
+    expect(screen.getByText('Repository access')).toBeTruthy();
+  });
+
+  it('offers a Configure migration action for an un-migrated legacy custom MCP', async () => {
+    // Legacy `user_installed_plugins` custom MCP with an mcp config but no
+    // matching `user_connectors` row → the panel should surface the migration
+    // entry instead of the dead-end "no configurable permissions" copy.
+    mocks.toolState.installedPlugins = [
+      {
+        customParams: { mcp: { type: 'http', url: 'https://mcp.example.com' } },
+        identifier: 'my-mcp',
+        type: 'customPlugin',
+      },
+    ];
+
+    render(<SkillDetail identifier="my-mcp" type="mcp-connector" />);
+
+    expect(await screen.findByRole('button', { name: 'Configure' })).toBeEnabled();
+    expect(
+      screen.getByText(
+        'This connector still uses the legacy plugin format. Configure it to finish upgrading, then manage its tool permissions here.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('This skill does not expose configurable tool permissions.'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows a disconnect action for a connected LobeHub connector without configurable tools', async () => {
+    mocks.toolState.lobehubSkillServers = [connectedNotionServer()];
+
+    render(<SkillDetail identifier="notion" type="lobehub-connector" />);
+
+    expect(
+      await screen.findByText('This skill does not expose configurable tool permissions.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Notion')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Disconnect' })).toBeEnabled();
+    expect(mocks.toolState.syncToolsFromClient).not.toHaveBeenCalled();
+  });
+
+  it('syncs LobeHub tools and passes the disconnect action into connector permissions detail', async () => {
+    mocks.toolState.connectors = [{ id: 'connector-1', identifier: 'notion' }];
+    mocks.toolState.lobehubSkillServers = [
+      {
+        ...connectedNotionServer(),
+        tools: [
+          {
+            description: 'Search pages',
+            inputSchema: { type: 'object' },
+            name: 'search',
+          },
+        ],
+      },
+    ];
+
+    render(<SkillDetail identifier="notion" type="lobehub-connector" />);
+
+    expect(await screen.findByTestId('connector-detail')).toHaveTextContent('connector-1');
+    expect(screen.getByRole('button', { name: 'Disconnect' })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(mocks.toolState.syncToolsFromClient).toHaveBeenCalledWith({
+        identifier: 'notion',
+        name: 'Notion',
+        sourceType: 'marketplace',
+        tools: [
+          {
+            description: 'Search pages',
+            inputSchema: { type: 'object' },
+            toolName: 'search',
+          },
+        ],
+      }),
+    );
+  });
+
+  it('only leaves connector permissions detail after disconnect actually succeeds', async () => {
+    const user = userEvent.setup();
+    mocks.toolState.connectors = [{ id: 'connector-1', identifier: 'notion' }];
+    mocks.toolState.lobehubSkillServers = [
+      {
+        ...connectedNotionServer(),
+        tools: [
+          {
+            inputSchema: { type: 'object' },
+            name: 'search',
+          },
+        ],
+      },
+    ];
+    mocks.confirmModal.mockImplementation(({ onOk }: { onOk?: () => Promise<void> }) => {
+      void onOk?.();
+    });
+    mocks.toolState.revokeLobehubSkill.mockResolvedValue(undefined);
+
+    render(<SkillDetail identifier="notion" type="lobehub-connector" />);
+
+    await user.click(await screen.findByRole('button', { name: 'Disconnect' }));
+
+    expect(mocks.confirmModal).toHaveBeenCalled();
+    expect(await screen.findByTestId('connector-detail')).toBeInTheDocument();
+    expect(
+      screen.queryByText('This skill does not expose configurable tool permissions.'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('returns to the no-permissions state after a successful disconnect', async () => {
+    const user = userEvent.setup();
+    const server = {
+      ...connectedNotionServer(),
+      tools: [
+        {
+          inputSchema: { type: 'object' },
+          name: 'search',
+        },
+      ],
+    };
+    mocks.toolState.connectors = [{ id: 'connector-1', identifier: 'notion' }];
+    mocks.toolState.lobehubSkillServers = [server];
+    mocks.confirmModal.mockImplementation(({ onOk }: { onOk?: () => Promise<void> }) => {
+      void onOk?.();
+    });
+    mocks.toolState.revokeLobehubSkill.mockImplementation(async () => {
+      server.isConnected = false;
+      server.status = LobehubSkillStatus.NOT_CONNECTED;
+    });
+
+    render(<SkillDetail identifier="notion" type="lobehub-connector" />);
+
+    await user.click(await screen.findByRole('button', { name: 'Disconnect' }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('This skill does not expose configurable tool permissions.'),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeInTheDocument();
+  });
+
+  it('loads the agents’ connectors when an agent connector’s detail is opened by link', () => {
+    render(<SkillDetail identifier="row-1" type="agent-connector" />);
+
+    expect(mocks.toolState.useFetchAgentBoundConnectors).toHaveBeenCalledWith(true);
+    expect(screen.getByTestId('connector-detail')).toHaveTextContent('row-1');
+  });
+
+  it('leaves the agent connector query disabled for other details', () => {
+    render(<SkillDetail identifier="agent-skill-1" type="agent-skill" />);
+
+    expect(mocks.toolState.useFetchAgentBoundConnectors).toHaveBeenCalledWith(false);
+  });
+});

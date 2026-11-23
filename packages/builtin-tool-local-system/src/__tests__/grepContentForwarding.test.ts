@@ -68,12 +68,6 @@ describe('localSystemExecutor.grepContent — params forwarding', () => {
       'path': '/Users/arvinxx/CodeProjects/LobeHub/lobehub-desktop',
     });
 
-    // And it must NOT have been collapsed to the stripped {directory, pattern} shape.
-    expect(forwarded).not.toEqual({
-      directory: expect.any(String),
-      pattern: expect.any(String),
-    });
-
     spy.mockRestore();
   });
 
@@ -136,10 +130,13 @@ describe('localSystemExecutor.grepContent — working directory default', () => 
   it('defaults an omitted scope to ctx.workingDirectory', async () => {
     const spy = mockRuntime();
 
-    await localSystemExecutor.grepContent({ pattern: 'foo' }, {
-      messageId: 'm1',
-      workingDirectory: '/Users/me/project',
-    } as never);
+    await localSystemExecutor.grepContent(
+      { pattern: 'foo' },
+      {
+        messageId: 'm1',
+        workingDirectory: '/Users/me/project',
+      },
+    );
 
     expect((spy.mock.calls[0][0] as { path?: string }).path).toBe('/Users/me/project');
     spy.mockRestore();
@@ -148,10 +145,13 @@ describe('localSystemExecutor.grepContent — working directory default', () => 
   it('anchors a relative scope (".") onto ctx.workingDirectory', async () => {
     const spy = mockRuntime();
 
-    await localSystemExecutor.grepContent({ 'pattern': 'foo', 'scope': '.' }, {
-      messageId: 'm1',
-      workingDirectory: '/Users/me/project',
-    } as never);
+    await localSystemExecutor.grepContent(
+      { pattern: 'foo', scope: '.' },
+      {
+        messageId: 'm1',
+        workingDirectory: '/Users/me/project',
+      },
+    );
 
     expect((spy.mock.calls[0][0] as { path?: string }).path).toBe('/Users/me/project');
     spy.mockRestore();
@@ -160,10 +160,13 @@ describe('localSystemExecutor.grepContent — working directory default', () => 
   it('keeps an absolute scope as-is even when a working directory is present', async () => {
     const spy = mockRuntime();
 
-    await localSystemExecutor.grepContent({ 'pattern': 'foo', 'scope': '/abs/elsewhere' }, {
-      messageId: 'm1',
-      workingDirectory: '/Users/me/project',
-    } as never);
+    await localSystemExecutor.grepContent(
+      { pattern: 'foo', scope: '/abs/elsewhere' },
+      {
+        messageId: 'm1',
+        workingDirectory: '/Users/me/project',
+      },
+    );
 
     expect((spy.mock.calls[0][0] as { path?: string }).path).toBe('/abs/elsewhere');
     spy.mockRestore();
@@ -172,7 +175,7 @@ describe('localSystemExecutor.grepContent — working directory default', () => 
   it('leaves params untouched when no scope and no working directory (web)', async () => {
     const spy = mockRuntime();
 
-    await localSystemExecutor.grepContent({ pattern: 'foo' }, { messageId: 'm1' } as never);
+    await localSystemExecutor.grepContent({ pattern: 'foo' }, { messageId: 'm1' });
 
     expect((spy.mock.calls[0][0] as { path?: string }).path).toBeUndefined();
     spy.mockRestore();

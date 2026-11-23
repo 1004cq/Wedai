@@ -1,11 +1,10 @@
-import { Flexbox, Icon } from '@lobehub/ui';
-import { Button, Popover } from '@lobehub/ui/base-ui';
-import { createStaticStyles, cssVar, cx } from 'antd-style';
-import { ChevronDownIcon, InfinityIcon, MessageCircleIcon } from 'lucide-react';
+import { Button, createStaticStyles, cssVar, cx, Flexbox, Icon, Popover } from '@lobehub/ui';
+import { ChevronDownIcon, InfinityIcon, ListTodoIcon } from 'lucide-react';
 import { memo, useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { usePermission } from '@/hooks/usePermission';
+import { densityVars } from '@/styles/densityVars';
 
 import type { HomeMode } from '../types';
 import { isHomeModeDisabled, resolvePermittedHomeMode } from './modePermission';
@@ -19,7 +18,7 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
     gap: 6px;
     align-items: center;
 
-    height: 32px;
+    height: ${densityVars.controlHeight};
     padding-inline: 8px;
     border: 0;
     border-radius: ${cssVar.borderRadius};
@@ -71,7 +70,7 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
     background: ${cssVar.colorBgElevated};
   `,
   optionTitle: css`
-    font-size: 14px;
+    font-size: ${densityVars.fontSize};
     font-weight: 500;
     line-height: 1.4;
     color: ${cssVar.colorText};
@@ -94,9 +93,13 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
   `,
 }));
 
+// Task mode carries the same glyph as the sidebar's Tasks entry: picking it
+// here and opening that page are two doors onto one thing, so they must not
+// look like two different features. Agent mode keeps the infinity mark, which
+// is the product's own sign for the open-ended, keeps-going side of the pair.
 const MODES = [
-  { icon: MessageCircleIcon, key: 'chat' },
-  { icon: InfinityIcon, key: 'task' },
+  { icon: InfinityIcon, key: 'chat' },
+  { icon: ListTodoIcon, key: 'task' },
 ] as const;
 
 interface ModeSelectProps {

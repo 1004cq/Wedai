@@ -1,18 +1,20 @@
-import { memo } from 'react';
-
 import SideBarLayout from '@/features/NavPanel/SideBarLayout';
-import Body from '@/routes/(main)/home/_layout/Body';
-import { AgentModalProvider } from '@/routes/(main)/home/_layout/Body/Agent/ModalProvider';
-import Header from '@/routes/(main)/home/_layout/Header';
 
-const HomeSidebarContent = memo(() => {
+import Body from './Body';
+import { AgentModalProvider } from './Body/Agent/ModalProvider';
+import Header from './Header';
+
+const HomeSidebarContent = () => {
   return (
     <AgentModalProvider>
-      <SideBarLayout body={<Body />} header={<Header />} />
+      <SideBarLayout
+        body={<Body />}
+        header={<Header />}
+        // Let ScrollArea observe accordion height changes and update its overflow fade.
+        contentStyle={{ height: 'auto' }}
+      />
     </AgentModalProvider>
   );
-});
-
-HomeSidebarContent.displayName = 'HomeSidebarContent';
+};
 
 export default HomeSidebarContent;

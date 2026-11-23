@@ -12,11 +12,9 @@ import {
   TeamOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
-import { Flexbox, Text } from '@lobehub/ui';
-import { Button, Drawer } from '@lobehub/ui/base-ui';
+import { Button, createStaticStyles, cssVar, Drawer, Flexbox, Text } from '@lobehub/ui';
 import type { MenuProps } from 'antd';
 import { Grid, Layout, Menu, Tag } from 'antd';
-import { createStaticStyles, cssVar } from 'antd-style';
 import type { PropsWithChildren, ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router';

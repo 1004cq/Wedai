@@ -1,6 +1,6 @@
 'use client';
 
-import { Button, Select, Switch } from '@lobehub/ui/base-ui';
+import { Button, Select, Switch } from '@lobehub/ui';
 import { Alert, App, Form, Input, InputNumber, Tag } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 

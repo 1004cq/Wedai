@@ -1,7 +1,7 @@
-import { type UIChatMessage } from '@lobechat/types';
-import { type FormItemProps } from '@lobehub/ui';
-import { Flexbox, Form } from '@lobehub/ui';
-import { Button, Switch, Tabs } from '@lobehub/ui/base-ui';
+import { agentDisplayName, type UIChatMessage } from '@lobechat/types';
+import { Button, Flexbox, Switch, Tabs } from '@lobehub/ui';
+import { Form, type FormFieldProps, useForm } from '@lobehub/ui/form';
+import * as stylex from '@stylexjs/stylex';
 import { CopyIcon } from 'lucide-react';
 import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -28,11 +28,15 @@ const DEFAULT_FIELD_VALUE: FieldType = {
 const ShareImage = memo<{ message: UIChatMessage; mobile?: boolean; uniqueId?: string }>(
   ({ message, uniqueId }) => {
     const agentId = useConversationStore(contextSelectors.agentId);
-    const currentAgentTitle = useAgentStore(
-      (s) => agentSelectors.getAgentMetaById(agentId)(s).title,
+    const currentAgentTitle = useAgentStore((s) =>
+      agentDisplayName(agentSelectors.getAgentMetaById(agentId)(s)),
     );
     const context = useConversationStore((s) => s.context);
     const [fieldValue, setFieldValue] = useState<FieldType>(DEFAULT_FIELD_VALUE);
+    const form = useForm({
+      initialValues: DEFAULT_FIELD_VALUE,
+      onValuesChange: (_, v) => setFieldValue(v),
+    });
     const { t } = useTranslation(['chat', 'common']);
 
     const widthModeOptions = [
@@ -49,14 +53,14 @@ const ShareImage = memo<{ message: UIChatMessage; mobile?: boolean; uniqueId?: s
       title: currentAgentTitle ?? undefined,
     });
     const { loading: copyLoading, onCopy } = useImgToClipboard({ id: `#${previewId}` });
-    const settings: FormItemProps[] = [
+    const settings: FormFieldProps<FieldType>[] = [
       {
         children: <Tabs items={widthModeOptions} />,
         label: t('shareModal.widthMode.label'),
         layout: 'horizontal',
         minWidth: undefined,
         name: 'widthMode',
-        valuePropName: 'activeKey',
+        valueProp: 'activeKey',
       },
       {
         children: <Switch />,
@@ -64,7 +68,6 @@ const ShareImage = memo<{ message: UIChatMessage; mobile?: boolean; uniqueId?: s
         layout: 'horizontal',
         minWidth: undefined,
         name: 'withBackground',
-        valuePropName: 'checked',
       },
       {
         children: <Switch />,
@@ -72,15 +75,14 @@ const ShareImage = memo<{ message: UIChatMessage; mobile?: boolean; uniqueId?: s
         layout: 'horizontal',
         minWidth: undefined,
         name: 'withFooter',
-        valuePropName: 'checked',
       },
       {
         children: <Tabs items={imageTypeOptions} />,
         label: t('shareModal.imageType'),
-        layout: 'horizontal',
+        layout: 'vertical',
         minWidth: undefined,
         name: 'imageType',
-        valuePropName: 'activeKey',
+        valueProp: 'activeKey',
       },
     ];
 
@@ -106,7 +108,7 @@ const ShareImage = memo<{ message: UIChatMessage; mobile?: boolean; uniqueId?: s
 
     return (
       <>
-        <Flexbox className={styles.body} gap={16} horizontal={!isMobile}>
+        <Flexbox className={stylex.props(styles.body).className} gap={16} horizontal={!isMobile}>
           <Preview
             context={context}
             title={title}
@@ -114,19 +116,13 @@ const ShareImage = memo<{ message: UIChatMessage; mobile?: boolean; uniqueId?: s
             message={message}
             previewId={previewId}
           />
-          <Flexbox className={styles.sidebar} gap={12}>
-            <Form
-              initialValues={DEFAULT_FIELD_VALUE}
-              items={settings}
-              itemsType={'flat'}
-              onValuesChange={(_, v) => setFieldValue(v)}
-              {...FORM_STYLE}
-            />
+          <Flexbox className={stylex.props(styles.sidebar).className} gap={12}>
+            <Form form={form} items={settings} itemsType={'flat'} {...FORM_STYLE} />
             {!isMobile && button}
           </Flexbox>
         </Flexbox>
         {isMobile && (
-          <Flexbox horizontal className={styles.footer} gap={8}>
+          <Flexbox horizontal className={stylex.props(styles.footer).className} gap={8}>
             {button}
           </Flexbox>
         )}

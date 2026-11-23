@@ -3,17 +3,21 @@
 import type { AgentEvalExperiment } from '@lobechat/types';
 import {
   Button,
+  Input,
   ModalFooter,
   type ModalInstance,
   Select,
+  TextArea,
+  toast,
   useModalContext,
-} from '@lobehub/ui/base-ui';
-import { toast } from '@lobehub/ui/base-ui';
-import { Form, Input } from 'antd';
+} from '@lobehub/ui';
+import { Form, useForm } from '@lobehub/ui/form';
 import { t } from 'i18next';
-import { memo, useEffect } from 'react';
+import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import InlineErrorText from '@/components/InlineErrorText';
+import { type InlineErrorState, toInlineError } from '@/components/InlineErrorText/errorDetail';
 import { benchmarkSelectors, useEvalStore } from '@/store/eval';
 import { createFormModal } from '@/utils/createFormModal';
 
@@ -32,29 +36,22 @@ const ExperimentModalContent = memo<ExperimentModalContentProps>(
     const { t } = useTranslation('eval');
 
     const { close } = useModalContext();
-    const [form] = Form.useForm();
     const createExperiment = useEvalStore((s) => s.createExperiment);
     const updateExperiment = useEvalStore((s) => s.updateExperiment);
     const useFetchBenchmarks = useEvalStore((s) => s.useFetchBenchmarks);
-    const benchmarkList = useEvalStore(benchmarkSelectors.benchmarkList);
+    const benchmarkList = useEvalStore(benchmarkSelectors.agentBenchmarkList);
 
     useFetchBenchmarks();
 
-    useEffect(() => {
-      if (experiment) {
-        form.setFieldsValue({
-          benchmarkIds: experiment.benchmarks.map((benchmark) => benchmark.id),
-          description: experiment.description || undefined,
-          name: experiment.name,
-        });
-      }
-    }, [experiment, form]);
+    /** Save failure shown below the form; the modal stays open with the user's input. */
+    const [error, setError] = useState<InlineErrorState | undefined>();
 
     const handleSubmit = async (values: {
       benchmarkIds: string[];
       description?: string;
       name: string;
     }) => {
+      setError(undefined);
       onLoadingChange(true);
       try {
         const result = experiment
@@ -64,37 +61,49 @@ const ExperimentModalContent = memo<ExperimentModalContentProps>(
         toast.success(experiment ? t('experiment.edit.success') : t('experiment.create.title'));
         close();
         onSuccess?.(result.id);
-      } catch (error) {
-        toast.error(
-          error instanceof Error
-            ? error.message
-            : experiment
-              ? t('experiment.edit.error')
-              : t('experiment.create.error'),
+      } catch (cause) {
+        console.error('Failed to save eval experiment:', cause);
+        setError(
+          toInlineError(
+            experiment ? t('experiment.edit.failedRetry') : t('experiment.create.failedRetry'),
+            cause,
+          ),
         );
       } finally {
         onLoadingChange(false);
       }
     };
 
+    const form = useForm({
+      initialValues: experiment
+        ? {
+            benchmarkIds: experiment.benchmarks.map((benchmark) => benchmark.id),
+            description: experiment.description || undefined,
+            name: experiment.name,
+          }
+        : undefined,
+      onSubmit: handleSubmit,
+      onValuesChange: () => setError(undefined),
+    });
+
     return (
-      <Form form={form} id={formId} layout="vertical" onFinish={handleSubmit}>
-        <Form.Item
+      <Form form={form} id={formId} layout="vertical">
+        <Form.Field
           label={t('experiment.create.name.label')}
           name="name"
-          rules={[{ message: t('experiment.create.nameRequired'), required: true }]}
+          required={t('experiment.create.nameRequired')}
         >
           <Input placeholder={t('experiment.create.name.placeholder')} />
-        </Form.Item>
+        </Form.Field>
 
-        <Form.Item label={t('experiment.create.description.label')} name="description">
-          <Input.TextArea placeholder={t('experiment.create.description.placeholder')} rows={3} />
-        </Form.Item>
+        <Form.Field label={t('experiment.create.description.label')} name="description">
+          <TextArea placeholder={t('experiment.create.description.placeholder')} rows={3} />
+        </Form.Field>
 
-        <Form.Item
+        <Form.Field
           label={t('experiment.create.benchmarks.label')}
           name="benchmarkIds"
-          rules={[{ message: t('experiment.create.benchmarksRequired'), required: true }]}
+          required={t('experiment.create.benchmarksRequired')}
         >
           <Select
             mode="multiple"
@@ -104,7 +113,8 @@ const ExperimentModalContent = memo<ExperimentModalContentProps>(
               value: benchmark.id,
             }))}
           />
-        </Form.Item>
+        </Form.Field>
+        {error && <InlineErrorText detail={error.detail}>{error.summary}</InlineErrorText>}
       </Form>
     );
   },

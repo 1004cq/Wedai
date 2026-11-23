@@ -1,11 +1,14 @@
-import { DEFAULT_AVATAR, DEFAULT_INBOX_AVATAR } from '@lobechat/const';
-import { Avatar, preventDefault } from '@lobehub/ui';
+import { INBOX_SESSION_ID } from '@lobechat/const';
+import { agentDisplayName } from '@lobechat/types';
+import { preventDefault } from '@lobehub/ui';
 import { Command } from 'cmdk';
 import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import AgentAvatar from '@/components/AgentAvatar';
+import Avatar from '@/components/Avatar';
 import { useAgentStore } from '@/store/agent';
-import { builtinAgentSelectors } from '@/store/agent/selectors/builtinAgentSelectors';
+import { agentSelectors, builtinAgentSelectors } from '@/store/agent/selectors';
 import { useHomeStore } from '@/store/home';
 import { homeAgentListSelectors } from '@/store/home/selectors';
 
@@ -17,6 +20,8 @@ const AskAgentCommands = memo(() => {
   const { search, setSearch, setSelectedAgent } = useCommandMenuContext();
 
   const inboxAgentId = useAgentStore(builtinAgentSelectors.inboxAgentId);
+  const inboxTitle = useAgentStore(agentSelectors.inboxAgentDisplayName);
+  const inboxAvatar = useAgentStore(agentSelectors.inboxAgentAvatar);
   const allAgents = useHomeStore(homeAgentListSelectors.allAgents);
 
   // Check if search starts with "@"
@@ -30,13 +35,16 @@ const AskAgentCommands = memo(() => {
 
   // Filter agents based on the query after "@"
   const filteredAgents = useMemo(() => {
-    const agents = allAgents.filter((item) => item.type === 'agent');
+    // Lobe AI has its own fixed `@` row, so its list item is left out.
+    const agents = allAgents.filter(
+      (item) => item.type === 'agent' && item.slug !== INBOX_SESSION_ID,
+    );
     if (!mentionQuery) {
       return agents.slice(0, 10);
     }
     return agents
       .filter((agent) => {
-        const title = (agent.title || '').toLowerCase();
+        const title = (agentDisplayName(agent) ?? '').toLowerCase();
         return title.includes(mentionQuery);
       })
       .slice(0, 10);
@@ -54,21 +62,21 @@ const AskAgentCommands = memo(() => {
   // Only show when user types "@"
   if (!isAtMention) return null;
 
-  // Check if Lobe AI matches the query
-  const showLobeAI = !mentionQuery || 'lobe ai'.includes(mentionQuery);
+  // Check if the default assistant matches the query
+  const showLobeAI = !mentionQuery || inboxTitle.toLowerCase().includes(mentionQuery.toLowerCase());
 
   return (
     <Command.Group heading={t('cmdk.mentionAgent')}>
-      {/* @Lobe AI option */}
+      {/* @<default assistant> option */}
       {showLobeAI && (
         <Command.Item
           value="@lobe-ai"
           onMouseDown={preventDefault}
-          onSelect={() => handleAgentSelect(inboxAgentId, 'Lobe AI', DEFAULT_INBOX_AVATAR)}
+          onSelect={() => handleAgentSelect(inboxAgentId, inboxTitle, inboxAvatar)}
         >
-          <Avatar emojiScaleWithBackground avatar={DEFAULT_INBOX_AVATAR} shape="square" size={18} />
+          <Avatar emojiScaleWithBackground avatar={inboxAvatar} shape="square" size={18} />
           <div className={styles.itemContent}>
-            <div className={styles.itemLabel}>@Lobe AI</div>
+            <div className={styles.itemLabel}>@{inboxTitle}</div>
           </div>
         </Command.Item>
       )}
@@ -77,24 +85,25 @@ const AskAgentCommands = memo(() => {
       {filteredAgents.map((agent) => (
         <Command.Item
           key={agent.id}
-          value={`@${agent.title || 'agent'}-${agent.id}`}
+          value={`@${agentDisplayName(agent, 'agent')}-${agent.id}`}
           onMouseDown={preventDefault}
           onSelect={() =>
             handleAgentSelect(
               agent.id,
-              agent.title || t('defaultAgent'),
-              typeof agent.avatar === 'string' ? agent.avatar : DEFAULT_AVATAR,
+              agentDisplayName(agent, t('defaultAgent')),
+              typeof agent.avatar === 'string' ? agent.avatar : '',
             )
           }
         >
-          <Avatar
-            emojiScaleWithBackground
-            avatar={typeof agent.avatar === 'string' ? agent.avatar : DEFAULT_AVATAR}
+          <AgentAvatar
+            agentId={agent.id}
+            avatar={typeof agent.avatar === 'string' ? agent.avatar : undefined}
+            name={agentDisplayName(agent, t('defaultAgent'))}
             shape="square"
             size={18}
           />
           <div className={styles.itemContent}>
-            <div className={styles.itemLabel}>@{agent.title || t('defaultAgent')}</div>
+            <div className={styles.itemLabel}>@{agentDisplayName(agent, t('defaultAgent'))}</div>
           </div>
         </Command.Item>
       ))}

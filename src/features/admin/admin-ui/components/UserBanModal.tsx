@@ -1,6 +1,6 @@
 'use client';
 
-import { Button, createModal, useModalContext } from '@lobehub/ui/base-ui';
+import { Button, createModal, useModalContext } from '@lobehub/ui';
 import { App, Form, Input } from 'antd';
 import { useState } from 'react';
 

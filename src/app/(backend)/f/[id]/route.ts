@@ -1,7 +1,13 @@
 import debug from 'debug';
+import { NextRequest } from 'next/server';
 
 import { FileModel } from '@/database/models/file';
 import { getServerDB } from '@/database/server';
+import { createLambdaContext } from '@/libs/trpc/lambda/context';
+import {
+  resolveEnterpriseContentScopes,
+  resolveManagedContentReader,
+} from '@/server/services/enterpriseKnowledge/contentAccess';
 import { FileService } from '@/server/services/file';
 
 const log = debug('lobe-file:proxy');
@@ -14,16 +20,16 @@ type Params = Promise<{ id: string }>;
  *
  * Features:
  * - Query database to get file record (without userId filter for public access)
- * - Stream object bytes from storage via the server's S3 credentials
- * - Return 200 with Content-Type so <img src="/f/..."> never depends on
- *   browser-reachable S3 endpoints or cached 302 Location headers
+ * - Generate a temporary S3 presigned preview URL
+ * - Return 302 redirect
  *
- * NOTE: This endpoint is intentionally unauthenticated. The proxy URL is
+ * Non-enterprise links remain public by id. The proxy URL is
  * embedded in bare `<img>` tags, download links, and links shared to AI — none
  * of which can attach auth headers/cookies. Adding `checkAuth` here would break
- * every previously-shared `/f/:id` link, so access stays public by id.
+ * every previously-shared `/f/:id` link. Distribution-managed enterprise
+ * content requires the current authenticated caller's library access.
  */
-export const GET = async (_req: Request, segmentData: { params: Params }) => {
+export const GET = async (req: Request, segmentData: { params: Params }) => {
   try {
     const params = await segmentData.params;
     const { id } = params;
@@ -39,36 +45,39 @@ export const GET = async (_req: Request, segmentData: { params: Params }) => {
     if (!file) {
       log('File not found: %s', id);
       return new Response('File not found', {
-        headers: { 'Cache-Control': 'private, no-store' },
         status: 404,
       });
+    }
+
+    // Classify with the owner's scope, then authorize the actual request. No
+    // storage URL may be created before the enterprise policy has passed.
+    try {
+      const scopes = await resolveEnterpriseContentScopes({ serverDB: db, userId: file.userId }, [
+        id,
+      ]);
+      if (scopes.has(id)) {
+        const reader = resolveManagedContentReader(await createLambdaContext(new NextRequest(req)));
+        if (!reader) return new Response('File not found', { status: 404 });
+        await resolveEnterpriseContentScopes({ serverDB: db, userId: reader }, [id]);
+      }
+    } catch {
+      return new Response('File not found', { status: 404 });
     }
 
     // Create file service with file owner's userId
     const fileService = new FileService(db, file.userId);
 
-    // Serve bytes through the app so commercial deploys with an internal
-    // S3_ENDPOINT (e.g. http://rustfs:9000) never require the browser to
-    // follow a redirect to an unreachable host. Also avoids sticky 302
-    // caches that previously pointed at rustfs.
-    const bytes = await fileService.getFileByteArray(file.url);
-    const contentType = file.fileType || 'application/octet-stream';
+    const isDownload = new URL(req.url).searchParams.get('download') === '1';
+    const redirectUrl = isDownload
+      ? await fileService.createDownloadUrl(file.url, file.name)
+      : await fileService.createCachedPreSignedUrlForPreview(file.url);
+    log('Web S3 presigned URL generated (%s)', isDownload ? 'download' : 'preview');
 
-    log('File proxy streaming %s bytes (%s)', bytes.byteLength, contentType);
-
-    return new Response(bytes, {
-      headers: {
-        'Cache-Control': 'public, max-age=31536000, immutable',
-        'Content-Length': String(bytes.byteLength),
-        'Content-Type': contentType,
-        'X-Content-Type-Options': 'nosniff',
-      },
-      status: 200,
-    });
+    // Return 302 redirect
+    return Response.redirect(redirectUrl, 302);
   } catch (error) {
     console.error('File proxy error:', error);
     return new Response('Internal server error', {
-      headers: { 'Cache-Control': 'private, no-store' },
       status: 500,
     });
   }

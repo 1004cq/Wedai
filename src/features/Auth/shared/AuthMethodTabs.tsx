@@ -1,7 +1,6 @@
 'use client';
 
-import { Text } from '@lobehub/ui';
-import { createStaticStyles } from 'antd-style';
+import { createStaticStyles, Text } from '@lobehub/ui';
 import { useTranslation } from 'react-i18next';
 
 export type AuthMethod = 'email' | 'phone';

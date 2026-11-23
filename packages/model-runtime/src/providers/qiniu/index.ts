@@ -1,7 +1,7 @@
 import { ModelProvider } from 'model-bank';
 
-import type { OpenAICompatibleFactoryOptions } from '../../core/openaiCompatibleFactory';
-import { createOpenAICompatibleRuntime } from '../../core/openaiCompatibleFactory';
+import type { OpenAICompatibleFactoryOptions } from '../../core/openaiCompatible';
+import { createOpenAICompatibleRuntime } from '../../core/openaiCompatible';
 import { processMultiProviderModelList } from '../../utils/modelParse';
 
 export const params = {
@@ -13,8 +13,14 @@ export const params = {
   models: async ({ client }) => {
     const modelsPage = (await client.models.list()) as any;
     const modelList = modelsPage.data.map((model: any) => {
-      const { created: _created, ...rest } = model;
-      return rest;
+      const { created: _created, context_length, max_tokens, ...rest } = model;
+      // Rename Qiniu's snake_case length fields to the card fields
+      // processMultiProviderModelList actually reads, so they aren't dropped
+      return {
+        ...rest,
+        contextWindowTokens: context_length,
+        maxOutput: max_tokens,
+      };
     });
 
     // Auto-detect the model provider and select the corresponding configuration

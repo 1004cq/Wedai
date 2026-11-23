@@ -4,10 +4,7 @@ import {
   type MemoryRuntimeService,
 } from '@lobechat/builtin-tool-memory/executionRuntime';
 import { BRANDING_PROVIDER, ENABLE_BUSINESS_FEATURES } from '@lobechat/business-const';
-import {
-  DEFAULT_USER_MEMORY_EMBEDDING_MODEL_ITEM,
-  MEMORY_SEARCH_TOP_K_LIMITS,
-} from '@lobechat/const';
+import { DEFAULT_USER_MEMORY_EMBEDDING_MODEL_ITEM } from '@lobechat/const';
 import type { LobeChatDatabase } from '@lobechat/database';
 import type {
   ActivityMemoryItemSchema,
@@ -16,7 +13,7 @@ import type {
   ExperienceMemoryItemSchema,
   PreferenceMemoryItemSchema,
   RemoveIdentityActionSchema,
-  UpdateIdentityActionSchema,
+  UpdateIdentityToolInputSchema,
 } from '@lobechat/memory-user-memory/schemas';
 import type {
   AddActivityMemoryResult,
@@ -29,15 +26,18 @@ import type {
   RemoveIdentityMemoryResult,
   SearchMemoryParams,
   SearchMemoryResult,
+  SpendOrigin,
   UpdateIdentityMemoryResult,
 } from '@lobechat/types';
-import { LayersEnum } from '@lobechat/types';
+import { LayersEnum, RequestTrigger, toAgentShareVisitorIds } from '@lobechat/types';
 import { eq } from 'drizzle-orm';
 import type { z } from 'zod';
 
 import {
   type IdentityEntryBasePayload,
   type IdentityEntryPayload,
+  normalizeUserMemorySearchQueries,
+  shouldRunUserMemoryLexicalSearch,
   UserMemoryModel,
 } from '@/database/models/userMemory';
 import { userSettings } from '@/database/schemas';
@@ -46,14 +46,20 @@ import {
   initModelRuntimeFromDB,
   initModelRuntimeWithUserPayload,
 } from '@/server/modules/ModelRuntime';
+import { AgentEvalMemoryService } from '@/server/services/agentEvalMemory';
 import {
   emitToolOutcomeSafely,
   resolveToolOutcomeScope,
 } from '@/server/services/agentSignal/procedure';
 import { redisPolicyStateStore } from '@/server/services/agentSignal/store/adapters/redis/policyStateStore';
+import { createFtsSearchRepo } from '@/server/services/ftsSearch';
+import { recordUserMemoryLexicalSearchDecision } from '@/server/services/ftsSearch/observability';
 import type { UserMemoryEmbeddingRuntime } from '@/server/services/memory/userMemory/embedding';
 import { embedUserMemoryTexts } from '@/server/services/memory/userMemory/embedding';
-import { normalizeSearchMemoryParams } from '@/server/services/memory/userMemory/searchParams';
+import {
+  normalizeSearchMemoryParams,
+  resolveMemorySearchTopK,
+} from '@/server/services/memory/userMemory/searchParams';
 
 import type { ToolExecutionMemoryEmbeddingRuntime } from '../types';
 import type { ServerRuntimeRegistration } from './types';
@@ -63,28 +69,6 @@ type MemoryEffort = 'high' | 'low' | 'medium';
 const normalizeMemoryEffort = (value: unknown): MemoryEffort => {
   if (value === 'low' || value === 'medium' || value === 'high') return value;
   return 'medium';
-};
-
-const applySearchLimitsByEffort = (
-  effort: MemoryEffort,
-  requested: {
-    activities: number;
-    contexts: number;
-    experiences: number;
-    identities: number;
-    preferences: number;
-  },
-) => {
-  const limit = MEMORY_SEARCH_TOP_K_LIMITS[effort];
-  const identityLimit = effort === 'high' ? 4 : effort === 'low' ? 1 : 2;
-
-  return {
-    activities: Math.min(requested.activities, limit.activities),
-    contexts: Math.min(requested.contexts, limit.contexts),
-    experiences: Math.min(requested.experiences, limit.experiences),
-    identities: Math.min(requested.identities, identityLimit),
-    preferences: Math.min(requested.preferences, limit.preferences),
-  };
 };
 
 const getEmbeddingRuntime = async (
@@ -109,6 +93,7 @@ const createEmbedder = (
   agentRuntime: UserMemoryEmbeddingRuntime,
   embeddingModel: string,
   userId: string,
+  spendOrigin?: SpendOrigin,
 ) => {
   return async (value?: string | null): Promise<number[] | undefined> => {
     if (!value || value.trim().length === 0) return undefined;
@@ -118,6 +103,7 @@ const createEmbedder = (
       model: embeddingModel,
       runtime: agentRuntime,
       source: 'toolRuntime:userMemory.tool',
+      spendOrigin,
       userId,
     });
 
@@ -125,7 +111,7 @@ const createEmbedder = (
   };
 };
 
-class MemoryServerRuntimeService implements MemoryRuntimeService {
+export class MemoryServerRuntimeService implements MemoryRuntimeService {
   private agentId?: string;
   private emitOutcome?: typeof emitToolOutcomeSafely;
   private messageId?: string;
@@ -137,6 +123,12 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
   private topicId?: string;
   private memoryEffort: MemoryEffort;
   private memoryEmbeddingRuntime?: ToolExecutionMemoryEmbeddingRuntime;
+  /**
+   * Origin attribution stamped on every embedding this runtime bills. Set only
+   * for a shared-agent visitor run, whose embeddings are otherwise billed to
+   * the creator as ordinary memory usage.
+   */
+  private spendOrigin?: SpendOrigin;
   private userId: string;
   private workspaceId?: string;
 
@@ -149,6 +141,7 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
     memoryModel: UserMemoryModel;
     operationId?: string;
     serverDB: LobeChatDatabase;
+    spendOrigin?: SpendOrigin;
     taskId?: string;
     toolCallId?: string;
     topicId?: string;
@@ -166,6 +159,7 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
     this.topicId = options.topicId;
     this.memoryEffort = options.memoryEffort;
     this.memoryEmbeddingRuntime = options.memoryEmbeddingRuntime;
+    this.spendOrigin = options.spendOrigin;
     this.userId = options.userId;
     this.workspaceId = options.workspaceId;
   }
@@ -179,6 +173,8 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
     summary: string;
     toolAction: string;
   }) => {
+    // Eval trials and fixture seeding run without an outcome emitter.
+    if (!this.emitOutcome) return;
     const { scope, scopeKey } = resolveToolOutcomeScope({
       agentId: this.agentId,
       taskId: this.taskId,
@@ -226,9 +222,7 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
           defaultEmbeddingConfig.provider,
           this.workspaceId,
         );
-    const normalizedQueries = [
-      ...new Set((normalizedParams.queries ?? []).map((query) => query.trim()).filter(Boolean)),
-    ];
+    const normalizedQueries = normalizeUserMemorySearchQueries(normalizedParams.queries);
 
     const queryEmbeddings =
       normalizedQueries.length > 0
@@ -238,25 +232,20 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
               model: embeddingModel,
               runtime: modelRuntime,
               source: 'toolRuntime:userMemory.search',
+              spendOrigin: this.spendOrigin,
               userId: this.userId,
             })
           ).filter((embedding): embedding is number[] => Boolean(embedding))
         : [];
+    const lexicalSearch = shouldRunUserMemoryLexicalSearch(normalizedQueries, queryEmbeddings);
+    recordUserMemoryLexicalSearchDecision({
+      decision: lexicalSearch ? 'executed' : 'skipped_long_context',
+      queryCharacters: Array.from(normalizedQueries.join(' ')).length,
+      source: 'tool',
+    });
 
     const effectiveEffort = normalizeMemoryEffort(normalizedParams.effort ?? this.memoryEffort);
-    const effortDefaults = MEMORY_SEARCH_TOP_K_LIMITS[effectiveEffort];
-
-    const requestedLimits = {
-      activities: normalizedParams.topK?.activities ?? effortDefaults.activities,
-      contexts: normalizedParams.topK?.contexts ?? effortDefaults.contexts,
-      experiences: normalizedParams.topK?.experiences ?? effortDefaults.experiences,
-      identities:
-        normalizedParams.topK?.identities ??
-        (effectiveEffort === 'high' ? 4 : effectiveEffort === 'low' ? 1 : 2),
-      preferences: normalizedParams.topK?.preferences ?? effortDefaults.preferences,
-    };
-
-    const effortConstrainedLimits = applySearchLimitsByEffort(effectiveEffort, requestedLimits);
+    const effortConstrainedLimits = resolveMemorySearchTopK(effectiveEffort, normalizedParams);
     return this.memoryModel.searchMemory(
       { ...normalizedParams, queries: normalizedQueries, topK: effortConstrainedLimits },
       queryEmbeddings,
@@ -278,7 +267,7 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
         this.userId,
         this.workspaceId,
       );
-      const embed = createEmbedder(agentRuntime, embeddingModel, this.userId);
+      const embed = createEmbedder(agentRuntime, embeddingModel, this.userId, this.spendOrigin);
 
       const summaryEmbedding = await embed(input.summary);
       const detailsEmbedding = await embed(input.details);
@@ -350,7 +339,7 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
         this.userId,
         this.workspaceId,
       );
-      const embed = createEmbedder(agentRuntime, embeddingModel, this.userId);
+      const embed = createEmbedder(agentRuntime, embeddingModel, this.userId, this.spendOrigin);
 
       const summaryEmbedding = await embed(input.summary);
       const detailsEmbedding = await embed(input.details);
@@ -429,7 +418,7 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
         this.userId,
         this.workspaceId,
       );
-      const embed = createEmbedder(agentRuntime, embeddingModel, this.userId);
+      const embed = createEmbedder(agentRuntime, embeddingModel, this.userId, this.spendOrigin);
 
       const summaryEmbedding = await embed(input.summary);
       const detailsEmbedding = await embed(input.details);
@@ -502,7 +491,7 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
         this.userId,
         this.workspaceId,
       );
-      const embed = createEmbedder(agentRuntime, embeddingModel, this.userId);
+      const embed = createEmbedder(agentRuntime, embeddingModel, this.userId, this.spendOrigin);
 
       const summaryEmbedding = await embed(input.summary);
       const detailsEmbedding = await embed(input.details);
@@ -587,7 +576,7 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
         this.userId,
         this.workspaceId,
       );
-      const embed = createEmbedder(agentRuntime, embeddingModel, this.userId);
+      const embed = createEmbedder(agentRuntime, embeddingModel, this.userId, this.spendOrigin);
 
       const summaryEmbedding = await embed(input.summary);
       const detailsEmbedding = await embed(input.details);
@@ -656,7 +645,7 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
   };
 
   updateIdentityMemory = async (
-    input: z.infer<typeof UpdateIdentityActionSchema>,
+    input: z.output<typeof UpdateIdentityToolInputSchema>,
   ): Promise<UpdateIdentityMemoryResult> => {
     try {
       const { agentRuntime, embeddingModel } = await getEmbeddingRuntime(
@@ -664,7 +653,7 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
         this.userId,
         this.workspaceId,
       );
-      const embed = createEmbedder(agentRuntime, embeddingModel, this.userId);
+      const embed = createEmbedder(agentRuntime, embeddingModel, this.userId, this.spendOrigin);
 
       let summaryVector1024: number[] | null | undefined;
       if (input.set.summary !== undefined) {
@@ -746,6 +735,7 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
         identity: Object.keys(identityPayload).length > 0 ? identityPayload : undefined,
         identityId: input.id,
         mergeStrategy: input.mergeStrategy,
+        preserveOmittedFields: true,
       });
 
       if (!updated) {
@@ -861,7 +851,27 @@ export const memoryRuntime: ServerRuntimeRegistration = {
       throw new Error('userId is required for Memory execution');
     }
 
-    // Resolve memoryEffort from user settings
+    // An eval attempt reads and writes only its own Memory entries. An attempt
+    // without a reference must fail rather than fall back to the caller's
+    // memories, and the reference is checked against this exact topic / thread.
+    if (context.isEval && !context.evalMemory) {
+      throw new Error('Eval Memory requires an initialized attempt reference');
+    }
+    if (context.evalMemory) {
+      const service = await new AgentEvalMemoryService(
+        context.serverDB,
+        context.userId,
+        context.workspaceId,
+      ).runtime({
+        context,
+        // An eval attempt uses its Agent's effort setting.
+        memoryEffort: normalizeMemoryEffort(context.memoryEffort),
+        memoryEmbeddingRuntime: context.memoryEmbeddingRuntime,
+        reference: context.evalMemory,
+      });
+      return new MemoryExecutionRuntime({ service, toolPermission: context.memoryToolPermission });
+    }
+
     let memoryEffort: MemoryEffort = 'medium';
     try {
       const userSettingsRow = await context.serverDB.query.userSettings.findFirst({
@@ -877,7 +887,12 @@ export const memoryRuntime: ServerRuntimeRegistration = {
       // fallback to medium
     }
 
-    const memoryModel = new UserMemoryModel(context.serverDB, context.userId);
+    const ftsSearchRepo = await createFtsSearchRepo({
+      db: context.serverDB,
+      userId: context.userId,
+      usage: 'memory_tool',
+    });
+    const memoryModel = new UserMemoryModel(context.serverDB, context.userId, ftsSearchRepo);
 
     const service = new MemoryServerRuntimeService({
       agentId: context.agentId,
@@ -888,6 +903,14 @@ export const memoryRuntime: ServerRuntimeRegistration = {
       memoryModel,
       operationId: context.operationId,
       serverDB: context.serverDB,
+      // Projected fields only — `context.agentShareVisitor` also carries the
+      // run's tool/memory permissions, which have no place in billing metadata.
+      spendOrigin: context.agentShareVisitor
+        ? {
+            agentShare: toAgentShareVisitorIds(context.agentShareVisitor),
+            trigger: RequestTrigger.AgentShare,
+          }
+        : undefined,
       taskId: context.taskId,
       toolCallId: context.toolCallId,
       topicId: context.topicId,

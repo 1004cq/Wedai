@@ -1,9 +1,7 @@
 'use client';
 
-import { ExclamationCircleOutlined, FolderOpenOutlined } from '@ant-design/icons';
-import { FluentEmoji, Text } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
-import { Result } from 'antd';
+import { Button, FluentEmoji, Result, Text } from '@lobehub/ui';
+import { CircleAlertIcon, FolderOpenIcon } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -18,7 +16,7 @@ const StatusPage = memo<StatusPageProps>(({ status }) => {
   const { t } = useTranslation('discover');
 
   const handleBackToMarket = () => {
-    navigate('/community');
+    navigate('/marketplace');
   };
 
   // Unpublished status
@@ -38,7 +36,7 @@ const StatusPage = memo<StatusPageProps>(({ status }) => {
           icon={<FluentEmoji emoji={'⌛'} size={96} type={'anim'} />}
           extra={
             <Button size={'large'} type="primary" onClick={handleBackToMarket}>
-              {t('groupAgents.status.backToMarket', { defaultValue: 'Back to Market' })}
+              {t('assistants.status.backToMarket')}
             </Button>
           }
           subTitle={
@@ -63,9 +61,9 @@ const StatusPage = memo<StatusPageProps>(({ status }) => {
   const isArchived = status === 'archived';
   const statusKey = isArchived ? 'archived' : 'deprecated';
   const statusIcon = isArchived ? (
-    <FolderOpenOutlined style={{ color: '#8c8c8c' }} />
+    <FolderOpenIcon color={'#8c8c8c'} />
   ) : (
-    <ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />
+    <CircleAlertIcon color={'#ff4d4f'} />
   );
 
   return (
@@ -83,7 +81,7 @@ const StatusPage = memo<StatusPageProps>(({ status }) => {
         icon={statusIcon}
         extra={
           <Button type="primary" onClick={handleBackToMarket}>
-            {t('groupAgents.status.backToMarket', { defaultValue: 'Back to Market' })}
+            {t('assistants.status.backToMarket')}
           </Button>
         }
         subTitle={
