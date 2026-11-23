@@ -1,34 +1,25 @@
 'use client';
 
 import { useTranslation } from 'react-i18next';
-import { Navigate } from 'react-router';
 
-import { ModelAssignmentsForm } from '@/features/ServiceModel';
-import { usePlatformAiSettingsAccess } from '@/hooks/usePlatformAiSettingsAccess';
-import SettingHeader from '@/routes/(main)/settings/features/SettingHeader';
+import { ServiceModelForm } from '@/features/ServiceModel';
+import SettingHeader from '@/features/Settings/features/SettingHeader';
 import { featureFlagsSelectors, useServerConfigStore } from '@/store/serverConfig';
 
 import Image from '../image/features/Image';
-import OpenAI from '../tts/features/OpenAI';
 
 interface PageProps {
+  scope?: 'personal' | 'workspace';
   showSettingHeader?: boolean;
 }
 
-const Page = ({ showSettingHeader = true }: PageProps) => {
+const Page = ({ scope, showSettingHeader = true }: PageProps) => {
   const { t } = useTranslation('setting');
-  const { enableSTT, showAiImage } = useServerConfigStore(featureFlagsSelectors);
-  const { showServiceModel } = usePlatformAiSettingsAccess();
-
-  if (!showServiceModel) {
-    return <Navigate replace to={'/settings'} />;
-  }
-
+  const { showAiImage } = useServerConfigStore(featureFlagsSelectors);
   return (
     <>
       {showSettingHeader && <SettingHeader title={t('tab.serviceModel')} />}
-      <ModelAssignmentsForm />
-      {enableSTT && <OpenAI />}
+      <ServiceModelForm scope={scope} />
       {showAiImage && <Image />}
     </>
   );

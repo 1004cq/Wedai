@@ -2,7 +2,7 @@
 
 import { Alert, Button, Switch } from '@lobehub/ui/base-ui';
 import { App, Form, Input, Tag } from 'antd';
-import { createStaticStyles, cssVar } from 'antd-style';
+import { createStaticStyles, cssVar } from '@lobehub/ui';
 import { useCallback, useState } from 'react';
 
 import { adminApi } from '../api';

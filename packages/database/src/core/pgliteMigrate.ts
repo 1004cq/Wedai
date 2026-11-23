@@ -28,14 +28,13 @@ export const migratePGlite = async (
   `);
 
   for (const migration of migrations) {
-    const skipSql = migration.sql.some(
-      (s) => s.toLowerCase().includes('pg_search') || s.toLowerCase().includes('bm25'),
-    );
-
-    if (!skipSql) {
-      for (const stmt of migration.sql) {
-        await pglite.exec(stmt);
-      }
+    // Skip only ParadeDB/BM25 statements — never the whole migration.
+    // 0205 mixes environment_id DDL with a conditional BM25 index; skipping
+    // the file wholesale left agent_eval_test_cases without environment_id.
+    for (const stmt of migration.sql) {
+      const lower = stmt.toLowerCase();
+      if (lower.includes('pg_search') || lower.includes('bm25')) continue;
+      await pglite.exec(stmt);
     }
 
     await db.execute(

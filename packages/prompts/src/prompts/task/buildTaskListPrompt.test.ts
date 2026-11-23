@@ -1,3 +1,4 @@
+import { DEFAULT_INBOX_TITLE } from '@lobechat/const';
 import { describe, expect, it } from 'vitest';
 
 import { buildTaskListPrompt } from './buildTaskListPrompt';
@@ -81,7 +82,7 @@ describe('buildTaskListPrompt', () => {
     );
 
     expect(result).toContain('<task_manager_defaults>');
-    expect(result).toContain('Default Lobe AI agent id: agt_inbox');
+    expect(result).toContain(`Default ${DEFAULT_INBOX_TITLE} agent id: agt_inbox`);
     expect(result).toContain('Do not use it as a listTasks filter');
   });
 

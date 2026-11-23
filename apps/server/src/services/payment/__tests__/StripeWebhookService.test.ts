@@ -16,6 +16,7 @@
  *  State    paid → cannot transition to failed/closed
  */
 import crypto from 'node:crypto';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { StripeWebhookService } from '../StripeWebhookService';

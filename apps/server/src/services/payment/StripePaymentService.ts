@@ -7,9 +7,8 @@
  *  - Application middleware calls this adapter, then passes the result to
  *    billing domain commands.
  */
-import Stripe from 'stripe';
-
 import type { PriceSnapshot } from '@lobechat/billing';
+import Stripe from 'stripe';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Singleton Stripe client (lazy; throws if key absent at call time)
@@ -36,10 +35,10 @@ export interface CheckoutSessionParams {
   orderNo: string;
   /** Price snapshot read from the server (never trusted from the client). */
   priceSnapshot: PriceSnapshot;
-  /** Absolute URL that Stripe redirects to on success. */
-  successUrl: string;
   /** Absolute URL that Stripe redirects to on cancel. */
   cancelUrl: string;
+  /** Absolute URL that Stripe redirects to on success. */
+  successUrl: string;
   /** Stripe customer ID, if the user has one. */
   stripeCustomerId?: string;
 }

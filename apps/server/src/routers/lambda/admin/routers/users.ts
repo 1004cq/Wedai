@@ -3,11 +3,10 @@
  * All fields containing PII are returned as-is; callers are responsible
  * for access-log hygiene. Passwords and API key secrets are never returned.
  */
+import { BillingAccountModel } from '@lobechat/database';
 import { TRPCError } from '@trpc/server';
 import { and, desc, eq, ilike, ne, or } from 'drizzle-orm';
 import { z } from 'zod';
-
-import { BillingAccountModel } from '@lobechat/database';
 
 import { billingAccounts, users, wallets } from '@/database/schemas';
 import { router } from '@/libs/trpc/lambda';

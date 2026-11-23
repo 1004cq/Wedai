@@ -3,9 +3,8 @@
 import { ThemeProvider as NextThemesProvider } from 'next-themes';
 import { type ReactNode, useEffect } from 'react';
 
-import { installFormAutocompleteDefaults } from '@/utils/client/installFormAutocompleteDefaults';
-
 import BrandSplash from '@/components/BrandSplash';
+import { installFormAutocompleteDefaults } from '@/utils/client/installFormAutocompleteDefaults';
 
 interface NextThemeProviderProps {
   children: ReactNode;

@@ -23,9 +23,9 @@ import { workspaceTeamRouter } from '@/business/server/lambda-routers/workspaceT
 import { workspaceUsageRouter } from '@/business/server/lambda-routers/workspaceUsage';
 import { publicProcedure, router } from '@/libs/trpc/lambda';
 
-import { adminRouter } from './admin';
 import { acceptanceRouter } from './acceptance';
 import { acceptanceCommentRouter } from './acceptanceComment';
+import { adminRouter } from './admin';
 import { agentRouter } from './agent';
 import { agentAccountRouter } from './agentAccount';
 import { agentAvailabilityRouter } from './agentAvailability';

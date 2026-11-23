@@ -3,7 +3,7 @@
 import { Flexbox, Text } from '@lobehub/ui';
 import { Alert, Button } from '@lobehub/ui/base-ui';
 import { Skeleton } from 'antd';
-import { createStaticStyles, cssVar } from 'antd-style';
+import { createStaticStyles, cssVar } from '@lobehub/ui';
 import type { PropsWithChildren, ReactNode } from 'react';
 
 const styles = createStaticStyles(({ css }) => ({

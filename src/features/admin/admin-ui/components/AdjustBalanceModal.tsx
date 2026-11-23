@@ -12,8 +12,8 @@ import type { AdminUserRow } from '../types';
 interface AdjustBalanceFormValues {
   credits: number;
   direction: 'credit' | 'debit';
-  reason: string;
   idempotencyKey: string;
+  reason: string;
 }
 
 interface AdjustBalanceContentProps {

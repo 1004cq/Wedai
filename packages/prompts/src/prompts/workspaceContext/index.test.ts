@@ -1,3 +1,4 @@
+import { BRANDING_NAME } from '@lobechat/business-const';
 import { describe, expect, it } from 'vitest';
 
 import { workspaceContextPrompt } from './index';
@@ -24,7 +25,7 @@ describe('workspaceContextPrompt', () => {
       'knowledge base: https://app.lobehub.com/lobehub/resource/library/<knowledgeBaseId>',
     );
     expect(result).toContain('reuse it verbatim');
-    expect(result).toContain('apply only to links into this LobeHub app');
+    expect(result).toContain(`apply only to links into this ${BRANDING_NAME} app`);
     expect(result).toContain('never place in-app resources under the marketing site lobehub.com');
     expect(result).toContain('including the LobeHub homepage itself, are not affected');
   });

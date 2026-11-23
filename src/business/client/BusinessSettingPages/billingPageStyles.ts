@@ -1,4 +1,4 @@
-import { createStaticStyles } from 'antd-style';
+import { createStaticStyles } from '@lobehub/ui';
 
 /** Shared layout styles for personal billing settings pages. */
 export const billingPageStyles = createStaticStyles(({ css, cssVar }) => ({
