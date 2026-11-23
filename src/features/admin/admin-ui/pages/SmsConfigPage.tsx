@@ -1,7 +1,6 @@
 'use client';
 
-import { createStaticStyles, Text } from '@lobehub/ui';
-import { Button, Select, Switch } from '@lobehub/ui/base-ui';
+import { Button, createStaticStyles, Select, Switch, Text } from '@lobehub/ui';
 import { App, Form, Input, Tag } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 
@@ -122,12 +121,12 @@ export const SmsConfigPage = () => {
               <Input.Password autoComplete={'new-password'} placeholder={'留空则不修改'} />
             </Form.Item>
             <Form.Item
-              extra={
-                data.accessKeySecretConfigured ? <Tag color={'success'}>已配置</Tag> : '尚未配置'
-              }
               help={'留空不会覆盖已有 AccessKey Secret。'}
               label={'AccessKey Secret'}
               name={'accessKeySecret'}
+              extra={
+                data.accessKeySecretConfigured ? <Tag color={'success'}>已配置</Tag> : '尚未配置'
+              }
             >
               <Input.Password autoComplete={'new-password'} placeholder={'留空则不修改'} />
             </Form.Item>

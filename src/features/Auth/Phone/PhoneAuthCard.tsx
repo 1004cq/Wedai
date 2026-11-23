@@ -1,9 +1,7 @@
 'use client';
 
-import { Icon, Text } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
+import { Button, createStaticStyles, Icon, Text } from '@lobehub/ui';
 import { Form, Input } from 'antd';
-import { createStaticStyles } from 'antd-style';
 import { Phone } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';

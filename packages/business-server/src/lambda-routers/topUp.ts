@@ -74,7 +74,7 @@ export const topUpRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { userId, serverDB: db } = ctx;
-      if (!userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      if (!userId || !db) throw new TRPCError({ code: 'UNAUTHORIZED' });
 
       // 1. Freeze price snapshot server-side.
       const pss = new PriceSnapshotService(db);
@@ -152,7 +152,7 @@ export const topUpRouter = router({
     .input(z.object({ orderId: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
       const { userId, serverDB: db } = ctx;
-      if (!userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      if (!userId || !db) throw new TRPCError({ code: 'UNAUTHORIZED' });
       const om = new OrderModel(db, userId);
       const order = await om.findById(input.orderId);
       if (!order) throw new TRPCError({ code: 'NOT_FOUND', message: 'Order not found' });
@@ -178,7 +178,7 @@ export const topUpRouter = router({
     .input(z.object({ orderId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       const { userId, serverDB: db } = ctx;
-      if (!userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      if (!userId || !db) throw new TRPCError({ code: 'UNAUTHORIZED' });
       const om = new OrderModel(db, userId);
       const order = await om.findById(input.orderId);
       if (!order) throw new TRPCError({ code: 'NOT_FOUND', message: 'Order not found' });

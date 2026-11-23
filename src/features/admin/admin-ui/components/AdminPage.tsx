@@ -1,7 +1,6 @@
 'use client';
 
-import { createStaticStyles, cssVar, Flexbox, Text } from '@lobehub/ui';
-import { Alert, Button } from '@lobehub/ui/base-ui';
+import { Alert, Button, createStaticStyles, cssVar, Flexbox, Text } from '@lobehub/ui';
 import { Skeleton } from 'antd';
 import type { PropsWithChildren, ReactNode } from 'react';
 

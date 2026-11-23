@@ -1,7 +1,6 @@
 'use client';
 
-import { Flexbox, Text } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
+import { Button, Flexbox, Text } from '@lobehub/ui';
 import type { TableColumnsType } from 'antd';
 import { Empty, Flex, Grid, Input, Pagination, Space, Table, Tag } from 'antd';
 import { useCallback, useState } from 'react';

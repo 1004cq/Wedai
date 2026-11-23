@@ -5,14 +5,9 @@
 import { TRPCError } from '@trpc/server';
 import { and, eq } from 'drizzle-orm';
 
+import { billingAccounts, planPrices, plans, subscriptions } from '@/database/schemas';
 import { authedProcedure, router } from '@/libs/trpc/lambda';
 import { bannedCheck, serverDatabase } from '@/libs/trpc/lambda/middleware';
-import {
-  billingAccounts,
-  plans,
-  planPrices,
-  subscriptions,
-} from '@/database/schemas';
 
 const subProcedure = authedProcedure.use(serverDatabase).use(bannedCheck);
 
@@ -20,6 +15,7 @@ export const subscriptionRouter = router({
   /** Returns the caller's active subscription, or null. */
   getActive: subProcedure.query(async ({ ctx }) => {
     const { serverDB, userId } = ctx;
+    if (!serverDB || !userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
 
     const [account] = await serverDB
       .select()
@@ -33,10 +29,7 @@ export const subscriptionRouter = router({
       .select()
       .from(subscriptions)
       .where(
-        and(
-          eq(subscriptions.billingAccountId, account.id),
-          eq(subscriptions.status, 'active'),
-        ),
+        and(eq(subscriptions.billingAccountId, account.id), eq(subscriptions.status, 'active')),
       )
       .limit(1);
 
@@ -55,6 +48,7 @@ export const subscriptionRouter = router({
   /** Lists all active, published plans (for the pricing page). */
   listPlans: subProcedure.query(async ({ ctx }) => {
     const { serverDB } = ctx;
+    if (!serverDB) throw new TRPCError({ code: 'UNAUTHORIZED' });
     const activePlans = await serverDB
       .select()
       .from(plans)

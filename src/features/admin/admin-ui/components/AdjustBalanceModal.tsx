@@ -1,6 +1,6 @@
 'use client';
 
-import { Button, createModal, useModalContext } from '@lobehub/ui/base-ui';
+import { Button, createModal, useModalContext } from '@lobehub/ui';
 import { App, Form, Input, InputNumber } from 'antd';
 import { useState } from 'react';
 
@@ -61,9 +61,7 @@ const AdjustBalanceContent = ({ onSuccess, user }: AdjustBalanceContentProps) =>
           reason,
           idempotencyKey: key,
         });
-        message.success(
-          `已从 ${user.nickname} 扣减 ${credits.toLocaleString('zh-CN')} 积分`,
-        );
+        message.success(`已从 ${user.nickname} 扣减 ${credits.toLocaleString('zh-CN')} 积分`);
       }
 
       onSuccess();

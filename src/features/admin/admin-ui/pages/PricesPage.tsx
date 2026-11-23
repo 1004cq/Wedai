@@ -1,6 +1,6 @@
 'use client';
 
-import { Button, Switch } from '@lobehub/ui/base-ui';
+import { Button, Switch } from '@lobehub/ui';
 import type { TableColumnsType } from 'antd';
 import { App, Empty, InputNumber, Table } from 'antd';
 import { useCallback, useState } from 'react';

@@ -1,7 +1,6 @@
 'use client';
 
-import { cx } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
+import { Button, cx } from '@lobehub/ui';
 import { App } from 'antd';
 import { type FC, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';

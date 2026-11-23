@@ -1,7 +1,6 @@
 'use client';
 
-import { createStaticStyles, cssVar } from '@lobehub/ui';
-import { Alert, Button, Switch } from '@lobehub/ui/base-ui';
+import { Alert, Button, createStaticStyles, cssVar, Switch } from '@lobehub/ui';
 import { App, Form, Input, Tag } from 'antd';
 import { useCallback, useState } from 'react';
 

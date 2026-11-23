@@ -45,5 +45,6 @@ export const bannedCheck = trpc.middleware(async (opts) => {
     });
   }
 
-  return opts.next({ ctx });
+  // Preserve upstream ctx typing from serverDatabase (do not re-wrap).
+  return opts.next();
 });
