@@ -66,16 +66,15 @@ export const getTestDB = async (): Promise<LobeChatDatabase> => {
     if (!skipSql) {
       for (const stmt of migration.sql) {
         // Hand-written Wedai migrations may omit `--> statement-breakpoint`.
-        // PGlite cannot exec multi-statement SQL as one prepared query (42601),
-        // so split on semicolons when drizzle left the whole file as one chunk.
+        // PGlite cannot exec multi-statement SQL as one prepared query (42601).
+        // Never split dollar-quoted bodies (`DO $$ … $$`) — those contain internal `;`.
         const parts =
-          stmt.includes(';') && !stmt.includes('statement-breakpoint')
+          stmt.includes(';') && !/\$\$/.test(stmt)
             ? stmt
                 .split(';')
                 .map((part) => part.trim())
                 .filter((part) => {
                   if (!part) return false;
-                  // Keep chunks that still contain executable SQL after stripping comments.
                   const withoutComments = part
                     .split('\n')
                     .map((line) => line.trim())
