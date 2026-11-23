@@ -6,6 +6,19 @@ export const createNanoId = (size = 8) =>
   customAlphabet('1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ', size);
 
 const prefixes = {
+  // --- Wedai commercial billing ---
+  modelPrices: 'mp',
+  billingAccounts: 'bac',
+  plans: 'pln',
+  planPrices: 'pp',
+  subscriptions: 'sub',
+  orders: 'ord',
+  paymentAttempts: 'pat',
+  // Distinct from workspaceAuditLogs (`wal`) to avoid id collisions.
+  wallets: 'wlt',
+  ledgerEntries: 'led',
+  usageRecords: 'usg',
+  webhookEvents: 'whe',
   connectorLinks: 'lnk',
   agentCronJobs: 'cron',
   agentSkills: 'skl',

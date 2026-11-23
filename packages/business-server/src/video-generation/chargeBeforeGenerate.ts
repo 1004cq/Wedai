@@ -6,20 +6,24 @@
  *
  * request_credits_flat=0 → free model (intentional).
  */
+import { BillingCommandService } from '@lobechat/billing';
+import { BillingAccountModel } from '@lobechat/database';
 import { and, eq, isNull } from 'drizzle-orm';
 
+import { getServerDB } from '@/database/core/db-adaptor';
 import type { NewGeneration, NewGenerationBatch } from '@/database/schemas';
 import { modelPrices } from '@/database/schemas/billing';
-import { getServerDB } from '@/database/core/db-adaptor';
 import type { CreateVideoServicePayload } from '@/server/routers/lambda/video';
-import { BillingAccountModel } from '@lobechat/database';
-import { BillingCommandService } from '@lobechat/billing';
 
 interface ChargeParams {
   generationTopicId: string;
   model: string;
   params: CreateVideoServicePayload['params'];
   provider: string;
+  /** Provider-side generation params used for pricing / audit (optional). */
+  providerParams?: Record<string, unknown>;
+  /** Spend origin from the request context (optional). */
+  spendOrigin?: string;
   userId: string;
   workspaceId?: string;
 }

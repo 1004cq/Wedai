@@ -1,5 +1,7 @@
 import { Hono } from 'hono';
 
+import billingApp from '@/server/workflows-hono/billing';
+
 import agentEvalRunApp from './agent-eval-run';
 import agentSignalApp from './agent-signal';
 import expertiseHistoryApp from './expertise-history';
@@ -22,6 +24,7 @@ app.use('*', workflowAuth());
 
 app.route('/agent-eval-run', agentEvalRunApp);
 app.route('/agent-signal', agentSignalApp);
+app.route('/billing', billingApp);
 app.route('/expertise-history', expertiseHistoryApp);
 app.route('/expertise-rejection', expertiseRejectionApp);
 app.route('/goal', goalApp);

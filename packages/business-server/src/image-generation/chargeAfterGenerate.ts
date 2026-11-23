@@ -5,11 +5,11 @@
  * Reads the opaque prechargeResult from asyncTask.metadata.precharge and
  * either settles (success) or releases (error) the hold.
  */
+import { BillingCommandService } from '@lobechat/billing';
 import { type ModelPricingContext } from '@lobechat/model-runtime';
 
-import { type ModelPerformance, type ModelUsage } from '@/types/index';
-import { BillingCommandService } from '@lobechat/billing';
 import { getServerDB } from '@/database/core/db-adaptor';
+import { type ModelPerformance, type ModelUsage } from '@/types/index';
 
 interface ImagePrechargeItem {
   billingAccountId: string;
@@ -18,6 +18,7 @@ interface ImagePrechargeItem {
 }
 
 interface ChargeParams {
+  computePriceParams?: Record<string, unknown>;
   isError?: boolean;
   metadata: {
     asyncTaskId: string;
@@ -30,6 +31,7 @@ interface ChargeParams {
   prechargeResult?: unknown;
   pricingContext?: ModelPricingContext;
   provider: string;
+  spendOrigin?: string;
   userId: string;
   workspaceId?: string;
 }
