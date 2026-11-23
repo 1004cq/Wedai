@@ -12,11 +12,14 @@
 ## 日常同步建议
 
 ```bash
-git fetch upstream
-git checkout -b sync/upstream-canary
+git remote add upstream https://github.com/lobehub/lobehub.git   # 一次性
+git fetch upstream canary
+git checkout -b sync/upstream-$(date +%Y%m)
 git merge upstream/canary
-# 解决冲突：优先保留 deploy/、docs/commercial|qa|architecture、src/features/admin|billing|user-center
-# 验证构建与关键流程后再合并回 main
+# 解决冲突：优先保留 deploy/、docs/commercial|qa|architecture、
+#   packages/billing、packages/business-server、src/features/admin|billing
+# 若 merge 把上游 workflow 又放回 .github/workflows/，移到 .github/workflows.disabled/
+# 验证：bun run check + docs/qa/LOCAL_P0_RUNBOOK.md 冒烟，再 PR 回 main
 ```
 
 冲突多发区：
@@ -24,7 +27,9 @@ git merge upstream/canary
 - 根 `README.md`（Wedai 已重写，勿被上游整文件覆盖）
 - `docs/` 下 Wedai 子目录
 - `deploy/`
+- `.github/workflows/`（Wedai 仅保留 test / e2e / publish-wedai / deploy-cq-je）
 
+分支与 CI 约定见 [REPO_HYGIENE.md](./REPO_HYGIENE.md)。
 ## 历史：首次导入命令（已完成，仅备查）
 
 ```bash

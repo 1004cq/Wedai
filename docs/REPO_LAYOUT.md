@@ -25,6 +25,9 @@
 | `docs/` | 【混合】 | 见下一节 |
 | `AGENTS.md` `DESIGN.md` 等 | 【上游】 | 官方工程/设计文档 |
 | `.agents` `.codex` `.cursor`… | 【上游】 | 编辑器/Agent 配置，勿当业务代码 |
+| `.github/workflows/` | 【Wedai 精简】 | 仅 test / e2e / publish-wedai / deploy-cq-je |
+| `.github/workflows.disabled/` | 【Wedai】 | 上游噪音 workflow 归档，见目录内 README |
+| `docs/REPO_HYGIENE.md` | 【Wedai】 | 分支 / CI / 密钥治理 |
 
 ## 3. docs/
 

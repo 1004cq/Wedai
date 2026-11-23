@@ -11,6 +11,7 @@
 | 文档入口 | **[docs/DOCS_INDEX.md](./docs/DOCS_INDEX.md)** |
 | 一键部署 | **[deploy/ONE_CLICK.md](./deploy/ONE_CLICK.md)** |
 | 仓库目录说明 | **[docs/REPO_LAYOUT.md](./docs/REPO_LAYOUT.md)** |
+| 分支 / CI 治理 | **[docs/REPO_HYGIENE.md](./docs/REPO_HYGIENE.md)** |
 
 ---
 
@@ -25,7 +26,8 @@
 首次会生成 `deploy/.env.commercial`，填完密钥后再执行一次。默认 <http://localhost:3210>。  
 详情见 [deploy/ONE_CLICK.md](./deploy/ONE_CLICK.md)。
 
-> Phase 1+2 已实现文本/生图/视频扣费、Stripe 支付闭环、Admin RBAC 与用户计费页。部署后运行 `pnpm db:migrate && pnpm db:seed:dev` 即可开始本地验收，完整步骤见 [docs/qa/LOCAL_P0_RUNBOOK.md](./docs/qa/LOCAL_P0_RUNBOOK.md)。
+> Phase 1+2 已实现文本/生图/视频扣费、Stripe 支付闭环、Admin RBAC 与用户计费页。部署后运行 `pnpm db:migrate && pnpm db:seed:dev` 即可开始本地验收，完整步骤见 [docs/qa/LOCAL_P0_RUNBOOK.md](./docs/qa/LOCAL_P0_RUNBOOK.md)。  
+> **生产务必设置 `AGENT_BILLING_STRICT=true`**（Agent 多步 LLM 计费 fail-closed），见 `deploy/.env.commercial.example`。
 
 ### 本地开发（上游标准）
 

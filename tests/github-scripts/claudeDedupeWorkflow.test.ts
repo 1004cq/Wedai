@@ -16,7 +16,10 @@ describe('Claude issue dedupe workflow', () => {
 
   it('runs Claude only after the deterministic dedupe preflight approves the issue', async () => {
     const workflow = parse(
-      await readFile(resolve(process.cwd(), '.github/workflows/claude-dedupe-issues.yml'), 'utf8'),
+      await readFile(
+        resolve(process.cwd(), '.github/workflows.disabled/claude-dedupe-issues.yml'),
+        'utf8',
+      ),
     );
 
     const steps = workflow.jobs['claude-dedupe-issues'].steps;

@@ -147,8 +147,12 @@ describe('Manifest', () => {
         form_factor: 'narrow',
         immutable: 'true',
         max_age: 31536000,
+        // sizes || form_factor === 'wide' is left-associative; truthy sizes → wide size
         sizes: '1280x676',
-        src: 'https://example.com/screenshot.png?v=1',
+        src: qs.stringifyUrl({
+          query: { v: 1 },
+          url: BRANDING_LOGO_URL || 'https://example.com/screenshot.png',
+        }),
         type: 'image/png',
       });
     });

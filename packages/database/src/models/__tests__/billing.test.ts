@@ -20,7 +20,17 @@ import {
   WalletModel,
   WebhookEventModel,
 } from '../billing';
-import { billingAccounts, ledgerEntries, orders, users, wallets } from '../../schemas';
+import {
+  billingAccounts,
+  ledgerEntries,
+  orders,
+  paymentAttempts,
+  subscriptions,
+  usageRecords,
+  users,
+  wallets,
+  webhookEvents,
+} from '../../schemas';
 
 // ─── fixtures ────────────────────────────────────────────────────────────────
 
@@ -65,26 +75,28 @@ async function seedBillingAccount(userId: string) {
 
 // ─── setup / teardown ────────────────────────────────────────────────────────
 
-beforeEach(async () => {
-  // Clean in reverse FK order
+async function cleanBillingFixtures() {
+  // Reverse FK order — usage_records / webhooks RESTRICT parents.
+  await db.delete(usageRecords);
+  await db.delete(webhookEvents);
+  await db.delete(paymentAttempts);
   await db.delete(ledgerEntries);
   await db.delete(wallets);
   await db.delete(orders);
+  await db.delete(subscriptions);
   await db.delete(billingAccounts);
   await db.delete(users).where(and(eq(users.id, userA)));
   await db.delete(users).where(and(eq(users.id, userB)));
+}
 
+beforeEach(async () => {
+  await cleanBillingFixtures();
   await seedUsers();
   await seedPlanAndPrice();
 });
 
 afterEach(async () => {
-  await db.delete(ledgerEntries);
-  await db.delete(wallets);
-  await db.delete(orders);
-  await db.delete(billingAccounts);
-  await db.delete(users).where(and(eq(users.id, userA)));
-  await db.delete(users).where(and(eq(users.id, userB)));
+  await cleanBillingFixtures();
 });
 
 // ─── billing_accounts ────────────────────────────────────────────────────────

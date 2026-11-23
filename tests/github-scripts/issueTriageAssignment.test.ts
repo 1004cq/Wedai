@@ -14,7 +14,7 @@ describe('Claude issue triage assignment', () => {
 
   it('does not keep MCP marketplace submissions as a no-mention example in the workflow', async () => {
     const workflow = await readFile(
-      resolve(process.cwd(), '.github/workflows/claude-issue-triage.yml'),
+      resolve(process.cwd(), '.github/workflows.disabled/claude-issue-triage.yml'),
       'utf8',
     );
 
