@@ -1,9 +1,8 @@
 'use client';
 
-import { Text } from '@lobehub/ui';
+import { createStaticStyles, Text } from '@lobehub/ui';
 import { Button, Select, Switch } from '@lobehub/ui/base-ui';
 import { App, Form, Input, Tag } from 'antd';
-import { createStaticStyles } from '@lobehub/ui';
 import { useCallback, useEffect, useState } from 'react';
 
 import { adminApi } from '../api';
