@@ -30,7 +30,8 @@ afterEach(() => {
 
 describe('describeLockedDevicePicker', () => {
   it('points at the upstream desktop app under default branding', async () => {
-    const describeLockedDevicePicker = await loadDescribe();
+    // Wedai overlays BRANDING_NAME; pin LobeHub so this case stays branding-agnostic.
+    const describeLockedDevicePicker = await loadDescribe({ BRANDING_NAME: 'LobeHub' });
 
     expect(describeLockedDevicePicker(offlineBoundDevice)).toContain(
       'Tell the user to reconnect it (LobeHub desktop app or `lh connect`).',
