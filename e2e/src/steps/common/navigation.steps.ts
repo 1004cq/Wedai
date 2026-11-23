@@ -19,10 +19,12 @@ Given('I navigate to {string}', async function (this: CustomWorld, path: string)
 
 Then('the page should load without errors', async function (this: CustomWorld) {
   // Ignore a known minified SPA shell noise (`TypeError: M is not a function`) that
-  // also fires on otherwise-passing Home navigations; keep every other pageerror.
-  const actionable = this.testContext.jsErrors.filter(
-    (error) => !(error instanceof TypeError && error.message === 'M is not a function'),
-  );
+  // also fires on otherwise-passing Home navigations; match on message because
+  // Playwright's pageerror Error may not satisfy `instanceof TypeError` here.
+  const actionable = this.testContext.jsErrors.filter((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    return !message.includes('M is not a function');
+  });
   expect(actionable).toHaveLength(0);
 
   // Check page didn't navigate to error page

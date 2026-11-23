@@ -5,13 +5,15 @@ const dbExecute = vi.fn(async () => undefined);
 
 const readMigrationFiles = vi.fn();
 
-vi.mock('drizzle-orm/migrator', () => ({
-  readMigrationFiles: (...args: unknown[]) => readMigrationFiles(...args),
-}));
-
 describe('migratePGlite', () => {
   beforeEach(() => {
+    // Database vitest runs with `isolate: false`, so other files may already
+    // have loaded the real migrator. Reset and re-mock before each import.
+    vi.resetModules();
     vi.clearAllMocks();
+    vi.doMock('drizzle-orm/migrator', () => ({
+      readMigrationFiles: (...args: unknown[]) => readMigrationFiles(...args),
+    }));
   });
 
   it('runs DDL from a migration that also has a BM25 block, skipping only BM25 statements', async () => {
